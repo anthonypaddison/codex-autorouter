@@ -6,7 +6,8 @@
 
 - Added deterministic task, risk, ambiguity, verification, volume, and product-area profiling.
 - Added factual Sol/Terra/Luna model-effort-speed route labels.
-- Added bounded single-delegate, parallel-leaf, evidence-owner, owner-judge, and uncertainty-council plans.
+- Added bounded single-delegate, parallel-leaf, evidence-owner, and uncertainty-council plans.
+- Added Sol Extra High for narrowly qualified Max Quality work and removed the separate judge stage in favor of useful evidence workers plus one final executor.
 - Added native plugin hooks using `${PLUGIN_ROOT}` and persistent state under `${PLUGIN_DATA}`.
 - Added explicit `ADVISORY` and `MANAGED_BLOCKED` local modes, with full readiness reserved for exact app-server and hook-trust attestation.
 - Added transactional custom-agent activation, recovery, repair, conflict-safe upgrade behavior, and deactivation.

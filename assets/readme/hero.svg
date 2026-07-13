@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="640" viewBox="0 0 1600 640" role="img" aria-labelledby="title desc">
+  <title id="title">Codex Autorouter</title>
+  <desc id="desc">A clean dark banner showing an automatic route across Luna, Terra, and Sol.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#090B11"/>
+      <stop offset="0.55" stop-color="#101522"/>
+      <stop offset="1" stop-color="#0B1119"/>
+    </linearGradient>
+    <radialGradient id="solGlow">
+      <stop offset="0" stop-color="#FDBA4A" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#FDBA4A" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="route" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#A78BFA"/>
+      <stop offset="0.5" stop-color="#48D7E8"/>
+      <stop offset="1" stop-color="#FDBA4A"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1600" height="640" rx="36" fill="url(#bg)"/>
+  <path d="M80 90H1520M80 550H1520" stroke="#FFFFFF" stroke-opacity="0.055"/>
+  <circle cx="1310" cy="316" r="280" fill="url(#solGlow)"/>
+
+  <g transform="translate(90 94)">
+    <g aria-label="Autorouter mark">
+      <circle cx="46" cy="46" r="40" fill="#151B28" stroke="#344052" stroke-width="2"/>
+      <circle cx="46" cy="46" r="24" fill="none" stroke="#48D7E8" stroke-opacity="0.75" stroke-width="2"/>
+      <path d="M14 47C25 19 63 15 79 38C89 53 78 73 59 79" fill="none" stroke="url(#route)" stroke-width="5" stroke-linecap="round"/>
+      <circle cx="18" cy="47" r="6" fill="#A78BFA"/>
+      <circle cx="79" cy="39" r="6" fill="#48D7E8"/>
+      <circle cx="59" cy="79" r="7" fill="#FDBA4A"/>
+    </g>
+    <text x="110" y="38" fill="#F8FAFC" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="26" font-weight="700" letter-spacing="0.5">CODEX</text>
+    <text x="110" y="70" fill="#8E9AAD" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="22" font-weight="500" letter-spacing="4">AUTOROUTER</text>
+  </g>
+
+  <g transform="translate(92 258)" font-family="Inter, ui-sans-serif, system-ui, sans-serif">
+    <text x="0" y="0" fill="#F8FAFC" font-size="70" font-weight="760" letter-spacing="-3">The right model.</text>
+    <text x="0" y="80" fill="#F8FAFC" font-size="70" font-weight="760" letter-spacing="-3">The right effort.</text>
+    <text x="0" y="140" fill="#93A0B5" font-size="26" font-weight="450">Automatically routed for precision, speed, and total token cost.</text>
+  </g>
+
+  <g transform="translate(930 185)" font-family="Inter, ui-sans-serif, system-ui, sans-serif">
+    <path d="M70 230C180 80 300 365 474 130" fill="none" stroke="#2A3444" stroke-width="14" stroke-linecap="round"/>
+    <path d="M70 230C180 80 300 365 474 130" fill="none" stroke="url(#route)" stroke-width="4" stroke-linecap="round"/>
+
+    <g transform="translate(18 190)">
+      <rect width="170" height="86" rx="22" fill="#171526" stroke="#A78BFA" stroke-opacity="0.72"/>
+      <circle cx="33" cy="31" r="9" fill="#A78BFA"/>
+      <text x="54" y="38" fill="#F4F0FF" font-size="24" font-weight="700">Luna</text>
+      <text x="30" y="66" fill="#A9A2BE" font-size="15">bounded + verified</text>
+    </g>
+
+    <g transform="translate(204 292)">
+      <rect width="184" height="86" rx="22" fill="#102126" stroke="#48D7E8" stroke-opacity="0.72"/>
+      <circle cx="33" cy="31" r="9" fill="#48D7E8"/>
+      <text x="54" y="38" fill="#E8FDFF" font-size="24" font-weight="700">Terra</text>
+      <text x="30" y="66" fill="#9BB8BC" font-size="15">build + reason</text>
+    </g>
+
+    <g transform="translate(404 72)">
+      <rect width="170" height="86" rx="22" fill="#271D11" stroke="#FDBA4A" stroke-opacity="0.8"/>
+      <circle cx="33" cy="31" r="9" fill="#FDBA4A"/>
+      <text x="54" y="38" fill="#FFF6E6" font-size="24" font-weight="700">Sol</text>
+      <text x="30" y="66" fill="#C9B79D" font-size="15">deep execution</text>
+    </g>
+  </g>
+
+  <g transform="translate(92 518)" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="15" font-weight="650">
+    <rect width="176" height="42" rx="21" fill="#151A25" stroke="#303949"/>
+    <text x="88" y="27" text-anchor="middle" fill="#C7D0DC">TOKEN AWARE</text>
+    <rect x="190" width="196" height="42" rx="21" fill="#151A25" stroke="#303949"/>
+    <text x="288" y="27" text-anchor="middle" fill="#C7D0DC">DEPTH-1 AGENTS</text>
+    <rect x="400" width="190" height="42" rx="21" fill="#151A25" stroke="#303949"/>
+    <text x="495" y="27" text-anchor="middle" fill="#C7D0DC">VERIFIED OUTPUT</text>
+  </g>
+</svg>

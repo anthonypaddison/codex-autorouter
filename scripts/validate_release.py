@@ -19,7 +19,8 @@ AGENTS = {
     "gpt56_terra_worker.toml",
     "gpt56_terra_deep.toml",
     "gpt56_sol_owner.toml",
-    "gpt56_sol_judge.toml",
+    "gpt56_sol_deep.toml",
+    "gpt56_sol_xhigh.toml",
 }
 
 

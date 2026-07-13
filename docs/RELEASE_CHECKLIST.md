@@ -6,7 +6,7 @@ Record candidate-specific proof in `RELEASE_EVIDENCE.md`; never infer a checked 
 
 - [x] Plugin manifest and skill validation pass.
 - [x] Router and activator tests pass on Python 3.10, 3.11, 3.12, 3.13, and the current runtime.
-- [x] All 155 tests pass on hosted macOS, Ubuntu, and native Windows across Python 3.10–3.14 ([run 29229808684](https://github.com/vibeforge1111/gpt-5-6-router/actions/runs/29229808684)).
+- [ ] The current six-role candidate passes the hosted macOS, Ubuntu, and native Windows Python 3.10–3.14 matrix. The prior private-beta matrix passed [run 29229808684](https://github.com/vibeforge1111/Codex-Autorouter/actions/runs/29229808684).
 - [x] Clean install, identical reinstall, conflict refusal, reviewed replacement, upgrade, repair, deactivation, and modified-file preservation pass.
 - [x] Exception and hard-crash failure injection at every declared failpoint restore the exact pre-operation agent tree.
 - [x] Concurrent lifecycle commands serialize without lost ownership state.
@@ -14,7 +14,7 @@ Record candidate-specific proof in `RELEASE_EVIDENCE.md`; never infer a checked 
 - [x] Every declared standalone install/update/uninstall crash boundary rolls back or commits deterministically, and post-crash edits are preserved.
 - [x] Plugin cache contains no source-machine absolute paths, secrets, symlinks, bytecode, or transient state.
 - [x] Installed-cache hooks use only plugin-relative commands and plugin data.
-- [x] `scripts/check_hooks.py` observes exactly five trusted, enabled, error-free plugin hooks and five active current agent definitions after explicit review.
+- [ ] `scripts/check_hooks.py` observes exactly five trusted, enabled, error-free plugin hooks and six active current agent definitions after explicit review.
 - [x] Routing golden cases, product taxonomy, adversarial prompts, continuations, Fast reporting, and 5,000-case fuzzing pass.
 - [x] `ADVISORY`, local-agent-ready, authoritative full-ready, and `MANAGED_BLOCKED` diagnostics are covered.
 

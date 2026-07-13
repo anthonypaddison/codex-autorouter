@@ -53,13 +53,15 @@ ROUTES = {
     "gpt56_terra_worker": {"model": "gpt-5.6-terra", "effort": "medium", "delegate": True},
     "gpt56_terra_deep": {"model": "gpt-5.6-terra", "effort": "high", "delegate": True},
     "gpt56_sol_owner": {"model": "gpt-5.6-sol", "effort": "medium", "delegate": True},
-    "gpt56_sol_judge": {"model": "gpt-5.6-sol", "effort": "high", "delegate": True},
+    "gpt56_sol_deep": {"model": "gpt-5.6-sol", "effort": "high", "delegate": True},
+    "gpt56_sol_xhigh": {"model": "gpt-5.6-sol", "effort": "xhigh", "delegate": True},
 }
 ROUTE_UP = {
     "gpt56_luna_worker": "gpt56_terra_worker",
     "gpt56_terra_worker": "gpt56_terra_deep",
     "gpt56_terra_deep": "gpt56_sol_owner",
-    "gpt56_sol_owner": "gpt56_sol_judge",
+    "gpt56_sol_owner": "gpt56_sol_deep",
+    "gpt56_sol_deep": "gpt56_sol_xhigh",
 }
 
 SECURITY = re.compile(
@@ -335,7 +337,7 @@ def _visible_route(decision: dict[str, Any], data: dict[str, Any]) -> str:
         effort_label = (
             "Effort unknown"
             if route == "current" and decision.get("effort_evidence") == "default_assumed"
-            else {"low": "Low", "medium": "Medium", "high": "High"}.get(effort.lower(), effort.title())
+            else {"low": "Low", "medium": "Medium", "high": "High", "xhigh": "Extra High"}.get(effort.lower(), effort.title())
         )
         return f"{family} {effort_label} {speed}"
 
@@ -345,9 +347,7 @@ def _visible_route(decision: dict[str, Any], data: dict[str, Any]) -> str:
         role, count = next(iter(plan["required_agents"].items()))
         return f"{label(role)} ×{count}"
     if mode == "evidence_then_owner":
-        return f"{label('gpt56_terra_worker')} ×2 → {label('gpt56_sol_owner')}"
-    if mode == "owner_then_judge":
-        return f"{label('gpt56_sol_owner')} → {label('gpt56_sol_judge')}"
+        return f"{label('gpt56_terra_worker')} ×2 → {label(plan['synthesis_role'])}"
     if mode == "routing_council":
         advisors = " + ".join(label(role) for role in plan["advisor_roles"])
         selected = plan.get("selected_execution_role")
@@ -429,7 +429,7 @@ def _meets_route(active_model: str, active_effort: str, route: str) -> bool:
     if route == "current":
         return True
     model_rank = {"gpt-5.6-luna": 1, "gpt-5.6-terra": 2, "gpt-5.6-sol": 3}
-    effort_rank = {"low": 1, "medium": 2, "high": 3}
+    effort_rank = {"low": 1, "medium": 2, "high": 3, "xhigh": 4, "max": 5, "ultra": 6}
     target = ROUTES[route]
     return (
         model_rank.get(active_model, 0) >= model_rank.get(str(target["model"]), 99)
@@ -451,16 +451,13 @@ def _attach_plan(decision: dict[str, Any], profile: dict[str, Any]) -> dict[str,
         required = {route: 2}
         allowed = [route]
         max_workers = 3
-    elif route == "gpt56_sol_owner" and parallel_safe:
+    elif route in {"gpt56_sol_owner", "gpt56_sol_deep", "gpt56_sol_xhigh"} and (
+        parallel_safe or profile["risk"] == "critical" and profile["mutation"]
+    ):
         mode = "evidence_then_owner"
-        required = {"gpt56_terra_worker": 2, "gpt56_sol_owner": 1}
-        allowed = ["gpt56_terra_worker", "gpt56_sol_owner"]
+        required = {"gpt56_terra_worker": 2, route: 1}
+        allowed = ["gpt56_terra_worker", route]
         max_workers = 3
-    elif route == "gpt56_sol_owner" and profile["risk"] == "critical" and profile["mutation"]:
-        mode = "owner_then_judge"
-        required = {"gpt56_sol_owner": 1, "gpt56_sol_judge": 1}
-        allowed = ["gpt56_sol_owner", "gpt56_sol_judge"]
-        max_workers = 2
 
     if profile.get("needs_consensus"):
         mode = "routing_council"
@@ -475,13 +472,15 @@ def _attach_plan(decision: dict[str, Any], profile: dict[str, Any]) -> dict[str,
     decision["task_profile"] = profile
     plan = {
         "mode": mode,
-        "synthesis_owner": "gpt56_sol_owner" if mode == "evidence_then_owner" else "root",
+        "synthesis_owner": route if mode == "evidence_then_owner" else "root",
         "final_acceptance_owner": "root",
         "allowed_agents": allowed,
         "required_agents": required,
         "max_workers": max_workers,
         "max_depth": 1,
     }
+    if mode == "evidence_then_owner":
+        plan["synthesis_role"] = route
     if mode == "routing_council":
         plan.update({
             "phase": "advisory",
@@ -635,24 +634,24 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
         ) if present],
     }
 
-    def choose(route: str, confidence: float, reason: str, verification: str, parallel_hint: bool = False, *, independent_review: bool = False) -> dict[str, Any]:
+    def choose(route: str, confidence: float, reason: str, verification: str, parallel_hint: bool = False) -> dict[str, Any]:
         selected = route
         delegation_repays_handoff = (
             (route == "gpt56_luna_worker" and profile["task_type"] == "mechanical_batch")
             or profile["parallel_safe"]
         )
-        if not independent_review and not delegation_repays_handoff and _meets_route(active_model, active_effort, route):
+        if not delegation_repays_handoff and _meets_route(active_model, active_effort, route):
             selected = "current"
         result = _attach_plan(_route(selected, confidence, reason, verification, parallel_hint), profile)
         result["capability_target"] = route
         return result
 
     if security and (review or consequence):
-        return choose("gpt56_sol_judge", 0.96, "security-sensitive judgment", "security evidence and targeted checks", independent_review=review)
+        return choose("gpt56_sol_deep", 0.96, "security-sensitive deep analysis", "security evidence and targeted checks")
     if security:
         return choose("gpt56_sol_owner", 0.89, "security-sensitive implementation or analysis", "security tests and threat-focused review")
     if consequence and (owner or ambiguity or review):
-        return choose("gpt56_sol_judge" if review else "gpt56_sol_owner", 0.93, "high-consequence work", "targeted tests plus risk review", independent_review=review)
+        return choose("gpt56_sol_deep" if review else "gpt56_sol_owner", 0.93, "high-consequence work", "targeted tests plus risk analysis")
     if consequence and (mutation or destructive_external or deployment or dependency_change):
         return choose("gpt56_sol_owner", 0.92, "high-consequence change or external action", "targeted tests, rollback check, and risk review")
     if consequence and debugging:
@@ -744,6 +743,22 @@ def _force_single_plan(decision: dict[str, Any]) -> None:
     }
 
 
+def _force_evidence_plan(decision: dict[str, Any], synthesis_role: str) -> None:
+    """Use cheap evidence workers before one capable final executor."""
+    _set_route_fields(decision, synthesis_role)
+    decision.update({"parallel": True, "max_workers": 3, "delegate": True})
+    decision["orchestration"] = {
+        "mode": "evidence_then_owner",
+        "synthesis_owner": synthesis_role,
+        "synthesis_role": synthesis_role,
+        "final_acceptance_owner": "root",
+        "allowed_agents": ["gpt56_terra_worker", synthesis_role],
+        "required_agents": {"gpt56_terra_worker": 2, synthesis_role: 1},
+        "max_workers": 3,
+        "max_depth": 1,
+    }
+
+
 def _has_safety_floor(profile: dict[str, Any]) -> bool:
     product = profile.get("product", {})
     signals = set(profile.get("signals", []))
@@ -772,7 +787,8 @@ def _apply_routing_profile(
             "gpt56_terra_worker": "gpt56_terra_worker",
             "gpt56_terra_deep": "gpt56_terra_worker",
             "gpt56_sol_owner": "gpt56_terra_deep",
-            "gpt56_sol_judge": "gpt56_sol_owner",
+            "gpt56_sol_deep": "gpt56_sol_owner",
+            "gpt56_sol_xhigh": "gpt56_sol_deep",
         }[baseline_route]
         _set_route_fields(decision, cheaper)
         _force_single_plan(decision)
@@ -789,36 +805,39 @@ def _apply_routing_profile(
                 "gpt56_luna_worker": "gpt56_terra_worker",
                 "gpt56_terra_worker": "gpt56_terra_deep",
                 "gpt56_terra_deep": "gpt56_sol_owner",
-                "gpt56_sol_owner": "gpt56_sol_owner",
-                "gpt56_sol_judge": "gpt56_sol_judge",
+                "gpt56_sol_owner": "gpt56_sol_deep",
+                "gpt56_sol_deep": "gpt56_sol_xhigh",
+                "gpt56_sol_xhigh": "gpt56_sol_xhigh",
             }[quality_baseline]
+            signals = set(profile.get("signals", []))
+            xhigh_worthy = (
+                profile.get("risk") == "critical"
+                or {"security", "review"}.issubset(signals)
+                or {"debugging", "open_ended"}.issubset(signals)
+                or {"read_heavy", "open_ended"}.issubset(signals)
+            )
+            if stronger == "gpt56_sol_deep" and xhigh_worthy:
+                stronger = "gpt56_sol_xhigh"
             active_model = str(profile.get("active_model") or "")
             active_effort = str(profile.get("active_effort") or "")
-            independent_execution = stronger == "gpt56_sol_judge" or (
-                stronger == "gpt56_sol_owner" and bool(profile.get("mutation"))
-            )
             selected = (
                 "current"
-                if not independent_execution and _meets_route(active_model, active_effort, stronger)
+                if _meets_route(active_model, active_effort, stronger)
                 else stronger
             )
             _set_route_fields(decision, selected)
             decision.pop("candidate_route", None)
             rebuilt_profile = dict(profile)
             decision = _attach_plan(decision, rebuilt_profile)
-            if stronger == "gpt56_sol_owner" and profile.get("mutation") and not profile.get("needs_consensus"):
-                _set_route_fields(decision, "gpt56_sol_owner")
-                decision.update({"parallel": False, "max_workers": 2, "delegate": True})
-                decision["orchestration"] = {
-                    "mode": "owner_then_judge",
-                    "synthesis_owner": "root",
-                    "final_acceptance_owner": "root",
-                    "allowed_agents": ["gpt56_sol_owner", "gpt56_sol_judge"],
-                    "required_agents": {"gpt56_sol_owner": 1, "gpt56_sol_judge": 1},
-                    "max_workers": 2,
-                    "max_depth": 1,
-                }
-                decision["verification"] = str(decision["verification"]) + " plus independent review"
+            evidence_worthy = (
+                stronger in {"gpt56_sol_owner", "gpt56_sol_deep", "gpt56_sol_xhigh"}
+                and bool(profile.get("mutation"))
+                and quality_baseline in {"gpt56_terra_deep", "gpt56_sol_owner", "gpt56_sol_deep", "gpt56_sol_xhigh"}
+                and not profile.get("needs_consensus")
+            )
+            if evidence_worthy:
+                _force_evidence_plan(decision, stronger)
+                decision["verification"] = str(decision["verification"]) + " plus independent evidence synthesis"
             decision["reason"] = "max-quality profile; " + str(decision["reason"])
         else:
             _set_route_fields(decision, "current")
@@ -1147,9 +1166,10 @@ def _context(decision: dict[str, Any]) -> str:
             "Fan out only independent units; root must reconcile coverage and conflicts before synthesis."
         )
     elif mode == "evidence_then_owner":
+        synthesis_role = str(plan["synthesis_role"])
         execution = (
             "First spawn two leaf agents with `agent_type: gpt56_terra_worker` and distinct evidence `task_name` values. After both return, "
-            "spawn one agent with `agent_type: gpt56_sol_owner` and a new synthesis `task_name`, passing only their distilled evidence plus the final contract."
+            f"spawn one agent with `agent_type: {synthesis_role}` and a new synthesis `task_name`, passing only their distilled evidence plus the final contract."
         )
     elif mode == "routing_council":
         execution = (
@@ -1160,10 +1180,7 @@ def _context(decision: dict[str, Any]) -> str:
             "spawn the exact agreed custom role on custom agreement, or retain the deterministic pre-council route on disagreement. The hook records and checks the same transition."
         )
     else:
-        execution = (
-            "Spawn one agent with `agent_type: gpt56_sol_owner` for the change, verify its result, then spawn one independent "
-            "agent with `agent_type: gpt56_sol_judge` for critical review; use distinct `task_name` values. Root owns the final decision."
-        )
+        execution = "Keep this turn in the current agent because the selected orchestration mode is unsupported."
     if mode != "direct":
         execution += (
             " Do not claim a routed role unless the matching agent actually starts. Omit `service_tier` from every "
@@ -1181,7 +1198,7 @@ def _context(decision: dict[str, Any]) -> str:
         "Do not pass `service_tier`, `model`, or `reasoning_effort`; the custom agent definition and inherited task speed own those settings. "
         f"{'Begin the first user-visible progress update with exactly `Route: ' + decision['visible_route'] + '`. ' if decision['announce_route'] else ''}"
         "Use only this factual model-effort-speed label in normal user-facing routing updates. Never expose internal "
-            "agent IDs such as `gpt56_sol_judge` unless the user asks for raw routing details. Maximum delegation depth is 1, maximum workers is "
+            "agent IDs such as `gpt56_sol_xhigh` unless the user asks for raw routing details. Maximum delegation depth is 1, maximum workers is "
         f"{decision['max_workers']}, and route-up is allowed once. Apply `$route-gpt-5-6-work`. "
         f"Effort words are routing/configuration intent from {decision['effort_evidence']}, not live runtime attestation. "
         f"Reported speed label is {('Fast' if decision['fast_enabled'] else 'Speed unknown' if decision.get('speed_evidence') == 'default_assumed' else 'Standard')} from {decision['speed_evidence']}; preserve it without overriding the tier and never call it UI-attested unless the hook supplied it. "
@@ -1255,7 +1272,7 @@ def _structured_return(message: str) -> bool:
 
 def _route_recommendation(message: str, candidates: list[str]) -> str | None:
     match = re.search(
-        r"Route recommendation:[ \t]*(current|gpt56_(?:luna_worker|terra_worker|terra_deep|sol_owner|sol_judge))\b",
+        r"Route recommendation:[ \t]*(current|gpt56_(?:luna_worker|terra_worker|terra_deep|sol_owner|sol_deep|sol_xhigh))\b",
         message,
         re.I,
     )
@@ -1354,12 +1371,8 @@ def _reconcile_subagent_transcript(data: dict[str, Any], state: dict[str, Any]) 
                 completed_role_counts[completed_role] = completed_role_counts.get(completed_role, 0) + 1
             ordering_violation = (
                 plan["mode"] == "evidence_then_owner"
-                and role == "gpt56_sol_owner"
+                and role == plan.get("synthesis_role")
                 and completed_role_counts.get("gpt56_terra_worker", 0) < 2
-            ) or (
-                plan["mode"] == "owner_then_judge"
-                and role == "gpt56_sol_judge"
-                and completed_role_counts.get("gpt56_sol_owner", 0) < 1
             )
             pending_types.append(role)
             spawn_count += 1
@@ -1539,12 +1552,8 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
                 completed_by_role[role] = completed_by_role.get(role, 0) + 1
         ordering_violation = (
             plan["mode"] == "evidence_then_owner"
-            and agent_type == "gpt56_sol_owner"
+            and agent_type == plan.get("synthesis_role")
             and completed_by_role.get("gpt56_terra_worker", 0) < 2
-        ) or (
-            plan["mode"] == "owner_then_judge"
-            and agent_type == "gpt56_sol_judge"
-            and completed_by_role.get("gpt56_sol_owner", 0) < 1
         ) or (
             council
             and council_phase != "advisory"

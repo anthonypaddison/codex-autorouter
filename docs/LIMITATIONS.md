@@ -2,7 +2,7 @@
 
 ## Custom agents require explicit activation
 
-Codex plugins do not currently document a native custom-agent component. The plugin bundles reviewed templates, but the user must explicitly install the five namespaced TOMLs into `CODEX_HOME/agents` with `routerctl`.
+Codex plugins do not currently document a native custom-agent component. The plugin bundles reviewed templates, but the user must explicitly install the six namespaced TOMLs into `CODEX_HOME/agents` with `routerctl`.
 
 Native custom-agent selection requires both the exact `agent_type` and `fork_turns: "none"` on each spawn. `task_name` is only an orchestration label; using the role there does not select the custom agent. The default full-history fork inherits the parent identity and is incompatible with a custom `agent_type`. The router injects this contract and lifecycle hooks still require the expected child model and role; do not weaken attestation to accept built-in `default` as a named model route.
 

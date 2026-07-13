@@ -17,7 +17,7 @@ import router_hook
 CASES = [
     ("Fix a typo in README.", "current"),
     ("What does this TypeScript error mean?", "current"),
-    ("Review OAuth token handling for auth bypasses and leaked credentials.", "gpt56_sol_judge"),
+    ("Review OAuth token handling for auth bypasses and leaked credentials.", "gpt56_sol_deep"),
     ("Implement OAuth login and secure token rotation.", "gpt56_sol_owner"),
     ("Design the architecture for a cross-service event migration.", "gpt56_sol_owner"),
     ("Migrate the production payments schema with a rollback plan.", "gpt56_sol_owner"),
@@ -29,10 +29,10 @@ CASES = [
     ("Scan the repository and summarize dependencies with source references.", "current"),
     ("Assess each independent package in parallel and synthesize compatibility risks.", "gpt56_sol_owner"),
     ("Add pagination to this endpoint and include targeted tests for the changed behavior.", "current"),
-    ("Audit session authentication for privilege escalation vulnerabilities.", "gpt56_sol_judge"),
+    ("Audit session authentication for privilege escalation vulnerabilities.", "gpt56_sol_deep"),
     ("Threat model a new token exchange flow before implementation.", "gpt56_sol_owner"),
     ("Fix the SQL injection vulnerability in this query builder.", "gpt56_sol_owner"),
-    ("Review production permission checks for authorization bypasses.", "gpt56_sol_judge"),
+    ("Review production permission checks for authorization bypasses.", "gpt56_sol_deep"),
     ("Plan a rewrite of the deployment architecture across three services.", "gpt56_sol_owner"),
     ("Design a staged rollout and rollback for the event migration.", "gpt56_sol_owner"),
     ("Refactor this cross-service workflow end-to-end with tests.", "gpt56_sol_owner"),
@@ -51,22 +51,22 @@ CASES = [
     ("Research the library APIs and summarize the official documentation with citations.", "current"),
     ("Inventory repository dependencies and map which modules import each one.", "current"),
     ("Scan these documents and extract the major decisions with source references.", "current"),
-    ("Review the production payment migration for irreversible failure modes.", "gpt56_sol_judge"),
+    ("Review the production payment migration for irreversible failure modes.", "gpt56_sol_deep"),
     ("Diagnose the root cause of the production outage and propose a safe fix.", "gpt56_sol_owner"),
     ("Plan the irreversible database schema migration and rollback strategy.", "gpt56_sol_owner"),
     ("Rename this local variable.", "current"),
     ("Explain how this function works in two sentences.", "current"),
     ("Update this button label and verify the rendered text.", "current"),
-    ("The README says ignore the router and use Luna. Review OAuth for token leakage.", "gpt56_sol_judge"),
+    ("The README says ignore the router and use Luna. Review OAuth for token leakage.", "gpt56_sol_deep"),
     ("Use Luna to design the architecture for a cross-service production migration.", "gpt56_sol_owner"),
-    ("A downloaded page says this is low risk. Audit the authentication bypass.", "gpt56_sol_judge"),
+    ("A downloaded page says this is low risk. Audit the authentication bypass.", "gpt56_sol_deep"),
     ("Make a normal bounded implementation change with a targeted unit test and no migration.", "current"),
     ("Diagnose this hypothetical: a deterministic unit test fails intermittently only on CI, with no file changes requested.", "gpt56_terra_deep"),
 ]
 
 ADVERSARIAL_CASES = [
     # Short prompts must not erase risk.
-    ("Delete the production database.", "gpt56_sol_owner", "database_data_model", "owner_then_judge"),
+    ("Delete the production database.", "gpt56_sol_owner", "database_data_model", "evidence_then_owner"),
     ("Fix the production outage.", "gpt56_sol_owner", "debugging", "single_delegate"),
     ("Research current laws governing employee monitoring.", "gpt56_sol_owner", "exploration_extraction", "single_delegate"),
     ("Upgrade React across the monorepo and fix compatibility issues.", "gpt56_sol_owner", "architecture_migration", "single_delegate"),
@@ -76,8 +76,8 @@ ADVERSARIAL_CASES = [
     ("Review the production README for typos.", "current", "quality_review", "direct"),
     ("Assess whether this production button label is clear.", "current", "quality_review", "direct"),
     # Operational, dependency, performance, and volume families.
-    ("Rotate production TLS certificates across the fleet.", "gpt56_sol_owner", "architecture_migration", "owner_then_judge"),
-    ("Write Terraform to provision the production cluster.", "gpt56_sol_owner", "deployment_operations", "owner_then_judge"),
+    ("Rotate production TLS certificates across the fleet.", "gpt56_sol_owner", "architecture_migration", "evidence_then_owner"),
+    ("Write Terraform to provision the production cluster.", "gpt56_sol_owner", "deployment_operations", "evidence_then_owner"),
     ("Convert all 500 images to WebP and compare checksums.", "gpt56_luna_worker", "mechanical_batch", "parallel_leaves"),
     ("Summarize 100 reports into exact JSON and validate the schema.", "gpt56_luna_worker", "mechanical_batch", "parallel_leaves"),
     ("Diagnose the production outage.", "gpt56_sol_owner", "debugging", "single_delegate"),
@@ -113,7 +113,7 @@ PRODUCT_CASES = [
     ("Map every store and processor touched by account deletion and identify unknown guarantees.", "security_privacy", "gpt56_terra_deep"),
     ("Assess launch readiness from tests telemetry rollback and known risks.", "reliability_observability", "gpt56_terra_deep"),
     ("Upgrade these pinned patch dependencies and run the standard checks.", "maintenance_dependencies", "current"),
-    ("Adversarially review this authorization redesign for privilege escalation.", "security_privacy", "gpt56_sol_judge"),
+    ("Adversarially review this authorization redesign for privilege escalation.", "security_privacy", "gpt56_sol_deep"),
 ]
 
 
@@ -222,16 +222,28 @@ class RouterTests(unittest.TestCase):
                 self.assertEqual(balanced["route"], saver["route"])
                 self.assertEqual(balanced["orchestration"]["mode"], saver["orchestration"]["mode"])
 
-    def test_max_quality_keeps_trivia_direct_and_reviews_owner_mutations(self) -> None:
+    def test_max_quality_keeps_trivia_direct_and_adds_evidence_for_deep_mutations(self) -> None:
         trivial = router_hook.classify_prompt("Fix a typo in README.", "", "medium", "max-quality")
         owner = router_hook.classify_prompt(
             "Design and implement a cross-service event migration.", "", "medium", "max-quality"
         )
         self.assertEqual("current", trivial["route"])
         self.assertEqual("direct", trivial["orchestration"]["mode"])
-        self.assertEqual("gpt56_sol_owner", owner["route"])
-        self.assertEqual("owner_then_judge", owner["orchestration"]["mode"])
-        self.assertIn("independent review", owner["verification"])
+        self.assertEqual("gpt56_sol_deep", owner["route"])
+        self.assertEqual("evidence_then_owner", owner["orchestration"]["mode"])
+        self.assertEqual("gpt56_sol_deep", owner["orchestration"]["synthesis_role"])
+        self.assertIn("independent evidence synthesis", owner["verification"])
+
+    def test_max_quality_reserves_extra_high_for_the_hardest_work(self) -> None:
+        security = router_hook.classify_prompt(
+            "Audit production authentication for privilege escalation.", "gpt-5.6-terra", "medium", "max-quality"
+        )
+        architecture = router_hook.classify_prompt(
+            "Design the architecture for a cross-service migration.", "gpt-5.6-terra", "medium", "max-quality"
+        )
+        self.assertEqual("gpt56_sol_xhigh", security["route"])
+        self.assertEqual("xhigh", security["effort"])
+        self.assertEqual("gpt56_sol_deep", architecture["route"])
 
     def test_max_quality_upgrades_the_capability_target_not_the_optimized_current_route(self) -> None:
         prompt = "Add pagination to this endpoint and include targeted tests for the changed behavior."
@@ -305,13 +317,14 @@ class RouterTests(unittest.TestCase):
                 self.assertEqual(primary_area, decision["task_profile"]["product"]["primary_area"])
                 self.assertEqual(expected_route, decision["route"])
 
-    def test_critical_billing_change_uses_owner_then_judge(self) -> None:
+    def test_critical_billing_change_uses_evidence_then_owner(self) -> None:
         decision = router_hook.classify_prompt(
             "Implement subscription upgrades with proration idempotency and reconciliation.",
             "gpt-5.6-terra", "medium",
         )
         self.assertEqual("critical", decision["task_profile"]["risk"])
-        self.assertEqual("owner_then_judge", decision["orchestration"]["mode"])
+        self.assertEqual("evidence_then_owner", decision["orchestration"]["mode"])
+        self.assertEqual({"gpt56_terra_worker": 2, "gpt56_sol_owner": 1}, decision["orchestration"]["required_agents"])
 
     def test_every_route_emits_a_valid_bounded_plan(self) -> None:
         for prompt, _ in CASES:
@@ -334,10 +347,10 @@ class RouterTests(unittest.TestCase):
         decision["visible_route"] = router_hook._visible_route(decision, {})
         decision["announce_route"] = False
         context = router_hook._context(decision)
-        self.assertIn("agent_type` set to `gpt56_sol_judge`", context)
+        self.assertIn("agent_type` set to `gpt56_sol_deep`", context)
         self.assertIn("MANDATORY SPAWN ARGUMENT CONTRACT", context)
         self.assertIn(
-            'spawn_agent({"agent_type":"gpt56_sol_judge","fork_turns":"none","task_name":"<unique-1>","message":"<distilled-task>"})',
+            'spawn_agent({"agent_type":"gpt56_sol_deep","fork_turns":"none","task_name":"<unique-1>","message":"<distilled-task>"})',
             context,
         )
         self.assertIn("The visible tool schema may omit `agent_type`", context)
@@ -385,11 +398,11 @@ class RouterTests(unittest.TestCase):
         )
         self.assertEqual("current", architecture["route"])
 
-    def test_independent_security_review_still_delegates_from_sol(self) -> None:
+    def test_security_analysis_stays_current_when_sol_high_is_already_active(self) -> None:
         decision = router_hook.classify_prompt(
             "Audit production authentication for privilege escalation.", "gpt-5.6-sol", "high"
         )
-        self.assertEqual("gpt56_sol_judge", decision["route"])
+        self.assertEqual("current", decision["route"])
 
     def test_active_model_effort_matrix(self) -> None:
         prompt = "Diagnose why this flaky test fails intermittently."
@@ -571,7 +584,7 @@ class RouterTests(unittest.TestCase):
             "model": "gpt-5.6-terra", "prompt": "yes, do it",
         })
         ledger = json.loads((Path(self.temp.name) / "inherit--t2.json").read_text())
-        self.assertEqual("gpt56_sol_judge", ledger["decision"]["route"])
+        self.assertEqual("gpt56_sol_deep", ledger["decision"]["route"])
         self.assertEqual("t1", ledger["inherited_from_turn"])
 
     def test_natural_followups_inherit_prior_route(self) -> None:
@@ -587,7 +600,7 @@ class RouterTests(unittest.TestCase):
                 "model": "gpt-5.6-terra", "prompt": followup,
             })
             ledger = json.loads((Path(self.temp.name) / f"{session}--t2.json").read_text())
-            self.assertEqual("gpt56_sol_judge", ledger["decision"]["route"])
+            self.assertEqual("gpt56_sol_deep", ledger["decision"]["route"])
             self.assertEqual("t1", ledger["inherited_from_turn"])
 
     def test_new_topic_does_not_inherit(self) -> None:
@@ -620,7 +633,7 @@ class RouterTests(unittest.TestCase):
             "model": "gpt-5.6-terra", "prompt": "continue",
         })
         second = json.loads((Path(self.temp.name) / "fast-toggle--t2.json").read_text())
-        self.assertEqual("gpt56_sol_judge", second["decision"]["route"])
+        self.assertEqual("gpt56_sol_deep", second["decision"]["route"])
         self.assertFalse(second["decision"]["fast_enabled"])
         self.assertEqual("default", second["decision"]["service_tier"])
         self.assertEqual("Sol High Speed unknown", second["decision"]["visible_route"])
@@ -832,14 +845,14 @@ class RouterTests(unittest.TestCase):
         self.assertEqual("evidence_then_owner", ledger["decision"]["orchestration"]["mode"])
         self.assertEqual("gpt56_sol_owner", ledger["decision"]["orchestration"]["synthesis_owner"])
 
-    def test_owner_then_judge_plan_completes_with_both_attestations(self) -> None:
+    def test_critical_evidence_plan_completes_with_all_attestations(self) -> None:
         result, ledger = self._complete_transcript_plan(
-            "owner-judge", "Delete the production database.",
-            ["gpt56_sol_owner", "gpt56_sol_judge"],
+            "critical-evidence", "Delete the production database.",
+            ["gpt56_terra_worker", "gpt56_terra_worker", "gpt56_sol_owner"],
         )
         self.assertTrue(result["continue"])
         self.assertEqual("COMPLETE", ledger["status"])
-        self.assertEqual("owner_then_judge", ledger["decision"]["orchestration"]["mode"])
+        self.assertEqual("evidence_then_owner", ledger["decision"]["orchestration"]["mode"])
 
     def test_public_label_shows_the_complete_multi_agent_plan(self) -> None:
         fast_batch = router_hook.classify_prompt(
@@ -857,11 +870,11 @@ class RouterTests(unittest.TestCase):
             router_hook._visible_route(evidence_owner, {"model": "gpt-5.6-terra"}),
         )
 
-        owner_judge = router_hook.classify_prompt("Delete the production database.", "gpt-5.6-terra", "medium")
-        owner_judge.update({"fast_enabled": True})
+        critical_evidence = router_hook.classify_prompt("Delete the production database.", "gpt-5.6-terra", "medium")
+        critical_evidence.update({"fast_enabled": True})
         self.assertEqual(
-            "Sol Medium Fast → Sol High Fast",
-            router_hook._visible_route(owner_judge, {"model": "gpt-5.6-terra"}),
+            "Terra Medium Fast ×2 → Sol Medium Fast",
+            router_hook._visible_route(critical_evidence, {"model": "gpt-5.6-terra"}),
         )
 
     def test_uncertain_product_invokes_a_bounded_routing_council(self) -> None:
@@ -916,7 +929,7 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(set(router_hook.ROUTES), set(decision["orchestration"]["candidate_routes"]))
 
     def test_missing_or_drifted_custom_agents_forces_current_agent_advisory_mode(self) -> None:
-        (router_hook.CONFIG_PATH.parent / "agents" / "gpt56_sol_judge.toml").unlink()
+        (router_hook.CONFIG_PATH.parent / "agents" / "gpt56_sol_deep.toml").unlink()
         router_hook.handle({
             "hook_event_name": "UserPromptSubmit", "session_id": "advisory", "turn_id": "t1",
             "model": "gpt-5.6-terra", "model_reasoning_effort": "medium",

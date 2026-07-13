@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="720" viewBox="0 0 1500 720" role="img" aria-labelledby="title desc">
+  <title id="title">Codex Autorouter profiles</title>
+  <desc id="desc">Comparison of Token Saver, Balanced, and Max Quality routing profiles.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0A0D14"/>
+      <stop offset="1" stop-color="#101722"/>
+    </linearGradient>
+  </defs>
+  <rect width="1500" height="720" rx="32" fill="url(#bg)"/>
+
+  <g font-family="Inter, ui-sans-serif, system-ui, sans-serif">
+    <text x="750" y="72" text-anchor="middle" fill="#F8FAFC" font-size="38" font-weight="750">Choose your optimization bias</text>
+    <text x="750" y="110" text-anchor="middle" fill="#8F9CAF" font-size="19">One persistent preference. The same safety floor.</text>
+
+    <g transform="translate(70 160)">
+      <rect width="420" height="440" rx="28" fill="#151421" stroke="#A78BFA" stroke-opacity="0.6"/>
+      <circle cx="52" cy="54" r="12" fill="#A78BFA"/>
+      <text x="80" y="63" fill="#F4F0FF" font-size="29" font-weight="750">Token Saver</text>
+      <text x="36" y="112" fill="#A9A3BA" font-size="17">Minimize total routing overhead</text>
+      <path d="M36 142H384" stroke="#FFFFFF" stroke-opacity="0.08"/>
+      <text x="36" y="188" fill="#F5F7FA" font-size="20" font-weight="650">How it behaves</text>
+      <text x="36" y="230" fill="#B8C1CE" font-size="17">• One worker maximum</text>
+      <text x="36" y="266" fill="#B8C1CE" font-size="17">• No optional councils or fan-out</text>
+      <text x="36" y="302" fill="#B8C1CE" font-size="17">• Normal work steps down one tier</text>
+      <rect x="36" y="344" width="348" height="62" rx="16" fill="#0D0F17"/>
+      <text x="58" y="371" fill="#8F9CAF" font-size="14" font-weight="650">EXAMPLE</text>
+      <text x="58" y="394" fill="#E9E5F5" font-size="16">Terra High → Terra Medium</text>
+    </g>
+
+    <g transform="translate(540 160)">
+      <rect width="420" height="440" rx="28" fill="#102126" stroke="#48D7E8" stroke-width="2"/>
+      <rect x="272" y="28" width="112" height="34" rx="17" fill="#16363D"/>
+      <text x="328" y="50" text-anchor="middle" fill="#78E6F2" font-size="13" font-weight="750">DEFAULT</text>
+      <circle cx="52" cy="54" r="12" fill="#48D7E8"/>
+      <text x="80" y="63" fill="#E8FDFF" font-size="29" font-weight="750">Balanced</text>
+      <text x="36" y="112" fill="#9BB8BC" font-size="17">Optimize cost to a verified result</text>
+      <path d="M36 142H384" stroke="#FFFFFF" stroke-opacity="0.08"/>
+      <text x="36" y="188" fill="#F5F7FA" font-size="20" font-weight="650">How it behaves</text>
+      <text x="36" y="230" fill="#B8C9CC" font-size="17">• Uses the least sufficient route</text>
+      <text x="36" y="266" fill="#B8C9CC" font-size="17">• Parallelizes only independent work</text>
+      <text x="36" y="302" fill="#B8C9CC" font-size="17">• Councils only when truly uncertain</text>
+      <rect x="36" y="344" width="348" height="62" rx="16" fill="#0B1518"/>
+      <text x="58" y="371" fill="#7FA1A6" font-size="14" font-weight="650">EXAMPLE</text>
+      <text x="58" y="394" fill="#E8F9FB" font-size="16">Terra Medium / High as needed</text>
+    </g>
+
+    <g transform="translate(1010 160)">
+      <rect width="420" height="440" rx="28" fill="#251C11" stroke="#FDBA4A" stroke-opacity="0.68"/>
+      <circle cx="52" cy="54" r="12" fill="#FDBA4A"/>
+      <text x="80" y="63" fill="#FFF6E6" font-size="29" font-weight="750">Max Quality</text>
+      <text x="36" y="112" fill="#C8B79D" font-size="17">Bias toward maximum capability</text>
+      <path d="M36 142H384" stroke="#FFFFFF" stroke-opacity="0.08"/>
+      <text x="36" y="188" fill="#F5F7FA" font-size="20" font-weight="650">How it behaves</text>
+      <text x="36" y="230" fill="#D0C4B2" font-size="17">• Nontrivial work steps up one tier</text>
+      <text x="36" y="266" fill="#D0C4B2" font-size="17">• Hardest work can use Extra High</text>
+      <text x="36" y="302" fill="#D0C4B2" font-size="17">• Trivial work still stays direct</text>
+      <rect x="36" y="344" width="348" height="62" rx="16" fill="#17120C"/>
+      <text x="58" y="371" fill="#AA977C" font-size="14" font-weight="650">EXAMPLE</text>
+      <text x="58" y="394" fill="#FFF3DE" font-size="16">Terra ×2 → Sol Extra High</text>
+    </g>
+
+    <g transform="translate(248 634)">
+      <rect width="1004" height="52" rx="26" fill="#141A24" stroke="#2C3543"/>
+      <path d="M34 26L43 35L61 16" fill="none" stroke="#65D7A2" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="82" y="33" fill="#C7D0DC" font-size="17">Security, payments, privacy, production, and destructive-action floors never step down.</text>
+    </g>
+  </g>
+</svg>

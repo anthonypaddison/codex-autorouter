@@ -1,6 +1,6 @@
 # Standalone advisory mode
 
-Codex IDE extensions do not currently load plugins. The release therefore includes a standalone skill lifecycle for IDE and other non-plugin surfaces. Standalone mode can provide the routing instructions and the five reviewed custom-agent roles, but it has no plugin lifecycle hooks and is structurally restricted to `ADVISORY`.
+Codex IDE extensions do not currently load plugins. The release therefore includes a standalone skill lifecycle for IDE and other non-plugin surfaces. Standalone mode can provide the routing instructions and the six reviewed custom-agent roles, but it has no plugin lifecycle hooks and is structurally restricted to `ADVISORY`.
 
 ## Install
 

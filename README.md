@@ -1,39 +1,44 @@
-# GPT-5.6 Router for Codex
+<p align="center">
+  <img src="assets/readme/hero.svg" alt="Codex Autorouter — the right model and effort, automatically" width="100%">
+</p>
 
-GPT-5.6 Router profiles each Codex task and chooses the least expensive GPT-5.6 route likely to produce a verified result. It distinguishes Sol, Terra, and Luna work; selects low, medium, or high configured reasoning effort; and uses bounded depth-1 subagents only when delegation repays its overhead.
+<p align="center">
+  <a href="https://github.com/vibeforge1111/Codex-Autorouter/actions/workflows/ci.yml"><img alt="Release quality" src="https://img.shields.io/github/actions/workflow/status/vibeforge1111/Codex-Autorouter/ci.yml?branch=main&amp;style=flat-square&amp;label=release%20quality"></a>
+  <img alt="Python 3.10 through 3.14" src="https://img.shields.io/badge/Python-3.10%E2%80%933.14-3776AB?style=flat-square">
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-E9A23B?style=flat-square"></a>
+  <img alt="Private beta" src="https://img.shields.io/badge/status-private%20beta-8B5CF6?style=flat-square">
+</p>
 
-> **Public-stable release pending:** the full hosted matrix now passes on macOS, Ubuntu, and Windows across Python 3.10–3.14, and macOS CLI acceptance includes native custom-agent delegation with zero routing violations. Remaining Desktop/Linux/Windows real-host rows and a tested private vulnerability-reporting channel are still required before broad publication. See [release evidence](docs/RELEASE_EVIDENCE.md).
+<p align="center">
+  <strong>Automatic model, effort, and subagent routing for Codex.</strong><br>
+  Spend tokens where they improve the result—not everywhere by default.
+</p>
 
-The installed skill is namespaced as `$gpt-5-6-router:route-gpt-5-6-work`.
+---
 
-## What it does
+## Why Codex Autorouter
 
-- Keeps small, single-path work in the current agent.
-- Uses Luna only for narrow, repetitive work with cheap objective verification.
-- Uses Terra for cost-efficient implementation, exploration, analysis, and ambiguous debugging.
-- Uses Sol for architecture, migrations, demanding synthesis, consequential changes, and critical review.
-- Understands product strategy, requirements, UX, frontend, backend, data, mobile, AI, integrations, payments, QA, analytics, growth, accessibility, localization, DevOps, reliability, security, privacy, performance, and maintenance.
-- Preserves the configured speed tier without silently enabling Fast.
-- Adds three persistent cost/quality profiles: Token Saver, Balanced, and Max Quality.
-- Requires routed agents, coverage, configuration intent, and post-mutation verification before completion.
+Codex Autorouter profiles each task, chooses the least expensive GPT-5.6 route likely to produce a verified result, and enforces a proportionate completion gate. It can keep work in the current agent or delegate a bounded unit to Luna, Terra, or Sol with the right configured reasoning effort.
 
-## Installation
+| Work shape | Typical route | Why |
+|---|---|---|
+| Tiny, single-path task | Current agent | Avoid model-switch overhead |
+| Repetitive and objectively checked | Luna Low | Cheap, bounded execution |
+| Ordinary implementation or exploration | Terra Medium | Strong cost-to-capability ratio |
+| Ambiguous debugging or edge cases | Terra High | More reasoning without jumping tiers |
+| Architecture, migration, demanding synthesis | Sol Medium | End-to-end ownership |
+| Difficult security or consequential work | Sol High | Deep specialist execution |
+| Hardest long-running work in Max Quality | Sol Extra High | Extra depth only when worth the cost |
 
-Install the plugin from its marketplace in Codex Desktop or CLI, start a new Codex task, and review the bundled commands in `/hooks`. Codex intentionally does not trust plugin hooks merely because a plugin was installed. Codex IDE extensions do not currently support plugins, so the release provides a conflict-safe [standalone advisory mode](docs/STANDALONE.md) instead of pretending full plugin enforcement exists there.
+The router understands product strategy, requirements, UX, frontend, backend, data, mobile, AI, integrations, payments, QA, analytics, growth, accessibility, localization, DevOps, reliability, security, privacy, performance, and maintenance.
 
-Custom-agent definitions are not currently a documented native plugin component. After reviewing the five bundled definitions, activate them explicitly:
+## Three routing profiles
 
-```bash
-python3 skills/route-gpt-5-6-work/scripts/routerctl.py status
-python3 skills/route-gpt-5-6-work/scripts/routerctl.py activate
-python3 scripts/check_hooks.py
-```
+<p align="center">
+  <img src="assets/readme/profiles.svg" alt="Token Saver, Balanced, and Max Quality routing profiles" width="100%">
+</p>
 
-Record the `Installed plugin root` printed by `codex plugin add`, then run those commands there; `codex plugin list` verifies the installed version but may display the marketplace source path instead of the cache. Python 3.10 or newer is required. See [Installation and lifecycle](docs/INSTALL.md) for full marketplace, trust, upgrade, repair, and uninstall steps.
-
-## Routing profiles
-
-Balanced is the default and preserves the router's normal cost/quality policy. Choose a persistent preference with:
+Set a persistent preference from the installed plugin directory:
 
 ```bash
 python3 skills/route-gpt-5-6-work/scripts/routerctl.py profile token-saver
@@ -41,33 +46,102 @@ python3 skills/route-gpt-5-6-work/scripts/routerctl.py profile balanced
 python3 skills/route-gpt-5-6-work/scripts/routerctl.py profile max-quality
 ```
 
-- **Token Saver** limits routing to one worker, skips optional councils and fan-out, and steps normal-risk work down one cost tier. Security, payments, privacy, production, destructive-action, and other safety floors never step down.
-- **Balanced** uses the standard least-expensive-verified route, including bounded parallelism or a routing council only when earned.
-- **Max Quality** steps nontrivial work up one capability tier and adds independent review to consequential owner mutations. Trivial work stays direct, and orchestration remains depth 1 with at most three agents.
+Inspect the active preference with:
 
-Run `routerctl.py profile` to inspect the current preference. The setting applies to the next new task, survives plugin upgrades, and never changes the separate Codex Fast/Standard setting.
+```bash
+python3 skills/route-gpt-5-6-work/scripts/routerctl.py profile
+```
 
-## Honest operating modes
+The preference survives plugin upgrades and applies to the next new task. Fast/Standard remains a separate Codex setting: the router inherits it and never silently toggles it.
 
-- `ADVISORY` with `local_agent_ready: true`: agent definitions are ready, but a filesystem helper cannot prove that Codex discovered or trusted this exact plugin build.
-- `scripts/check_hooks.py` proves static installation readiness: effective app-server configuration, exact skill discovery, hook trust, and five active current agent files. A successful non-current live delegated ledger is still mandatory before release.
-- `ADVISORY`: the skill can advise and work in the current agent, but one or more enforcement or delegation requirements are unavailable.
-- `MANAGED_BLOCKED`: organization policy permits only managed hooks, so plugin hooks cannot enforce the route.
+## How it works
 
-`Fast` or `Standard` appears only when Codex supplies the tier to the hook or persisted configuration reports it; otherwise the label says `Speed unknown`. The effort word in labels such as `Terra High Standard` is route/configuration intent, not a live runtime attestation. See [Known limitations](docs/LIMITATIONS.md).
+<p align="center">
+  <img src="assets/readme/architecture.svg" alt="Codex Autorouter task profiling, routing, execution, and verification flow" width="100%">
+</p>
 
-## Safety
+1. **Profile** the task from trusted user intent: risk, ambiguity, volume, mutation scope, verification strength, and safe parallelism.
+2. **Select** a model, reasoning effort, and one bounded orchestration plan.
+3. **Execute** in the current agent or through depth-1 custom agents; never recursive fan-out.
+4. **Verify** after the final mutation with the cheapest relevant deterministic evidence.
+5. **Route up once** only when a worker returns evidence of a real capability limit.
 
-The plugin never edits global `hooks.json`. Codex owns plugin enablement and hooks. `routerctl` manages only five allowlisted `gpt56_*.toml` files, using a private ownership manifest, write-ahead transaction, checksums, atomic replacement, rollback, and recovery at tested transaction boundaries. It refuses foreign or locally modified definitions unless the user chooses an explicit conflict-preserving command.
+Public route labels stay factual: `Terra High Standard`, `Sol Extra High Fast`, or `Luna Low Speed unknown`. Internal role IDs stay out of normal user-facing copy.
 
-Routing ledgers contain no prompt content or prompt-derived hashes and have a lock-safe manual purge command. See [Local routing data and privacy](docs/PRIVACY.md).
+## Install
+
+### Marketplace plugin — full routing and hooks
+
+Install from the marketplace that distributes the plugin, then start a fresh Codex task. Record the **Installed plugin root** printed by Codex and run these commands there:
+
+```bash
+codex plugin add gpt-5-6-router@<marketplace>
+
+python3 skills/route-gpt-5-6-work/scripts/routerctl.py status
+python3 skills/route-gpt-5-6-work/scripts/routerctl.py activate
+python3 scripts/check_hooks.py
+```
+
+Open `/hooks` in Codex and review the five lifecycle hooks before trusting them. Plugin installation does not imply hook trust. Python 3.10 or newer is required.
+
+### GitHub archive — standalone advisory mode
+
+Codex IDE extensions do not currently support plugins. A release archive can instead install the conflict-safe advisory skill:
+
+```bash
+python3 scripts/standalonectl.py status
+python3 scripts/standalonectl.py install
+```
+
+Standalone mode deliberately does not pretend to have plugin-hook enforcement. See [standalone installation](docs/STANDALONE.md) and [known limitations](docs/LIMITATIONS.md).
+
+## Safety by design
+
+- **Stable package identity:** the GitHub project is Codex Autorouter; the installed plugin ID remains `gpt-5-6-router` so upgrades do not strand existing users.
+- **Bounded delegation:** maximum depth 1 and maximum three agents.
+- **Protected floors:** Token Saver never discounts security, payments, privacy, production, destructive actions, or other high-risk work.
+- **No silent speed changes:** Fast/Standard is inherited, not selected by the router.
+- **Post-mutation verification:** earlier checks cannot satisfy the completion gate.
+- **Conflict-safe activation:** only six namespaced agent files are managed, with checksums, atomic replacement, rollback, crash recovery, and automatic migration from the private-beta role set.
+- **Prompt privacy:** routing ledgers contain no prompt content or prompt-derived hashes.
+
+## Readiness is reported honestly
+
+| State | Meaning |
+|---|---|
+| `ADVISORY` | The skill can advise or work in the current agent; full enforcement is not proven. |
+| `ADVISORY` + `local_agent_ready: true` | Agent definitions are current, but filesystem state alone cannot attest hook discovery. |
+| `scripts/check_hooks.py` ready | App-server discovery, trusted hooks, and current agent files match this build. |
+| `MANAGED_BLOCKED` | Organization policy permits only managed hooks. The router does not bypass it. |
+
+A successful non-current live ledger with matching lifecycle attestation remains the final proof that the launcher selected the named custom agent.
+
+> **Release status:** the automated matrix passes on macOS, Ubuntu, and Windows across Python 3.10–3.14. Broad public-stable release still requires the remaining real-host acceptance rows and a tested private vulnerability-reporting channel. See [release evidence](docs/RELEASE_EVIDENCE.md).
+
+## Documentation
+
+| Guide | Use it for |
+|---|---|
+| [Installation and lifecycle](docs/INSTALL.md) | Plugin install, activation, upgrade, repair, and uninstall |
+| [Standalone advisory mode](docs/STANDALONE.md) | GitHub archive and IDE-compatible installation |
+| [Known limitations](docs/LIMITATIONS.md) | Runtime, hooks, Fast, and custom-agent boundaries |
+| [Privacy](docs/PRIVACY.md) | Local preference and ledger contents |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | Readiness, trust, recovery, and routing-profile issues |
+| [Release checklist](docs/RELEASE_CHECKLIST.md) | Automated and real-host launch gates |
+| [Release evidence](docs/RELEASE_EVIDENCE.md) | Candidate-specific validation proof |
 
 ## Development
 
 ```bash
 python3 scripts/validate_release.py
+python3 scripts/fuzz_router.py
+
 cd skills/route-gpt-5-6-work/scripts
 python3 -m unittest -v test_router test_routerctl
 ```
 
-The release gate and real-host matrix are documented in [Release checklist](docs/RELEASE_CHECKLIST.md), the exact manual and CLI procedure is in [Real-host acceptance](docs/HOST_ACCEPTANCE.md), and candidate-specific results are recorded in [Release evidence](docs/RELEASE_EVIDENCE.md).
+The current suite covers 158 routing and lifecycle tests plus 5,000 deterministic fuzz cases per CI job, including all three profiles, Extra High selection, legacy-role migration, lifecycle ownership, concurrency, crash recovery, hook readiness, and clean-room standalone installation.
+
+## License
+
+[MIT](LICENSE)

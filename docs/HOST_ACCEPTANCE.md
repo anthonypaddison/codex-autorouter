@@ -28,12 +28,12 @@ A passing route requires `COMPLETE`, the expected custom role and model, zero un
    python3 scripts/check_hooks.py
    ```
 
-4. Require `ready: true`, exactly five trusted hooks, the exact cached skill version, and five current agent definitions.
+4. Require `ready: true`, exactly five trusted hooks, the exact cached skill version, and six current agent definitions.
 5. Run this bounded non-mutating prompt in a fresh task:
 
    > Perform a bounded security review of this hypothetical only; do not inspect files or use shell tools. The handler verifies an RS256 signature, pins issuer and audience, validates exp and nbf, binds tenant_id to the authenticated account, requires exact admin:write scope, rejects missing claims, and rejects alg none. Follow the installed GPT-5.6 routing policy exactly. The specialist must return Evidence:, Verification:, and Uncertainty:. After verifying it, reply exactly ROUTER_DELEGATED_OK.
 
-6. Confirm `Sol High Fast` or the truthful current speed label, one `gpt56_sol_judge` child, Sol/high attestation, inherited speed, zero continuations, `COMPLETE`, zero violations, and `ROUTER_DELEGATED_OK`.
+6. Confirm `Sol High Fast` or the truthful current speed label, one `gpt56_sol_deep` child, Sol/high attestation, inherited speed, zero continuations, `COMPLETE`, zero violations, and `ROUTER_DELEGATED_OK`.
 7. Purge test ledgers if desired, deactivate the agents, and confirm owned files are removed or reviewed originals are restored.
 
 On native Windows use `py -3` where `python3` is unavailable. Exercise the Windows lock, atomic replacement, rollback, reparse-point, and hardlink cases through the automated suite before accepting the host.
@@ -42,7 +42,7 @@ On native Windows use `py -3` where `python3` is unavailable. Exercise the Windo
 
 1. Install or enable the exact candidate, then fully start a new Desktop task so discovery is not inherited from an older task.
 2. Open `/hooks`, inspect the exact five entries, and trust them. Changed definitions must require renewed trust.
-3. Activate the five custom agents from the exact installed cache and run `scripts/check_hooks.py`.
+3. Activate the six custom agents from the exact installed cache and run `scripts/check_hooks.py`.
 4. Submit the same bounded security prompt above in the new Desktop task.
 5. Record the visible route, final response, and ledger evidence using the same acceptance criteria as CLI.
 6. Test Fast on and off in separate fresh tasks. The router must preserve the task's setting and must never claim UI attestation when only persisted configuration is available.
@@ -56,7 +56,7 @@ IDE extensions do not currently load plugin hooks. Use a fresh `CODEX_HOME`, ext
 
 1. Check inactive status, install, and repeat install to prove idempotence.
 2. Start a new IDE task and confirm `$route-gpt-5-6-work` discovery.
-3. Activate the five custom agents and require `ADVISORY` plus `STANDALONE_ADVISORY`; never report full hook enforcement.
+3. Activate the six custom agents and require `ADVISORY` plus `STANDALONE_ADVISORY`; never report full hook enforcement.
 4. Run a bounded routing prompt and confirm the route advice is truthful about its advisory state.
 5. Repair, deactivate, uninstall through the durable controller, purge controllers from the trusted extracted archive, and confirm the skill and agent targets are absent.
 

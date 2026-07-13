@@ -45,7 +45,7 @@ The preference is stored under `CODEX_HOME/gpt-5-6-router`, survives plugin repl
 
 Review conflicts before using `activate --replace-conflicts`. That flag snapshots the original definitions and restores them during clean deactivation.
 
-`routerctl status` always remains `ADVISORY` outside managed blocking, even when `local_agent_ready` is true: an extracted archive and an installed plugin can have the same filesystem shape. Only `scripts/check_hooks.py` may report full readiness after it binds app-server discovery, hook trust, and five active current agent definitions to the exact checker build.
+`routerctl status` always remains `ADVISORY` outside managed blocking, even when `local_agent_ready` is true: an extracted archive and an installed plugin can have the same filesystem shape. Only `scripts/check_hooks.py` may report full readiness after it binds app-server discovery, hook trust, and six active current agent definitions to the exact checker build.
 
 ## Repair
 

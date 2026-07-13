@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="820" viewBox="0 0 1600 820" role="img" aria-labelledby="title desc">
+  <title id="title">Codex Autorouter architecture</title>
+  <desc id="desc">Flow from a Codex task through profiling, route selection, bounded agents, verification, and final answer.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#090C12"/>
+      <stop offset="1" stop-color="#111823"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#526075"/>
+    </marker>
+  </defs>
+  <rect width="1600" height="820" rx="32" fill="url(#bg)"/>
+  <g font-family="Inter, ui-sans-serif, system-ui, sans-serif">
+    <text x="80" y="72" fill="#F8FAFC" font-size="38" font-weight="750">How a task gets routed</text>
+    <text x="80" y="108" fill="#8F9CAF" font-size="19">Deterministic policy underneath. Natural Codex workflow on top.</text>
+
+    <g fill="none" stroke="#526075" stroke-width="3" marker-end="url(#arrow)">
+      <path d="M286 300H375"/>
+      <path d="M635 300H724"/>
+      <path d="M1004 300H1092"/>
+      <path d="M1372 300H1460"/>
+      <path d="M1228 444V528"/>
+      <path d="M1228 660V716H520V620"/>
+    </g>
+
+    <g transform="translate(70 232)">
+      <rect width="216" height="136" rx="24" fill="#161C27" stroke="#303B4B"/>
+      <text x="28" y="42" fill="#8997AA" font-size="14" font-weight="750" letter-spacing="1.5">INPUT</text>
+      <text x="28" y="80" fill="#F3F6FA" font-size="24" font-weight="700">Codex task</text>
+      <text x="28" y="109" fill="#A8B3C2" font-size="15">intent + current state</text>
+    </g>
+
+    <g transform="translate(375 214)">
+      <rect width="260" height="172" rx="24" fill="#141B25" stroke="#354154"/>
+      <text x="28" y="42" fill="#8997AA" font-size="14" font-weight="750" letter-spacing="1.5">PROFILE</text>
+      <text x="28" y="79" fill="#F3F6FA" font-size="24" font-weight="700">Task signals</text>
+      <text x="28" y="112" fill="#A8B3C2" font-size="15">risk · ambiguity · volume</text>
+      <text x="28" y="139" fill="#A8B3C2" font-size="15">verification · parallel safety</text>
+    </g>
+
+    <g transform="translate(724 196)">
+      <rect width="280" height="208" rx="24" fill="#122026" stroke="#48D7E8" stroke-opacity="0.56"/>
+      <text x="28" y="42" fill="#76C8D2" font-size="14" font-weight="750" letter-spacing="1.5">DECIDE</text>
+      <text x="28" y="79" fill="#ECFDFF" font-size="24" font-weight="700">Route policy</text>
+      <text x="28" y="112" fill="#A9C3C7" font-size="15">profile preference</text>
+      <text x="28" y="139" fill="#A9C3C7" font-size="15">model + reasoning effort</text>
+      <text x="28" y="166" fill="#A9C3C7" font-size="15">orchestration + safety floor</text>
+    </g>
+
+    <g transform="translate(1092 178)">
+      <rect width="280" height="266" rx="24" fill="#151923" stroke="#3A4351"/>
+      <text x="28" y="42" fill="#8997AA" font-size="14" font-weight="750" letter-spacing="1.5">EXECUTE</text>
+      <text x="28" y="79" fill="#F3F6FA" font-size="24" font-weight="700">Bounded plan</text>
+      <g transform="translate(28 105)">
+        <circle cx="10" cy="10" r="8" fill="#A78BFA"/><text x="30" y="16" fill="#C9C1DD" font-size="16">Luna — mechanical</text>
+        <circle cx="10" cy="52" r="8" fill="#48D7E8"/><text x="30" y="58" fill="#B8CFD2" font-size="16">Terra — build + reason</text>
+        <circle cx="10" cy="94" r="8" fill="#FDBA4A"/><text x="30" y="100" fill="#D8C5A8" font-size="16">Sol — deep execution</text>
+      </g>
+      <text x="28" y="231" fill="#7F8C9E" font-size="14">depth 1 · max 3 agents</text>
+    </g>
+
+    <g transform="translate(1460 232)">
+      <rect width="90" height="136" rx="24" fill="#18211E" stroke="#65D7A2" stroke-opacity="0.65"/>
+      <path d="M27 66L41 80L66 50" fill="none" stroke="#65D7A2" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="45" y="110" text-anchor="middle" fill="#BCE9D3" font-size="13" font-weight="700">DONE</text>
+    </g>
+
+    <g transform="translate(1088 528)">
+      <rect width="288" height="132" rx="24" fill="#18211E" stroke="#65D7A2" stroke-opacity="0.6"/>
+      <text x="28" y="42" fill="#7FC6A3" font-size="14" font-weight="750" letter-spacing="1.5">VERIFY</text>
+      <text x="28" y="80" fill="#F0FCF6" font-size="24" font-weight="700">Evidence gate</text>
+      <text x="28" y="108" fill="#A9C8B8" font-size="15">tests · build · review · ledger</text>
+    </g>
+
+    <g transform="translate(375 488)">
+      <rect width="290" height="132" rx="24" fill="#221B12" stroke="#FDBA4A" stroke-opacity="0.56"/>
+      <text x="28" y="42" fill="#C9A96F" font-size="14" font-weight="750" letter-spacing="1.5">RETRY ONCE</text>
+      <text x="28" y="80" fill="#FFF7E9" font-size="24" font-weight="700">Route up</text>
+      <text x="28" y="108" fill="#C7B79E" font-size="15">only with capability evidence</text>
+    </g>
+
+    <g transform="translate(390 700)">
+      <rect width="630" height="72" rx="22" fill="#121721" stroke="#2B3442"/>
+      <circle cx="38" cy="36" r="9" fill="#48D7E8"/>
+      <text x="60" y="31" fill="#DDE4ED" font-size="16" font-weight="700">Fast / Standard stays independent</text>
+      <text x="60" y="52" fill="#8794A6" font-size="14">The router inherits speed; it never silently toggles it.</text>
+    </g>
+
+    <g transform="translate(724 460)">
+      <rect width="260" height="106" rx="22" fill="#171523" stroke="#A78BFA" stroke-opacity="0.5"/>
+      <text x="26" y="39" fill="#B6A8D9" font-size="14" font-weight="750" letter-spacing="1.2">PERSISTENT INPUT</text>
+      <text x="26" y="72" fill="#F1EDFA" font-size="18" font-weight="650">Saver · Balanced · Quality</text>
+    </g>
+    <path d="M854 460V410" fill="none" stroke="#7C6FA0" stroke-width="3" marker-end="url(#arrow)"/>
+  </g>
+</svg>

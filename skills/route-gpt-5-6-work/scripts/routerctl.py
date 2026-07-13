@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Transactional activation for GPT-5.6 Router custom-agent definitions.
 
-Plugin hooks are owned by Codex. This helper only manages the five namespaced
+Plugin hooks are owned by Codex. This helper only manages the namespaced
 custom-agent TOMLs that Codex currently discovers outside plugin bundles.
 """
 
@@ -65,8 +65,17 @@ AGENT_NAMES = (
     "gpt56_terra_worker.toml",
     "gpt56_terra_deep.toml",
     "gpt56_sol_owner.toml",
+    "gpt56_sol_deep.toml",
+    "gpt56_sol_xhigh.toml",
+)
+LEGACY_AGENT_NAMES = (
+    "gpt56_luna_worker.toml",
+    "gpt56_terra_worker.toml",
+    "gpt56_terra_deep.toml",
+    "gpt56_sol_owner.toml",
     "gpt56_sol_judge.toml",
 )
+SUPPORTED_AGENT_NAMES = frozenset((*AGENT_NAMES, *LEGACY_AGENT_NAMES))
 
 
 class RouterCtlError(RuntimeError):
@@ -350,7 +359,7 @@ def _validate_journal(transaction: Path, journal: dict[str, Any]) -> None:
         or journal.get("operation") not in {"activate", "deactivate", "repair"}
         or journal.get("state") not in {"PREPARED", "COMMITTING", "COMMITTED", "ROLLED_BACK"}
         or not isinstance(targets, list)
-        or any(not isinstance(name, str) or name not in AGENT_NAMES for name in targets)
+        or any(not isinstance(name, str) or name not in SUPPORTED_AGENT_NAMES for name in targets)
         or len(targets) != len(set(targets))
         or not isinstance(snapshots, dict)
         or set(snapshots) != set(targets)
@@ -523,7 +532,7 @@ def _load_active() -> dict[str, Any] | None:
         or not isinstance(value.get("transaction_id"), str)
         or not value["transaction_id"]
         or not isinstance(files, dict)
-        or set(files) != set(AGENT_NAMES)
+        or frozenset(files) not in {frozenset(AGENT_NAMES), frozenset(LEGACY_AGENT_NAMES)}
     ):
         raise RouterCtlError("active ownership manifest has an unsupported or corrupt schema")
     for name, record in files.items():
@@ -540,6 +549,9 @@ def _load_active() -> dict[str, Any] | None:
 def _activation_drift(active: dict[str, Any] | None) -> tuple[bool, list[str]]:
     if active is None:
         return False, []
+    if set(active["files"]) != set(AGENT_NAMES):
+        changed = sorted(set(active["files"]).symmetric_difference(AGENT_NAMES))
+        return True, changed
     bundled_drift = [
         name for name in AGENT_NAMES
         if _sha(AGENT_SOURCE / name) != active["files"][name]["installed_sha256"]
@@ -584,25 +596,32 @@ def activate(*, replace_conflicts: bool = False) -> dict[str, Any]:
                 raise RouterCtlError("locally modified managed agents: " + ", ".join(conflicts))
 
         sources = {name: AGENT_SOURCE / name for name in AGENT_NAMES}
+        active_names = tuple(active["files"]) if active else ()
+        added_names = [name for name in AGENT_NAMES if name not in active_names]
+        removed_names = [name for name in active_names if name not in AGENT_NAMES]
         for name in AGENT_NAMES:
             if _is_linklike(agents / name):
                 raise RouterCtlError(f"refusing linked agent target: {agents / name}")
-        if not active:
-            foreign = [name for name in AGENT_NAMES if (agents / name).exists() and _sha(agents / name) != _sha(sources[name])]
-            if foreign and not replace_conflicts:
-                raise RouterCtlError(
-                    "conflicting agent files; rerun with --replace-conflicts only after review: " + ", ".join(foreign)
-                )
+        foreign = [
+            name for name in (AGENT_NAMES if not active else added_names)
+            if (agents / name).exists() and _sha(agents / name) != _sha(sources[name])
+        ]
+        if foreign and not replace_conflicts:
+            raise RouterCtlError(
+                "conflicting agent files; rerun with --replace-conflicts only after review: " + ", ".join(foreign)
+            )
 
-        transaction, journal = _new_transaction("activate", agents, list(AGENT_NAMES))
+        targets = list(dict.fromkeys((*active_names, *AGENT_NAMES)))
+        transaction, journal = _new_transaction("activate", agents, targets)
         try:
             originals: dict[str, Any] = dict(active.get("files", {})) if active else {}
-            if not active:
-                for name in AGENT_NAMES:
-                    original = _snapshot(agents / name, ORIGINALS / name)
-                    originals[name] = {"original": original}
+            for name in (AGENT_NAMES if not active else added_names):
+                original = _snapshot(agents / name, ORIGINALS / name)
+                originals[name] = {"original": original}
             _set_journal(transaction, journal, "COMMITTING")
             _failpoint("committing")
+            for name in removed_names:
+                _restore_snapshot(agents / name, active["files"][name]["original"], ORIGINALS)
             installed: dict[str, Any] = {}
             for index, name in enumerate(AGENT_NAMES, 1):
                 source = sources[name]
@@ -621,6 +640,16 @@ def activate(*, replace_conflicts: bool = False) -> dict[str, Any]:
             _atomic_json(ACTIVE_PATH, manifest)
             _failpoint("active-manifest")
             _commit_transaction(transaction, journal)
+            try:
+                for name in removed_names:
+                    old_backup = ORIGINALS / name
+                    if old_backup.exists() and not _is_linklike(old_backup):
+                        old_backup.unlink()
+                if removed_names:
+                    _fsync_dir(ORIGINALS)
+            except OSError:
+                # Migration is already committed; stale private backups are safe.
+                pass
             return {"status": "active", "recovered": recovered, "files": list(AGENT_NAMES)}
         except Exception:
             _rollback(transaction, journal, agents)
@@ -685,6 +714,8 @@ def repair() -> dict[str, Any]:
         active = _load_active()
         if not active:
             return {"status": "inactive", "recovered": recovered, "repaired": []}
+        if set(active["files"]) != set(AGENT_NAMES):
+            raise RouterCtlError("activation uses a legacy agent set; run activate to migrate it")
         backup_conflicts = _validate_original_backups(active)
         if backup_conflicts:
             raise RouterCtlError("missing or corrupt original backups: " + ", ".join(backup_conflicts))

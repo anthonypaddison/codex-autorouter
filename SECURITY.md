@@ -10,7 +10,7 @@ If the private reporting button is absent or cannot be tested by the publisher, 
 
 - Router ledgers contain opaque task identifiers and routing metadata, never prompt contents or prompt-derived hashes.
 - Plugin hooks run only after Codex hook trust and can be disabled by managed policy.
-- The activator writes only five allowlisted custom-agent filenames under `CODEX_HOME/agents`.
+- The activator writes only six allowlisted custom-agent filenames under `CODEX_HOME/agents`.
 - Activation state is private, checksummed, journaled, and recovered before another lifecycle operation.
 - Symlink, junction, reparse-point, foreign-file, and locally modified-file conflicts are refused by default.
 - Standalone skill ownership uses an exact path/hash/mode inventory, same-filesystem staging, durable state outside the target, and fail-closed recovery that preserves post-crash edits.
