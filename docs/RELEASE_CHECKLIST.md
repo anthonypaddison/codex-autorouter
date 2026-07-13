@@ -6,7 +6,7 @@ Record candidate-specific proof in `RELEASE_EVIDENCE.md`; never infer a checked 
 
 - [x] Plugin manifest and skill validation pass.
 - [x] Router and activator tests pass on Python 3.10, 3.11, 3.12, 3.13, and the current runtime.
-- [x] Tests pass on hosted macOS, Ubuntu, and native Windows across Python 3.10–3.14 ([run 29227761286](https://github.com/vibeforge1111/gpt-5-6-router/actions/runs/29227761286)).
+- [x] All 155 tests pass on hosted macOS, Ubuntu, and native Windows across Python 3.10–3.14 ([run 29229808684](https://github.com/vibeforge1111/gpt-5-6-router/actions/runs/29229808684)).
 - [x] Clean install, identical reinstall, conflict refusal, reviewed replacement, upgrade, repair, deactivation, and modified-file preservation pass.
 - [x] Exception and hard-crash failure injection at every declared failpoint restore the exact pre-operation agent tree.
 - [x] Concurrent lifecycle commands serialize without lost ownership state.

@@ -1,15 +1,15 @@
 # Release evidence
 
-Current installed candidate: `0.1.0+codex.20260713064025`
+Current installed candidate: `0.1.0+codex.20260713064550`
 Recorded: 2026-07-13
 
 ## Proven on the candidate source snapshot
 
 - Release, plugin, skill, and source-integrity validators pass.
-- 155 routing, profile-policy, activation, checker, standalone, ownership, concurrency, and crash-recovery tests pass locally on macOS with Python 3.14; the hosted cross-version matrix is pending for this snapshot.
+- 155 routing, profile-policy, activation, checker, standalone, ownership, concurrency, and crash-recovery tests pass on macOS, Ubuntu, and Windows with Python 3.10–3.14.
 - The deterministic routing fuzz suite passes 5,000 cases on every tested Python runtime.
-- GitHub Actions run [29227761286](https://github.com/vibeforge1111/gpt-5-6-router/actions/runs/29227761286) passes all 15 combinations of `ubuntu-latest`, `macos-latest`, and `windows-latest` with Python 3.10–3.14 on source snapshot `5ea0dfce31b0f63260f69a4a01ab1e3f986b0cbe`.
-- The prior hosted snapshot ran all 142 then-current tests in every job; this candidate adds 13 profile-policy and persistence tests and awaits the same 15-job matrix.
+- GitHub Actions run [29229808684](https://github.com/vibeforge1111/gpt-5-6-router/actions/runs/29229808684) passes all 15 combinations of `ubuntu-latest`, `macos-latest`, and `windows-latest` with Python 3.10–3.14 on source snapshot `e6611372c62fc90fcdfa481b2e973cea603d55e2`.
+- Every hosted job validates the release, runs all 155 tests, runs 5,000 deterministic fuzz cases, and revalidates source integrity after execution.
 - Hosted Windows tests exercise native file locking, atomic replacement, rollback, reparse-point refusal, hardlink handling, concurrency, and crash recovery; the Windows Desktop and CLI product surfaces remain separate real-host gates.
 - Fifty consecutive concurrent first-install stress rounds pass; a deterministic delayed-marker writer proves contenders wait for an exclusive standalone state claim to finish.
 - Every declared activation and standalone transaction boundary has rollback-or-commit coverage, including preservation of post-crash edits and terminal purge recovery.
@@ -21,7 +21,7 @@ Recorded: 2026-07-13
 
 - The installed cache is byte-for-byte identical to the candidate source.
 - App-server discovered the exact cached skill plus five enabled, trusted, error-free plugin hooks; all five local custom-agent files were active and current.
-- Installed-cache hook smokes proved Token Saver selected one Terra Medium worker, Max Quality selected one Sol Medium owner for the same ambiguous diagnosis, both preserved Fast, and the persistent preference was restored to Balanced afterward.
+- Installed-cache hook smokes on precursor cache `0.1.0+codex.20260713064025` proved Token Saver selected one Terra Medium worker, Max Quality selected one Sol Medium owner for the same ambiguous diagnosis, both preserved Fast, and the persistent preference was restored to Balanced afterward; the final cache changes only release metadata.
 - The preference survived immutable cache replacement, accepted every valid profile through the installed CLI, and remained independent of agent activation state.
 - A live macOS CLI security-review prompt selected `gpt56_sol_judge` with `agent_type: "gpt56_sol_judge"`, `fork_turns: "none"`, and no model, effort, or service-tier override.
 - The child lifecycle attested model `gpt-5.6-sol`, configured effort `high`, and inherited Fast service tier.
