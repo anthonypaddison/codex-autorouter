@@ -6,7 +6,7 @@ Record candidate-specific proof in `RELEASE_EVIDENCE.md`; never infer a checked 
 
 - [x] Plugin manifest and skill validation pass.
 - [x] Router and activator tests pass on Python 3.10, 3.11, 3.12, 3.13, and the current runtime.
-- [ ] The current six-role candidate passes the hosted macOS, Ubuntu, and native Windows Python 3.10–3.14 matrix. The prior private-beta matrix passed [run 29229808684](https://github.com/vibeforge1111/Codex-Autorouter/actions/runs/29229808684).
+- [x] The current six-role routing implementation passes the hosted macOS, Ubuntu, and native Windows Python 3.10–3.14 matrix in [run 29231940583](https://github.com/vibeforge1111/Codex-Autorouter/actions/runs/29231940583); the final evidence-only cache build repeats the full gate locally.
 - [x] Clean install, identical reinstall, conflict refusal, reviewed replacement, upgrade, repair, deactivation, and modified-file preservation pass.
 - [x] Exception and hard-crash failure injection at every declared failpoint restore the exact pre-operation agent tree.
 - [x] Concurrent lifecycle commands serialize without lost ownership state.

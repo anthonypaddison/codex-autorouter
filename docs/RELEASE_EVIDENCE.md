@@ -1,15 +1,15 @@
 # Release evidence
 
-Current source candidate: `0.1.0+codex.20260713072328`
+Current source candidate: `0.1.0+codex.20260713112629`
 Recorded: 2026-07-13
 
 ## Proven on the candidate source snapshot
 
 - Release, plugin, skill, and source-integrity validators pass.
-- 158 routing, profile-policy, activation, checker, standalone, ownership, concurrency, and crash-recovery tests pass locally on macOS with Python 3.14; the hosted cross-platform matrix is pending for this exact candidate.
+- 158 routing, profile-policy, activation, checker, standalone, ownership, concurrency, and crash-recovery tests pass locally on macOS with Python 3.14.
 - The deterministic routing fuzz suite passes 5,000 cases on every tested Python runtime.
-- GitHub Actions run [29229808684](https://github.com/vibeforge1111/Codex-Autorouter/actions/runs/29229808684) passes all 15 combinations of `ubuntu-latest`, `macos-latest`, and `windows-latest` with Python 3.10–3.14 on source snapshot `e6611372c62fc90fcdfa481b2e973cea603d55e2`.
-- Every prior hosted job validated the release, ran all 155 private-beta tests, ran 5,000 deterministic fuzz cases, and revalidated source integrity after execution. The exact six-role candidate must repeat this matrix.
+- GitHub Actions run [29231940583](https://github.com/vibeforge1111/Codex-Autorouter/actions/runs/29231940583) passes all 15 combinations of `ubuntu-latest`, `macos-latest`, and `windows-latest` with Python 3.10–3.14 on the six-role routing implementation at source snapshot `ccf0b39c92cccebd82264c08fbf711c52b44aaa1`. The current candidate changes only its cache version and this recorded evidence; its full local gate also passes.
+- Every hosted job validated the release, ran all 158 tests, ran 5,000 deterministic fuzz cases, and revalidated source integrity after execution.
 - Hosted Windows tests exercise native file locking, atomic replacement, rollback, reparse-point refusal, hardlink handling, concurrency, and crash recovery; the Windows Desktop and CLI product surfaces remain separate real-host gates.
 - Fifty consecutive concurrent first-install stress rounds pass; a deterministic delayed-marker writer proves contenders wait for an exclusive standalone state claim to finish.
 - Every declared activation and standalone transaction boundary has rollback-or-commit coverage, including preservation of post-crash edits and terminal purge recovery.
