@@ -25,7 +25,7 @@ Complete every row with the released archive or marketplace snapshot, not the so
 | OS | Surface | Install/cache relocation | Hook trust | Route smoke | Activate/deactivate | Result |
 |---|---|---:|---:|---:|---:|---|
 | macOS | Desktop | required | required | required | required | pending |
-| macOS | CLI | pass | pass | pass | pass | accepted; final replay on `0.1.0+codex.20260713060419` |
+| macOS | CLI | pass | pass | pass | pass | accepted; final replay on `0.1.0+codex.20260713061434` |
 | Linux | CLI | required | required | required | required | pending |
 | Windows | Desktop | required | required | required | required | pending |
 | Windows | CLI | required | required | required | required | pending |

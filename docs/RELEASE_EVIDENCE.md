@@ -1,6 +1,6 @@
 # Release evidence
 
-Current installed candidate: `0.1.0+codex.20260713060419`
+Current installed candidate: `0.1.0+codex.20260713061434`
 Recorded: 2026-07-13
 
 ## Proven on the candidate source snapshot
