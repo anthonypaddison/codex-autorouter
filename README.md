@@ -14,6 +14,7 @@ The installed skill is namespaced as `$gpt-5-6-router:route-gpt-5-6-work`.
 - Uses Sol for architecture, migrations, demanding synthesis, consequential changes, and critical review.
 - Understands product strategy, requirements, UX, frontend, backend, data, mobile, AI, integrations, payments, QA, analytics, growth, accessibility, localization, DevOps, reliability, security, privacy, performance, and maintenance.
 - Preserves the configured speed tier without silently enabling Fast.
+- Adds three persistent cost/quality profiles: Token Saver, Balanced, and Max Quality.
 - Requires routed agents, coverage, configuration intent, and post-mutation verification before completion.
 
 ## Installation
@@ -29,6 +30,22 @@ python3 scripts/check_hooks.py
 ```
 
 Record the `Installed plugin root` printed by `codex plugin add`, then run those commands there; `codex plugin list` verifies the installed version but may display the marketplace source path instead of the cache. Python 3.10 or newer is required. See [Installation and lifecycle](docs/INSTALL.md) for full marketplace, trust, upgrade, repair, and uninstall steps.
+
+## Routing profiles
+
+Balanced is the default and preserves the router's normal cost/quality policy. Choose a persistent preference with:
+
+```bash
+python3 skills/route-gpt-5-6-work/scripts/routerctl.py profile token-saver
+python3 skills/route-gpt-5-6-work/scripts/routerctl.py profile balanced
+python3 skills/route-gpt-5-6-work/scripts/routerctl.py profile max-quality
+```
+
+- **Token Saver** limits routing to one worker, skips optional councils and fan-out, and steps normal-risk work down one cost tier. Security, payments, privacy, production, destructive-action, and other safety floors never step down.
+- **Balanced** uses the standard least-expensive-verified route, including bounded parallelism or a routing council only when earned.
+- **Max Quality** steps nontrivial work up one capability tier and adds independent review to consequential owner mutations. Trivial work stays direct, and orchestration remains depth 1 with at most three agents.
+
+Run `routerctl.py profile` to inspect the current preference. The setting applies to the next new task, survives plugin upgrades, and never changes the separate Codex Fast/Standard setting.
 
 ## Honest operating modes
 

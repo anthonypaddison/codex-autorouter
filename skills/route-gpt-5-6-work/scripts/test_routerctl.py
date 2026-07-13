@@ -61,6 +61,58 @@ class RouterCtlTests(unittest.TestCase):
         for name in routerctl.AGENT_NAMES:
             self.assertRegex(Path(name).stem, r"^[a-z0-9_]+$")
 
+    def test_profile_defaults_to_balanced_and_persists_all_three_modes(self) -> None:
+        initial = self.payload(self.run_ctl("profile"))
+        self.assertEqual("balanced", initial["profile"])
+        self.assertEqual("default", initial["source"])
+        for profile, label in (
+            ("token-saver", "Token Saver"),
+            ("balanced", "Balanced"),
+            ("max-quality", "Max Quality"),
+        ):
+            with self.subTest(profile=profile):
+                configured = self.payload(self.run_ctl("profile", profile))
+                self.assertEqual(profile, configured["profile"])
+                self.assertEqual(label, configured["label"])
+                observed = self.payload(self.run_ctl("profile"))
+                self.assertEqual(profile, observed["profile"])
+                self.assertEqual("configured", observed["source"])
+        payload = json.loads((self.home / "gpt-5-6-router" / "routing-profile.json").read_text())
+        self.assertEqual({"schema_version": 1, "profile": "max-quality"}, payload)
+
+    def test_status_reports_routing_profile(self) -> None:
+        self.assertEqual(0, self.run_ctl("profile", "token-saver").returncode)
+        status = self.payload(self.run_ctl("status"))
+        self.assertEqual("token-saver", status["routing_profile"])
+        self.assertEqual("Token Saver", status["routing_profile_label"])
+        self.assertTrue(status["routing_profile_valid"])
+
+    def test_invalid_profile_value_is_rejected_by_cli(self) -> None:
+        result = self.run_ctl("profile", "unlimited")
+        self.assertEqual(2, result.returncode)
+        self.assertFalse((self.home / "gpt-5-6-router" / "routing-profile.json").exists())
+
+    def test_malformed_profile_fails_safe_in_status(self) -> None:
+        target = self.home / "gpt-5-6-router" / "routing-profile.json"
+        target.parent.mkdir(parents=True)
+        target.write_text('{"schema_version":1,"profile":"unknown"}', encoding="utf-8")
+        observed = self.payload(self.run_ctl("profile"))
+        self.assertEqual("balanced", observed["profile"])
+        self.assertEqual("invalid_default", observed["source"])
+        self.assertFalse(observed["valid"])
+
+    @unittest.skipIf(not hasattr(os, "symlink"), "symlinks unavailable")
+    def test_profile_write_refuses_linked_target(self) -> None:
+        root = self.home / "gpt-5-6-router"
+        root.mkdir(parents=True)
+        external = self.root / "external-profile.json"
+        external.write_text('{"schema_version":1,"profile":"balanced"}', encoding="utf-8")
+        (root / "routing-profile.json").symlink_to(external)
+        result = self.run_ctl("profile", "max-quality")
+        self.assertEqual(2, result.returncode)
+        self.assertIn("refusing", result.stdout)
+        self.assertEqual("balanced", json.loads(external.read_text())["profile"])
+
     def test_status_activate_repair_deactivate_lifecycle(self) -> None:
         self.home.mkdir(parents=True)
         hooks = self.home / "hooks.json"

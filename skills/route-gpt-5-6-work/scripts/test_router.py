@@ -123,6 +123,7 @@ class RouterTests(unittest.TestCase):
         self.config_temp = tempfile.TemporaryDirectory()
         router_hook.STATE_ROOT = Path(self.temp.name).resolve()
         router_hook.CONFIG_PATH = Path(self.config_temp.name).resolve() / "config.toml"
+        router_hook.PROFILE_PATH = Path(self.config_temp.name).resolve() / "gpt-5-6-router" / "routing-profile.json"
         router_hook.CONFIG_PATH.write_text("", encoding="utf-8")
         source_agents = Path(router_hook.__file__).resolve().parents[1] / "assets" / "agents"
         shutil.copytree(source_agents, router_hook.CONFIG_PATH.parent / "agents")
@@ -182,6 +183,112 @@ class RouterTests(unittest.TestCase):
             with self.subTest(prompt=prompt):
                 actual = router_hook.classify_prompt(prompt, "gpt-5.6-terra")
                 self.assertEqual(expected, actual["route"])
+
+    def test_three_profiles_shift_normal_work_monotonically(self) -> None:
+        prompt = "Diagnose why this flaky test fails intermittently."
+        expected = {
+            "token-saver": ("gpt56_terra_worker", "single_delegate"),
+            "balanced": ("gpt56_terra_deep", "single_delegate"),
+            "max-quality": ("gpt56_sol_owner", "single_delegate"),
+        }
+        for profile, (route, mode) in expected.items():
+            with self.subTest(profile=profile):
+                decision = router_hook.classify_prompt(prompt, "", "medium", profile)
+                self.assertEqual(route, decision["route"])
+                self.assertEqual(mode, decision["orchestration"]["mode"])
+                self.assertEqual(profile, decision["routing_profile"])
+
+    def test_token_saver_removes_optional_fanout_and_councils(self) -> None:
+        batch = router_hook.classify_prompt(
+            "Convert all 500 images to WebP and compare checksums.", "", "medium", "token-saver"
+        )
+        uncertain = router_hook.classify_prompt(
+            "I am not sure which model should build this broad new product.", "", "medium", "token-saver"
+        )
+        for decision in (batch, uncertain):
+            self.assertIn(decision["orchestration"]["mode"], {"direct", "single_delegate"})
+            self.assertEqual(1, decision["max_workers"])
+
+    def test_token_saver_never_weakens_safety_floors(self) -> None:
+        prompts = (
+            "Review OAuth token handling for auth bypasses and leaked credentials.",
+            "Implement subscription upgrades with proration idempotency and reconciliation.",
+            "Delete the production database.",
+        )
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                balanced = router_hook.classify_prompt(prompt, "", "medium", "balanced")
+                saver = router_hook.classify_prompt(prompt, "", "medium", "token-saver")
+                self.assertEqual(balanced["route"], saver["route"])
+                self.assertEqual(balanced["orchestration"]["mode"], saver["orchestration"]["mode"])
+
+    def test_max_quality_keeps_trivia_direct_and_reviews_owner_mutations(self) -> None:
+        trivial = router_hook.classify_prompt("Fix a typo in README.", "", "medium", "max-quality")
+        owner = router_hook.classify_prompt(
+            "Design and implement a cross-service event migration.", "", "medium", "max-quality"
+        )
+        self.assertEqual("current", trivial["route"])
+        self.assertEqual("direct", trivial["orchestration"]["mode"])
+        self.assertEqual("gpt56_sol_owner", owner["route"])
+        self.assertEqual("owner_then_judge", owner["orchestration"]["mode"])
+        self.assertIn("independent review", owner["verification"])
+
+    def test_max_quality_upgrades_the_capability_target_not_the_optimized_current_route(self) -> None:
+        prompt = "Add pagination to this endpoint and include targeted tests for the changed behavior."
+        balanced = router_hook.classify_prompt(prompt, "gpt-5.6-terra", "medium", "balanced")
+        quality = router_hook.classify_prompt(prompt, "gpt-5.6-terra", "medium", "max-quality")
+        self.assertEqual("current", balanced["route"])
+        self.assertEqual("gpt56_terra_worker", balanced["capability_target"])
+        self.assertEqual("gpt56_terra_deep", quality["route"])
+
+    def test_hook_reads_profile_and_keeps_fast_independent(self) -> None:
+        router_hook.PROFILE_PATH.parent.mkdir(parents=True)
+        router_hook.PROFILE_PATH.write_text(
+            '{"schema_version":1,"profile":"token-saver"}', encoding="utf-8"
+        )
+        result = router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "profile-fast", "turn_id": "t1",
+            "model": "gpt-5.6-terra", "model_reasoning_effort": "medium",
+            "service_tier": "fast", "prompt": "Diagnose why this flaky test fails intermittently.",
+        })
+        context = result["hookSpecificOutput"]["additionalContext"]
+        ledger = json.loads((Path(self.temp.name) / "profile-fast--t1.json").read_text())
+        decision = ledger["decision"]
+        self.assertEqual("token-saver", decision["routing_profile"])
+        self.assertEqual("configured", decision["routing_profile_source"])
+        self.assertTrue(decision["fast_enabled"])
+        self.assertIn("Fast", decision["visible_route"])
+        self.assertIn('"routing_profile":"token-saver"', context)
+
+    def test_invalid_profile_fails_safe_to_balanced(self) -> None:
+        router_hook.PROFILE_PATH.parent.mkdir(parents=True)
+        router_hook.PROFILE_PATH.write_text('{"profile":"surprise"}', encoding="utf-8")
+        result = router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "invalid-profile", "turn_id": "t1",
+            "model": "", "prompt": "Diagnose why this flaky test fails intermittently.",
+        })
+        self.assertIn("hookSpecificOutput", result)
+        decision = json.loads((Path(self.temp.name) / "invalid-profile--t1.json").read_text())["decision"]
+        self.assertEqual("balanced", decision["routing_profile"])
+        self.assertEqual("invalid_default", decision["routing_profile_source"])
+        self.assertEqual("gpt56_terra_deep", decision["route"])
+
+    def test_profile_change_applies_to_next_new_task_not_continuation(self) -> None:
+        router_hook.PROFILE_PATH.parent.mkdir(parents=True)
+        router_hook.PROFILE_PATH.write_text(
+            '{"schema_version":1,"profile":"token-saver"}', encoding="utf-8"
+        )
+        base = {"hook_event_name": "UserPromptSubmit", "session_id": "profile-continuation", "model": ""}
+        router_hook.handle({**base, "turn_id": "t1", "prompt": "Diagnose why this flaky test fails intermittently."})
+        router_hook.PROFILE_PATH.write_text(
+            '{"schema_version":1,"profile":"max-quality"}', encoding="utf-8"
+        )
+        router_hook.handle({**base, "turn_id": "t2", "prompt": "continue"})
+        router_hook.handle({**base, "turn_id": "t3", "prompt": "Explain this architecture and its trade-offs in detail."})
+        continued = json.loads((Path(self.temp.name) / "profile-continuation--t2.json").read_text())["decision"]
+        fresh = json.loads((Path(self.temp.name) / "profile-continuation--t3.json").read_text())["decision"]
+        self.assertEqual("token-saver", continued["routing_profile"])
+        self.assertEqual("max-quality", fresh["routing_profile"])
 
     def test_adversarial_task_profiles_and_plans(self) -> None:
         for prompt, route, task_type, mode in ADVERSARIAL_CASES:

@@ -16,6 +16,10 @@ Run `routerctl.py status` and inspect these fields:
 
 These fields reflect local files only, not the final merged value after administrator profiles, project settings, or command-line overrides.
 
+## The wrong cost/quality profile is active
+
+Run `routerctl.py profile`. A missing setting safely reports Balanced; an invalid or linked file reports `invalid_default` and also falls back to Balanced. Re-save a valid value with `routerctl.py profile token-saver`, `balanced`, or `max-quality`. The change begins on the next new task, not an in-flight continuation, and does not change Fast/Standard.
+
 Run `python3 scripts/check_hooks.py` from the plugin root for an authoritative app-server trust probe.
 
 ## Status says `MANAGED_BLOCKED`

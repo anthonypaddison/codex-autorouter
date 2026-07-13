@@ -50,6 +50,14 @@ ACTIVE_PATH = ACTIVATION_ROOT / "active.json"
 TRANSACTIONS = ACTIVATION_ROOT / "transactions"
 ORIGINALS = ACTIVATION_ROOT / "originals"
 LOCK_PATH = ACTIVATION_ROOT / "activation.lock"
+PROFILE_ROOT = CODEX_HOME / "gpt-5-6-router"
+PROFILE_PATH = PROFILE_ROOT / "routing-profile.json"
+PROFILE_SCHEMA = 1
+ROUTING_PROFILES = {
+    "token-saver": "Token Saver",
+    "balanced": "Balanced",
+    "max-quality": "Max Quality",
+}
 SCHEMA_VERSION = 1
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 AGENT_NAMES = (
@@ -199,6 +207,80 @@ def _read_json(path: Path, *, required: bool = False) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         raise RouterCtlError(f"state file must contain an object: {path}")
     return value
+
+
+def _validate_profile_root(*, create: bool) -> None:
+    _require_canonical_path(CODEX_HOME)
+    _require_canonical_path(PROFILE_ROOT)
+    for root in (CODEX_HOME, PROFILE_ROOT):
+        if _is_linklike(root):
+            raise RouterCtlError(f"refusing symlink, junction, or reparse profile root: {root}")
+    if CODEX_HOME.exists() and not CODEX_HOME.is_dir():
+        raise RouterCtlError(f"CODEX_HOME is not a directory: {CODEX_HOME}")
+    if PROFILE_ROOT.exists() and not PROFILE_ROOT.is_dir():
+        raise RouterCtlError(f"profile root is not a directory: {PROFILE_ROOT}")
+    if create:
+        _ensure_private_dir(CODEX_HOME)
+        _ensure_private_dir(PROFILE_ROOT, tighten_existing=True)
+
+
+def _profile_status() -> dict[str, Any]:
+    try:
+        _validate_profile_root(create=False)
+        if not PROFILE_PATH.exists() and not _is_linklike(PROFILE_PATH):
+            return {
+                "profile": "balanced",
+                "label": ROUTING_PROFILES["balanced"],
+                "source": "default",
+                "valid": True,
+            }
+        if _is_linklike(PROFILE_PATH) or not PROFILE_PATH.is_file():
+            raise RouterCtlError(f"invalid profile file: {PROFILE_PATH}")
+        info = PROFILE_PATH.stat()
+        if info.st_size > 4096 or int(getattr(info, "st_nlink", 1)) != 1:
+            raise RouterCtlError(f"invalid profile file: {PROFILE_PATH}")
+        value = json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"schema_version", "profile"}
+            or value.get("schema_version") != PROFILE_SCHEMA
+            or value.get("profile") not in ROUTING_PROFILES
+        ):
+            raise RouterCtlError(f"invalid routing profile payload: {PROFILE_PATH}")
+        selected = str(value["profile"])
+        return {
+            "profile": selected,
+            "label": ROUTING_PROFILES[selected],
+            "source": "configured",
+            "valid": True,
+        }
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, RouterCtlError) as exc:
+        return {
+            "profile": "balanced",
+            "label": ROUTING_PROFILES["balanced"],
+            "source": "invalid_default",
+            "valid": False,
+            "error": str(exc),
+        }
+
+
+def set_profile(profile: str) -> dict[str, Any]:
+    if profile not in ROUTING_PROFILES:
+        raise RouterCtlError("unknown routing profile")
+    _validate_profile_root(create=True)
+    if PROFILE_PATH.exists() or _is_linklike(PROFILE_PATH):
+        if _is_linklike(PROFILE_PATH) or not PROFILE_PATH.is_file():
+            raise RouterCtlError(f"refusing invalid profile file: {PROFILE_PATH}")
+        if int(getattr(PROFILE_PATH.stat(), "st_nlink", 1)) != 1:
+            raise RouterCtlError(f"refusing hard-linked profile file: {PROFILE_PATH}")
+    _atomic_json(PROFILE_PATH, {"schema_version": PROFILE_SCHEMA, "profile": profile})
+    return {
+        "status": "configured",
+        "profile": profile,
+        "label": ROUTING_PROFILES[profile],
+        "applies": "next_new_task",
+        "fast_setting": "unchanged",
+    }
 
 
 def _plugin_version() -> str:
@@ -670,6 +752,7 @@ def status() -> dict[str, Any]:
         conflicts, original_backup_conflicts, update_required, agents_disabled, depth_zero,
     ))
     mode = "MANAGED_BLOCKED" if managed_blocked else "ADVISORY"
+    profile = _profile_status()
     return {
         "mode": mode,
         "runtime_surface": surface,
@@ -689,6 +772,10 @@ def status() -> dict[str, Any]:
         "fast_state": "REPORTED_CONFIG_ONLY",
         "recovered_transactions": recovered,
         "plugin_version": _plugin_version(),
+        "routing_profile": profile["profile"],
+        "routing_profile_label": profile["label"],
+        "routing_profile_source": profile["source"],
+        "routing_profile_valid": profile["valid"],
     }
 
 
@@ -704,6 +791,8 @@ def main() -> int:
     deactivate_parser.add_argument("--keep-modified", action="store_true")
     subparsers.add_parser("repair")
     subparsers.add_parser("status")
+    profile_parser = subparsers.add_parser("profile")
+    profile_parser.add_argument("value", nargs="?", choices=tuple(ROUTING_PROFILES))
     args = parser.parse_args()
     try:
         if args.command == "activate":
@@ -712,8 +801,12 @@ def main() -> int:
             result = deactivate(keep_modified=args.keep_modified)
         elif args.command == "repair":
             result = repair()
-        else:
+        elif args.command == "status":
             result = status()
+        elif args.value:
+            result = set_profile(args.value)
+        else:
+            result = _profile_status()
     except (OSError, RouterCtlError, ValueError) as exc:
         print(json.dumps({"status": "error", "error": str(exc)}, sort_keys=True))
         return 2

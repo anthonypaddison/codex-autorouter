@@ -2,6 +2,8 @@
 
 ## 0.1.0 - Private beta
 
+- Added persistent Token Saver, Balanced, and Max Quality routing profiles with safety floors, bounded quality escalation, CLI/status visibility, and upgrade-stable storage independent of Fast/Standard.
+
 - Added deterministic task, risk, ambiguity, verification, volume, and product-area profiling.
 - Added factual Sol/Terra/Luna model-effort-speed route labels.
 - Added bounded single-delegate, parallel-leaf, evidence-owner, owner-judge, and uncertainty-council plans.

@@ -1,6 +1,6 @@
 {
   "name": "gpt-5-6-router",
-  "version": "0.1.0+codex.20260713061434",
+  "version": "0.1.0+codex.20260713064025",
   "description": "Automatically route Codex work across GPT-5.6 Sol, Terra, and Luna with cost-aware reasoning and verification.",
   "author": {
     "name": "Alchemist"
