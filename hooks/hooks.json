@@ -1,0 +1,67 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/skills/route-gpt-5-6-work/scripts/router_hook.py\" --route-gpt-5-6-work",
+            "commandWindows": "py -3 \"%PLUGIN_ROOT%\\skills\\route-gpt-5-6-work\\scripts\\router_hook.py\" --route-gpt-5-6-work",
+            "timeout": 10,
+            "statusMessage": "Choosing the most cost-effective GPT-5.6 route"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/skills/route-gpt-5-6-work/scripts/router_hook.py\" --route-gpt-5-6-work",
+            "commandWindows": "py -3 \"%PLUGIN_ROOT%\\skills\\route-gpt-5-6-work\\scripts\\router_hook.py\" --route-gpt-5-6-work",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|apply_patch|Edit|Write|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/skills/route-gpt-5-6-work/scripts/router_hook.py\" --route-gpt-5-6-work",
+            "commandWindows": "py -3 \"%PLUGIN_ROOT%\\skills\\route-gpt-5-6-work\\scripts\\router_hook.py\" --route-gpt-5-6-work",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/skills/route-gpt-5-6-work/scripts/router_hook.py\" --route-gpt-5-6-work",
+            "commandWindows": "py -3 \"%PLUGIN_ROOT%\\skills\\route-gpt-5-6-work\\scripts\\router_hook.py\" --route-gpt-5-6-work",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/skills/route-gpt-5-6-work/scripts/router_hook.py\" --route-gpt-5-6-work",
+            "commandWindows": "py -3 \"%PLUGIN_ROOT%\\skills\\route-gpt-5-6-work\\scripts\\router_hook.py\" --route-gpt-5-6-work",
+            "timeout": 10,
+            "statusMessage": "Checking routing and verification evidence"
+          }
+        ]
+      }
+    ]
+  }
+}

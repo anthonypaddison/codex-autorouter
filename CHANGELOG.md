@@ -1,0 +1,19 @@
+# Changelog
+
+## 0.1.0 - Private beta
+
+- Added deterministic task, risk, ambiguity, verification, volume, and product-area profiling.
+- Added factual Sol/Terra/Luna model-effort-speed route labels.
+- Added bounded single-delegate, parallel-leaf, evidence-owner, owner-judge, and uncertainty-council plans.
+- Added native plugin hooks using `${PLUGIN_ROOT}` and persistent state under `${PLUGIN_DATA}`.
+- Added explicit `ADVISORY` and `MANAGED_BLOCKED` local modes, with full readiness reserved for exact app-server and hook-trust attestation.
+- Added transactional custom-agent activation, recovery, repair, conflict-safe upgrade behavior, and deactivation.
+- Added adversarial routing, lifecycle, concurrency, crash-recovery, symlink, managed-policy, and portability tests.
+- Clarified that live reasoning effort and UI Fast state are not currently hook-attested.
+- Added a transactional, conflict-refusing standalone advisory lifecycle for IDE and other non-plugin surfaces, including durable controllers and crash-safe update/uninstall recovery.
+- Added authoritative app-server checks for effective configuration and managed requirements.
+- Moved hook ledgers to nonce-bound `router-state-v2`; legacy private-beta state is never claimed or deleted automatically.
+- Required native custom-agent spawns to carry the exact `agent_type` plus `fork_turns: "none"`, with a literal four-key call contract.
+- Accepted substantive multiline Evidence, Verification, and Uncertainty sections without weakening empty-section rejection.
+- Added five-run native delegation stability acceptance and a final exact-installed-cache replay.
+- Added cross-platform CI bytecode hygiene and a clean-room release-archive lifecycle gate.

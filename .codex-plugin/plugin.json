@@ -1,0 +1,39 @@
+{
+  "name": "gpt-5-6-router",
+  "version": "0.1.0+codex.20260713015500",
+  "description": "Automatically route Codex work across GPT-5.6 Sol, Terra, and Luna with cost-aware reasoning and verification.",
+  "author": {
+    "name": "Alchemist"
+  },
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "gpt-5.6",
+    "model-routing",
+    "subagents",
+    "orchestration",
+    "verification"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "GPT-5.6 Router",
+    "shortDescription": "Route Codex work for precision, speed, and cost",
+    "longDescription": "Profiles each task, chooses an appropriate GPT-5.6 model and reasoning effort, orchestrates bounded subagents when useful, preserves the reported Fast setting, and requires proportionate verification before completion.",
+    "developerName": "Alchemist",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "defaultPrompt": [
+      "Automatically choose the best GPT-5.6 route for this task.",
+      "Show me the model, effort, speed, and verification plan.",
+      "Route this product-building task for maximum cost efficiency."
+    ],
+    "brandColor": "#F59E0B",
+    "composerIcon": "./assets/icon.svg",
+    "logo": "./assets/icon.svg",
+    "logoDark": "./assets/icon.svg",
+    "screenshots": []
+  }
+}

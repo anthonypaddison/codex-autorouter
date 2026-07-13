@@ -1,0 +1,725 @@
+#!/usr/bin/env python3
+"""Transactional activation for GPT-5.6 Router custom-agent definitions.
+
+Plugin hooks are owned by Codex. This helper only manages the five namespaced
+custom-agent TOMLs that Codex currently discovers outside plugin bundles.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import stat
+import sys
+import tempfile
+import time
+import uuid
+from contextlib import contextmanager
+from pathlib import Path
+from typing import Any
+
+try:
+    import fcntl
+except ImportError:  # Windows
+    fcntl = None  # type: ignore[assignment]
+
+try:
+    import msvcrt
+except ImportError:  # POSIX
+    msvcrt = None  # type: ignore[assignment]
+
+
+SCRIPT = Path(__file__).resolve()
+SKILL_ROOT = SCRIPT.parents[1]
+PLUGIN_ROOT = SCRIPT.parents[3]
+AGENT_SOURCE = SKILL_ROOT / "assets" / "agents"
+PLUGIN_MANIFEST = PLUGIN_ROOT / ".codex-plugin" / "plugin.json"
+STANDALONE_MARKER = SKILL_ROOT / ".gpt56-standalone.json"
+CODEX_HOME = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser().absolute()
+_plugin_data = os.environ.get("PLUGIN_DATA") or os.environ.get("CLAUDE_PLUGIN_DATA")
+DATA_ROOT = Path(
+    os.environ.get("GPT56_ROUTER_DATA")
+    or (_plugin_data if _plugin_data else CODEX_HOME / "plugin-data" / "gpt-5-6-router")
+).expanduser().absolute()
+ACTIVATION_ROOT = DATA_ROOT / "activation"
+ACTIVE_PATH = ACTIVATION_ROOT / "active.json"
+TRANSACTIONS = ACTIVATION_ROOT / "transactions"
+ORIGINALS = ACTIVATION_ROOT / "originals"
+LOCK_PATH = ACTIVATION_ROOT / "activation.lock"
+SCHEMA_VERSION = 1
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+AGENT_NAMES = (
+    "gpt56_luna_worker.toml",
+    "gpt56_terra_worker.toml",
+    "gpt56_terra_deep.toml",
+    "gpt56_sol_owner.toml",
+    "gpt56_sol_judge.toml",
+)
+
+
+class RouterCtlError(RuntimeError):
+    pass
+
+
+def _sha(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _is_linklike(path: Path) -> bool:
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+    if stat.S_ISLNK(info.st_mode):
+        return True
+    attributes = int(getattr(info, "st_file_attributes", 0))
+    reparse = int(getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+    return bool(attributes & reparse)
+
+
+def _require_canonical_path(path: Path) -> None:
+    if path.resolve(strict=False) != path:
+        raise RouterCtlError(f"refusing a path with symlink, junction, or reparse ancestors: {path}")
+
+
+def _ensure_private_dir(path: Path, *, tighten_existing: bool = False) -> None:
+    if _is_linklike(path):
+        raise RouterCtlError(f"refusing symlink, junction, or reparse directory: {path}")
+    existed = path.exists()
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if not path.is_dir():
+        raise RouterCtlError(f"expected directory: {path}")
+    if not existed or tighten_existing:
+        try:
+            os.chmod(path, 0o700)
+        except OSError:
+            if os.name != "nt":
+                raise
+
+
+def _validate_roots() -> Path:
+    _require_canonical_path(CODEX_HOME)
+    _require_canonical_path(DATA_ROOT)
+    for root in (CODEX_HOME, DATA_ROOT, ACTIVATION_ROOT):
+        if _is_linklike(root):
+            raise RouterCtlError(f"refusing symlink, junction, or reparse root: {root}")
+    if CODEX_HOME.exists() and not CODEX_HOME.is_dir():
+        raise RouterCtlError(f"CODEX_HOME is not a directory: {CODEX_HOME}")
+    if _is_linklike(AGENT_SOURCE) or not AGENT_SOURCE.is_dir():
+        raise RouterCtlError(f"invalid bundled agent source: {AGENT_SOURCE}")
+    for name in AGENT_NAMES:
+        source = AGENT_SOURCE / name
+        if _is_linklike(source) or not source.is_file():
+            raise RouterCtlError(f"invalid bundled agent source: {source}")
+    _ensure_private_dir(CODEX_HOME)
+    agents = CODEX_HOME / "agents"
+    if _is_linklike(agents):
+        raise RouterCtlError(f"refusing symlink, junction, or reparse agents directory: {agents}")
+    _ensure_private_dir(agents)
+    _ensure_private_dir(DATA_ROOT, tighten_existing=True)
+    _ensure_private_dir(ACTIVATION_ROOT, tighten_existing=True)
+    _ensure_private_dir(TRANSACTIONS, tighten_existing=True)
+    _ensure_private_dir(ORIGINALS, tighten_existing=True)
+    if agents.resolve() != (CODEX_HOME.resolve() / "agents"):
+        raise RouterCtlError("agents directory escaped CODEX_HOME")
+    return agents
+
+
+def _fsync_dir(path: Path) -> None:
+    if os.name == "nt":
+        return
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _atomic_bytes(path: Path, content: bytes, mode: int = 0o600) -> None:
+    _ensure_private_dir(path.parent)
+    descriptor, raw = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary = Path(raw)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.chmod(temporary, mode)
+        except OSError:
+            if os.name != "nt":
+                raise
+        _replace(temporary, path)
+        _fsync_dir(path.parent)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
+def _atomic_json(path: Path, value: dict[str, Any]) -> None:
+    _atomic_bytes(path, (json.dumps(value, indent=2, sort_keys=True) + "\n").encode())
+
+
+def _replace(source: Path, target: Path) -> None:
+    for attempt in range(6):
+        try:
+            os.replace(source, target)
+            return
+        except PermissionError:
+            if os.name != "nt" or attempt == 5:
+                raise
+            time.sleep(0.05 * (2**attempt))
+
+
+def _read_json(path: Path, *, required: bool = False) -> dict[str, Any] | None:
+    if not path.exists() and not _is_linklike(path):
+        if required:
+            raise RouterCtlError(f"missing state file: {path}")
+        return None
+    try:
+        if _is_linklike(path) or not path.is_file() or path.stat().st_size > 2 * 1024 * 1024:
+            raise RouterCtlError(f"invalid state file: {path}")
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        if required:
+            raise RouterCtlError(f"missing state file: {path}")
+        return None
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RouterCtlError(f"cannot read state file {path}: {exc}") from exc
+    if not isinstance(value, dict):
+        raise RouterCtlError(f"state file must contain an object: {path}")
+    return value
+
+
+def _plugin_version() -> str:
+    manifest = _read_json(PLUGIN_MANIFEST) if _runtime_surface() == "PLUGIN_LAYOUT_UNATTESTED" else None
+    if manifest is not None:
+        return str(manifest.get("version") or "unknown")
+    digest = hashlib.sha256()
+    for path in (SKILL_ROOT / "SKILL.md", *(AGENT_SOURCE / name for name in AGENT_NAMES)):
+        digest.update(path.name.encode())
+        digest.update(path.read_bytes())
+    return "standalone-" + digest.hexdigest()[:16]
+
+
+def _runtime_surface() -> str:
+    marker = _read_json(STANDALONE_MARKER)
+    installed_standalone = SKILL_ROOT == CODEX_HOME / "skills" / "route-gpt-5-6-work"
+    if installed_standalone:
+        if marker == {"schema_version": 1, "surface": "standalone_advisory"}:
+            return "STANDALONE_ADVISORY"
+        return "STANDALONE_INVALID"
+    if marker is not None:
+        if marker == {"schema_version": 1, "surface": "standalone_advisory"}:
+            return "STANDALONE_ADVISORY"
+        return "STANDALONE_INVALID"
+    manifest = _read_json(PLUGIN_MANIFEST)
+    hooks = PLUGIN_ROOT / "hooks" / "hooks.json"
+    if (
+        manifest is not None
+        and manifest.get("name") == "gpt-5-6-router"
+        and hooks.is_file()
+        and not _is_linklike(hooks)
+        and SKILL_ROOT == PLUGIN_ROOT / "skills" / "route-gpt-5-6-work"
+    ):
+        return "PLUGIN_LAYOUT_UNATTESTED"
+    return "UNATTESTED_FILESYSTEM"
+
+
+def _validate_snapshot(value: Any, *, expected_backup: str | None = None) -> None:
+    if not isinstance(value, dict) or value.get("kind") not in {"absent", "file"}:
+        raise RouterCtlError("state contains an invalid snapshot")
+    if value["kind"] == "absent":
+        return
+    backup = value.get("backup")
+    checksum = value.get("sha256")
+    mode = value.get("mode")
+    if (
+        not isinstance(backup, str)
+        or not backup
+        or backup in {".", ".."}
+        or Path(backup).name != backup
+        or (expected_backup is not None and backup != expected_backup)
+        or not isinstance(checksum, str)
+        or SHA256_PATTERN.fullmatch(checksum) is None
+        or isinstance(mode, bool)
+        or not isinstance(mode, int)
+        or not 0 <= mode <= 0o7777
+    ):
+        raise RouterCtlError("state contains invalid snapshot metadata")
+
+
+def _validate_journal(transaction: Path, journal: dict[str, Any]) -> None:
+    targets = journal.get("targets")
+    snapshots = journal.get("snapshots")
+    if (
+        journal.get("schema_version") != SCHEMA_VERSION
+        or journal.get("id") != transaction.name
+        or journal.get("operation") not in {"activate", "deactivate", "repair"}
+        or journal.get("state") not in {"PREPARED", "COMMITTING", "COMMITTED", "ROLLED_BACK"}
+        or not isinstance(targets, list)
+        or any(not isinstance(name, str) or name not in AGENT_NAMES for name in targets)
+        or len(targets) != len(set(targets))
+        or not isinstance(snapshots, dict)
+        or set(snapshots) != set(targets)
+    ):
+        raise RouterCtlError(f"transaction has a corrupt journal: {transaction}")
+    for name in targets:
+        _validate_snapshot(snapshots[name], expected_backup=name)
+    _validate_snapshot(journal.get("active_snapshot"), expected_backup="active.json")
+
+
+def _snapshot(path: Path, destination: Path) -> dict[str, Any]:
+    if _is_linklike(path):
+        raise RouterCtlError(f"refusing linked target: {path}")
+    if not path.exists():
+        return {"kind": "absent"}
+    if not path.is_file():
+        raise RouterCtlError(f"target is not a regular file: {path}")
+    content = path.read_bytes()
+    _atomic_bytes(destination, content, stat.S_IMODE(path.stat().st_mode) or 0o600)
+    return {
+        "kind": "file",
+        "backup": destination.name,
+        "sha256": hashlib.sha256(content).hexdigest(),
+        "mode": stat.S_IMODE(path.stat().st_mode),
+    }
+
+
+def _restore_snapshot(target: Path, metadata: dict[str, Any], directory: Path) -> None:
+    if _is_linklike(target):
+        raise RouterCtlError(f"refusing linked rollback target: {target}")
+    if metadata.get("kind") == "absent":
+        if target.exists():
+            if not target.is_file():
+                raise RouterCtlError(f"rollback target is not a file: {target}")
+            target.unlink()
+            _fsync_dir(target.parent)
+        return
+    backup = directory / str(metadata.get("backup") or "")
+    if not backup.is_file() or _is_linklike(backup):
+        raise RouterCtlError(f"missing rollback backup: {backup}")
+    if _sha(backup) != metadata.get("sha256"):
+        raise RouterCtlError(f"rollback checksum mismatch: {backup}")
+    _atomic_bytes(target, backup.read_bytes(), int(metadata.get("mode") or 0o600))
+
+
+@contextmanager
+def _lock():
+    _ensure_private_dir(ACTIVATION_ROOT)
+    if _is_linklike(LOCK_PATH):
+        raise RouterCtlError(f"refusing linked lock: {LOCK_PATH}")
+    flags = os.O_RDWR | os.O_CREAT
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    descriptor = os.open(LOCK_PATH, flags, 0o600)
+    with os.fdopen(descriptor, "a+b", buffering=0) as stream:
+        if fcntl is not None:
+            fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        elif msvcrt is not None:
+            if os.fstat(stream.fileno()).st_size == 0:
+                stream.write(b"\0")
+            stream.seek(0)
+            msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
+            elif msvcrt is not None:
+                stream.seek(0)
+                msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+
+
+def _failpoint(name: str) -> None:
+    if os.environ.get("GPT56_ROUTER_CRASH_AT") == name:
+        os._exit(97)
+    if os.environ.get("GPT56_ROUTER_FAIL_AT") == name:
+        raise RouterCtlError(f"injected failure at {name}")
+
+
+def _new_transaction(operation: str, agents: Path, targets: list[str]) -> tuple[Path, dict[str, Any]]:
+    transaction = TRANSACTIONS / str(uuid.uuid4())
+    _ensure_private_dir(transaction)
+    before = transaction / "before"
+    _ensure_private_dir(before)
+    snapshots: dict[str, Any] = {}
+    for name in targets:
+        snapshots[name] = _snapshot(agents / name, before / name)
+    active_snapshot = _snapshot(ACTIVE_PATH, before / "active.json")
+    journal = {
+        "schema_version": SCHEMA_VERSION,
+        "id": transaction.name,
+        "operation": operation,
+        "state": "PREPARED",
+        "targets": targets,
+        "snapshots": snapshots,
+        "active_snapshot": active_snapshot,
+    }
+    _atomic_json(transaction / "journal.json", journal)
+    _failpoint("prepared")
+    return transaction, journal
+
+
+def _set_journal(transaction: Path, journal: dict[str, Any], state_value: str) -> None:
+    journal["state"] = state_value
+    _atomic_json(transaction / "journal.json", journal)
+
+
+def _rollback(transaction: Path, journal: dict[str, Any], agents: Path) -> None:
+    before = transaction / "before"
+    for name in reversed(list(journal.get("targets", []))):
+        _restore_snapshot(agents / name, journal["snapshots"][name], before)
+    _restore_snapshot(ACTIVE_PATH, journal["active_snapshot"], before)
+    journal["state"] = "ROLLED_BACK"
+    _atomic_json(transaction / "journal.json", journal)
+
+
+def _discard_transaction(transaction: Path) -> None:
+    if _is_linklike(transaction):
+        raise RouterCtlError(f"refusing linked transaction cleanup: {transaction}")
+    shutil.rmtree(transaction)
+    _fsync_dir(TRANSACTIONS)
+
+
+def _commit_transaction(transaction: Path, journal: dict[str, Any]) -> None:
+    _set_journal(transaction, journal, "COMMITTED")
+    try:
+        _discard_transaction(transaction)
+    except OSError:
+        # A committed journal is safe to prune during the next lifecycle call.
+        pass
+
+
+def _recover(agents: Path) -> list[str]:
+    recovered: list[str] = []
+    for transaction in sorted(TRANSACTIONS.iterdir()):
+        if not transaction.is_dir() or _is_linklike(transaction):
+            continue
+        journal_path = transaction / "journal.json"
+        if not journal_path.exists() and not _is_linklike(journal_path):
+            # Targets are never mutated before the durable journal exists, so
+            # a pre-journal crash leaves disposable staging only.
+            _discard_transaction(transaction)
+            recovered.append(transaction.name)
+            continue
+        journal = _read_json(journal_path, required=True)
+        _validate_journal(transaction, journal)
+        state_value = journal.get("state")
+        if state_value in {"PREPARED", "COMMITTING"}:
+            before = transaction / "before"
+            _require_canonical_path(before)
+            if _is_linklike(before) or not before.is_dir():
+                raise RouterCtlError(f"transaction has an invalid backup directory: {transaction}")
+            _rollback(transaction, journal, agents)
+            recovered.append(transaction.name)
+            _discard_transaction(transaction)
+        elif state_value in {"COMMITTED", "ROLLED_BACK"}:
+            _discard_transaction(transaction)
+    return recovered
+
+
+def _load_active() -> dict[str, Any] | None:
+    value = _read_json(ACTIVE_PATH)
+    if value is None:
+        return None
+    files = value.get("files")
+    if (
+        value.get("schema_version") != SCHEMA_VERSION
+        or not isinstance(value.get("plugin_version"), str)
+        or not value["plugin_version"]
+        or not isinstance(value.get("transaction_id"), str)
+        or not value["transaction_id"]
+        or not isinstance(files, dict)
+        or set(files) != set(AGENT_NAMES)
+    ):
+        raise RouterCtlError("active ownership manifest has an unsupported or corrupt schema")
+    for name, record in files.items():
+        if (
+            not isinstance(record, dict)
+            or not isinstance(record.get("installed_sha256"), str)
+            or SHA256_PATTERN.fullmatch(record["installed_sha256"]) is None
+        ):
+            raise RouterCtlError("active ownership manifest contains an invalid file record")
+        _validate_snapshot(record.get("original"), expected_backup=name)
+    return value
+
+
+def _activation_drift(active: dict[str, Any] | None) -> tuple[bool, list[str]]:
+    if active is None:
+        return False, []
+    bundled_drift = [
+        name for name in AGENT_NAMES
+        if _sha(AGENT_SOURCE / name) != active["files"][name]["installed_sha256"]
+    ]
+    return active["plugin_version"] != _plugin_version() or bool(bundled_drift), bundled_drift
+
+
+def _validate_owned_files(agents: Path, active: dict[str, Any]) -> list[str]:
+    conflicts: list[str] = []
+    for name, record in active["files"].items():
+        target = agents / name
+        if _is_linklike(target) or not target.is_file() or _sha(target) != record.get("installed_sha256"):
+            conflicts.append(name)
+    return conflicts
+
+
+def _validate_original_backups(active: dict[str, Any] | None) -> list[str]:
+    if active is None:
+        return []
+    conflicts: list[str] = []
+    for name, record in active["files"].items():
+        original = record["original"]
+        if original["kind"] == "absent":
+            continue
+        backup = ORIGINALS / name
+        if _is_linklike(backup) or not backup.is_file() or _sha(backup) != original["sha256"]:
+            conflicts.append(name)
+    return conflicts
+
+
+def activate(*, replace_conflicts: bool = False) -> dict[str, Any]:
+    agents = _validate_roots()
+    with _lock():
+        recovered = _recover(agents)
+        active = _load_active()
+        if active:
+            backup_conflicts = _validate_original_backups(active)
+            if backup_conflicts:
+                raise RouterCtlError("missing or corrupt original backups: " + ", ".join(backup_conflicts))
+            conflicts = _validate_owned_files(agents, active)
+            if conflicts:
+                raise RouterCtlError("locally modified managed agents: " + ", ".join(conflicts))
+
+        sources = {name: AGENT_SOURCE / name for name in AGENT_NAMES}
+        for name in AGENT_NAMES:
+            if _is_linklike(agents / name):
+                raise RouterCtlError(f"refusing linked agent target: {agents / name}")
+        if not active:
+            foreign = [name for name in AGENT_NAMES if (agents / name).exists() and _sha(agents / name) != _sha(sources[name])]
+            if foreign and not replace_conflicts:
+                raise RouterCtlError(
+                    "conflicting agent files; rerun with --replace-conflicts only after review: " + ", ".join(foreign)
+                )
+
+        transaction, journal = _new_transaction("activate", agents, list(AGENT_NAMES))
+        try:
+            originals: dict[str, Any] = dict(active.get("files", {})) if active else {}
+            if not active:
+                for name in AGENT_NAMES:
+                    original = _snapshot(agents / name, ORIGINALS / name)
+                    originals[name] = {"original": original}
+            _set_journal(transaction, journal, "COMMITTING")
+            _failpoint("committing")
+            installed: dict[str, Any] = {}
+            for index, name in enumerate(AGENT_NAMES, 1):
+                source = sources[name]
+                _atomic_bytes(agents / name, source.read_bytes(), 0o600)
+                installed[name] = {
+                    "installed_sha256": _sha(source),
+                    "original": originals[name]["original"],
+                }
+                _failpoint(f"agent-{index}")
+            manifest = {
+                "schema_version": SCHEMA_VERSION,
+                "plugin_version": _plugin_version(),
+                "transaction_id": transaction.name,
+                "files": installed,
+            }
+            _atomic_json(ACTIVE_PATH, manifest)
+            _failpoint("active-manifest")
+            _commit_transaction(transaction, journal)
+            return {"status": "active", "recovered": recovered, "files": list(AGENT_NAMES)}
+        except Exception:
+            _rollback(transaction, journal, agents)
+            _discard_transaction(transaction)
+            raise
+
+
+def deactivate(*, keep_modified: bool = False) -> dict[str, Any]:
+    agents = _validate_roots()
+    with _lock():
+        recovered = _recover(agents)
+        active = _load_active()
+        if not active:
+            return {"status": "inactive", "recovered": recovered, "changed": False}
+        backup_conflicts = _validate_original_backups(active)
+        if backup_conflicts:
+            raise RouterCtlError("missing or corrupt original backups: " + ", ".join(backup_conflicts))
+        conflicts = _validate_owned_files(agents, active)
+        if conflicts and not keep_modified:
+            raise RouterCtlError("locally modified managed agents: " + ", ".join(conflicts))
+        managed = list(active["files"])
+        transaction, journal = _new_transaction("deactivate", agents, managed)
+        try:
+            _set_journal(transaction, journal, "COMMITTING")
+            for index, name in enumerate(managed, 1):
+                if name in conflicts:
+                    continue
+                record = active["files"][name]
+                _restore_snapshot(agents / name, record["original"], ORIGINALS)
+                _failpoint(f"deactivate-{index}")
+            if ACTIVE_PATH.exists():
+                ACTIVE_PATH.unlink()
+                _fsync_dir(ACTIVE_PATH.parent)
+            _failpoint("inactive-manifest")
+            _commit_transaction(transaction, journal)
+            try:
+                for name in managed:
+                    original = ORIGINALS / name
+                    if original.exists() and not _is_linklike(original):
+                        original.unlink()
+                _fsync_dir(ORIGINALS)
+            except OSError:
+                # Deactivation is already committed; stale private backups are
+                # preferable to claiming a rollback that can no longer occur.
+                pass
+            return {
+                "status": "inactive",
+                "recovered": recovered,
+                "changed": True,
+                "preserved_modified": conflicts,
+            }
+        except Exception:
+            _rollback(transaction, journal, agents)
+            _discard_transaction(transaction)
+            raise
+
+
+def repair() -> dict[str, Any]:
+    agents = _validate_roots()
+    with _lock():
+        recovered = _recover(agents)
+        active = _load_active()
+        if not active:
+            return {"status": "inactive", "recovered": recovered, "repaired": []}
+        backup_conflicts = _validate_original_backups(active)
+        if backup_conflicts:
+            raise RouterCtlError("missing or corrupt original backups: " + ", ".join(backup_conflicts))
+        modified: list[str] = []
+        missing: list[str] = []
+        for name, record in active["files"].items():
+            target = agents / name
+            if not target.exists():
+                missing.append(name)
+            elif _is_linklike(target) or not target.is_file() or _sha(target) != record["installed_sha256"]:
+                modified.append(name)
+        if modified:
+            raise RouterCtlError("repair refuses locally modified managed agents: " + ", ".join(modified))
+        if not missing:
+            return {"status": "active", "recovered": recovered, "repaired": []}
+        transaction, journal = _new_transaction("repair", agents, missing)
+        try:
+            _set_journal(transaction, journal, "COMMITTING")
+            for name in missing:
+                source = AGENT_SOURCE / name
+                if _sha(source) != active["files"][name]["installed_sha256"]:
+                    raise RouterCtlError(f"bundled version differs; use activate for upgrade: {name}")
+                _atomic_bytes(agents / name, source.read_bytes(), 0o600)
+            _commit_transaction(transaction, journal)
+            return {"status": "active", "recovered": recovered, "repaired": missing}
+        except Exception:
+            _rollback(transaction, journal, agents)
+            _discard_transaction(transaction)
+            raise
+
+
+def _toml_value(path: Path, section: str, key: str) -> str | None:
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (FileNotFoundError, OSError, UnicodeDecodeError):
+        return None
+    active = ""
+    for raw in lines:
+        line = raw.split("#", 1)[0].strip()
+        if line.startswith("[") and line.endswith("]"):
+            active = line[1:-1].strip()
+        elif active == section and "=" in line:
+            candidate, value = line.split("=", 1)
+            if candidate.strip() == key:
+                return value.strip().strip("'\"").lower()
+    return None
+
+
+def status() -> dict[str, Any]:
+    agents = _validate_roots()
+    with _lock():
+        recovered = _recover(agents)
+        active = _load_active()
+        conflicts = _validate_owned_files(agents, active) if active else []
+        original_backup_conflicts = _validate_original_backups(active)
+        update_required, bundled_drift = _activation_drift(active)
+    config = CODEX_HOME / "config.toml"
+    requirements = CODEX_HOME / "requirements.toml"
+    managed_blocked = _toml_value(requirements, "", "allow_managed_hooks_only") == "true"
+    hooks_disabled = _toml_value(config, "features", "hooks") == "false"
+    agents_disabled = _toml_value(config, "features", "multi_agent") == "false"
+    depth_zero = _toml_value(config, "agents", "max_depth") == "0"
+    surface = _runtime_surface()
+    local_agent_ready = bool(active) and not any((
+        conflicts, original_backup_conflicts, update_required, agents_disabled, depth_zero,
+    ))
+    mode = "MANAGED_BLOCKED" if managed_blocked else "ADVISORY"
+    return {
+        "mode": mode,
+        "runtime_surface": surface,
+        "diagnostic_scope": "LOCAL_FILES_ONLY",
+        "local_agent_ready": local_agent_ready,
+        "static_readiness_authority": "scripts/check_hooks.py",
+        "agents_active": bool(active),
+        "agent_conflicts": conflicts,
+        "original_backup_conflicts": original_backup_conflicts,
+        "activation_update_required": update_required,
+        "bundled_agent_drift": bundled_drift,
+        "hooks_enabled_by_local_config": not hooks_disabled,
+        "multi_agent_enabled_by_local_config": not agents_disabled,
+        "local_agent_depth_allows_children": not depth_zero,
+        "managed_hooks_only_in_local_requirements": managed_blocked,
+        "hook_trust": "UNVERIFIED",
+        "fast_state": "REPORTED_CONFIG_ONLY",
+        "recovered_transactions": recovered,
+        "plugin_version": _plugin_version(),
+    }
+
+
+def main() -> int:
+    if sys.version_info < (3, 10):
+        print("routerctl requires Python 3.10 or newer", file=sys.stderr)
+        return 2
+    parser = argparse.ArgumentParser(description="Manage GPT-5.6 Router custom-agent activation")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    activate_parser = subparsers.add_parser("activate")
+    activate_parser.add_argument("--replace-conflicts", action="store_true")
+    deactivate_parser = subparsers.add_parser("deactivate")
+    deactivate_parser.add_argument("--keep-modified", action="store_true")
+    subparsers.add_parser("repair")
+    subparsers.add_parser("status")
+    args = parser.parse_args()
+    try:
+        if args.command == "activate":
+            result = activate(replace_conflicts=args.replace_conflicts)
+        elif args.command == "deactivate":
+            result = deactivate(keep_modified=args.keep_modified)
+        elif args.command == "repair":
+            result = repair()
+        else:
+            result = status()
+    except (OSError, RouterCtlError, ValueError) as exc:
+        print(json.dumps({"status": "error", "error": str(exc)}, sort_keys=True))
+        return 2
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
