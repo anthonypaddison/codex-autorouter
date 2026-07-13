@@ -1084,7 +1084,7 @@ class RouterTests(unittest.TestCase):
             "hook_event_name": "SubagentStart", "session_id": "s5", "turn_id": "child-turn",
             "agent_type": "gpt56_terra_deep",
         })
-        ledger = json.loads(next(Path(self.temp.name).glob("*.json")).read_text())
+        ledger = json.loads((Path(self.temp.name) / "s5--parent-turn.json").read_text())
         self.assertIn("gpt56_terra_deep", ledger["subagents_started"])
 
     def test_stop_reconciles_missing_lifecycle_hooks_from_transcript(self) -> None:
