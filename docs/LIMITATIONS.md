@@ -10,6 +10,10 @@ Native custom-agent selection requires both the exact `agent_type` and `fork_tur
 
 Codex stores and evaluates hook trust separately. `routerctl status` can validate files and visible configuration but deliberately reports trust as `UNVERIFIED`. The user must confirm `/hooks`.
 
+## Pre-fix open tasks need one restart after upgrade
+
+Codex can retain the resolved, versioned hook command for an already-open task. Builds before the stale-cache launcher fix pointed directly at their own immutable cache and cannot rewrite that in-memory registration after the directory is replaced. Open a fresh task once after upgrading from such a build. Tasks created by the fixed build resolve the newest installed sibling cache from their self-contained command and do not recursively fail when their original cache is retired.
+
 ## Config diagnostics are local hints
 
 `routerctl status` reads local `CODEX_HOME/config.toml` and `requirements.toml` only. It cannot calculate the final merged value after administrator profiles, policy, project configuration, or command-line overrides. Fields are named `*_by_local_config` or `*_in_local_requirements` for that reason. `scripts/check_hooks.py` performs the authoritative preflight by reading effective merged configuration and requirements from app-server alongside discovered hook trust.

@@ -14,6 +14,7 @@ Record candidate-specific proof in `RELEASE_EVIDENCE.md`; never infer a checked 
 - [x] Every declared standalone install/update/uninstall crash boundary rolls back or commits deterministically, and post-crash edits are preserved.
 - [x] Plugin cache contains no source-machine absolute paths, secrets, symlinks, bytecode, or transient state.
 - [x] Installed-cache hooks use only plugin-relative commands and plugin data.
+- [x] Missing retired cache paths migrate to the newest installed hook, emit at most one no-cache diagnostic, and duplicate terminal Stop delivery is idempotent.
 - [ ] `scripts/check_hooks.py` observes exactly five trusted, enabled, error-free plugin hooks and six active current agent definitions after explicit review.
 - [x] Routing golden cases, product taxonomy, adversarial prompts, continuations, Fast reporting, and 5,000-case fuzzing pass.
 - [x] `ADVISORY`, local-agent-ready, authoritative full-ready, and `MANAGED_BLOCKED` diagnostics are covered.

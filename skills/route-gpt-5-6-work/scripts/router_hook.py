@@ -31,6 +31,19 @@ except ImportError:  # macOS and Linux
 
 _plugin_data = os.environ.get("PLUGIN_DATA") or os.environ.get("CLAUDE_PLUGIN_DATA")
 CODEX_HOME = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser().absolute()
+PLUGIN_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _current_plugin_version() -> str:
+    try:
+        manifest = json.loads((PLUGIN_ROOT / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        version = manifest.get("version")
+        return str(version) if isinstance(version, str) and version else "standalone"
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return "standalone"
+
+
+PLUGIN_VERSION = _current_plugin_version()
 STATE_ROOT = Path(
     os.environ.get("CODEX_ROUTER_STATE_DIR")
     or (str(Path(_plugin_data) / "router-state-v2") if _plugin_data else "~/.codex/router-state-v2")
@@ -983,6 +996,16 @@ def _load_state_path(path: Path) -> dict[str, Any] | None:
         return None
 
 
+def _migrate_state_identity(state: dict[str, Any]) -> bool:
+    previous = state.get("plugin_version")
+    if previous == PLUGIN_VERSION:
+        return False
+    if isinstance(previous, str) and previous:
+        state["migrated_from_plugin_version"] = previous
+    state["plugin_version"] = PLUGIN_VERSION
+    return True
+
+
 @contextmanager
 def _ledger_lock(*, initialize: bool = True):
     _require_canonical_state_root()
@@ -1248,7 +1271,7 @@ def _is_verification(command: str) -> bool:
     verifier = re.compile(
         r"^\s*(?:(?:python\d*(?:\.\d+)?|uv\s+run|poetry\s+run)\s+(?:-m\s+)?(?:pytest|unittest|mypy|ruff|py_compile|json\.tool)|"
         r"pytest|ruff|mypy|eslint|biome|tsc|rspec|rubocop|"
-        r"(?:npm|pnpm|yarn)\s+(?:(?:run\s+)?(?:test|lint|typecheck|build)|test)|"
+        r"(?:npm|pnpm|yarn)\s+(?:(?:run\s+)?(?:test|lint|typecheck|build|verify(?::[\w.-]+)?|check(?::[\w.-]+)?|ci(?::[\w.-]+)?)|test)|"
         r"cargo\s+(?:test|check|build)|go\s+test|swift\s+test|"
         r"[^\s]*quick_validate\.py\b)",
         re.I,
@@ -1433,12 +1456,16 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         prompt = str(data.get("prompt") or "")
         if ROUTER_CONTINUATION.match(prompt):
             previous = _read_state(data) or _latest_session_state(data.get("session_id"), data.get("turn_id"))
+            if previous is None or previous.get("status") in {"COMPLETE", "FAILED_OPEN"}:
+                return None
             if previous:
                 state = json.loads(json.dumps(previous))
                 previous_turn = state.get("turn_id")
                 state["session_id"] = str(data.get("session_id") or state.get("session_id") or "")
                 state["turn_id"] = str(data.get("turn_id") or state.get("turn_id") or "")
                 state["inherited_from_turn"] = previous_turn
+                state["hook_continuation"] = True
+                state["continuation_origin_turn"] = previous.get("continuation_origin_turn") or previous_turn
                 state["status"] = "RUNNING"
                 decision = state["decision"]
                 if decision.get("orchestration", {}).get("required_agents") and not _custom_agents_available():
@@ -1491,11 +1518,14 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         )
         state = {
             "version": STATE_VERSION,
+            "plugin_version": PLUGIN_VERSION,
             "status": "ROUTED",
             "session_id": str(data.get("session_id") or ""),
             "turn_id": str(data.get("turn_id") or ""),
             "decision": decision,
             "inherited_from_turn": inherited_from_turn,
+            "hook_continuation": False,
+            "continuation_origin_turn": None,
             "subagents_started": [],
             "subagents_completed": [],
             "agent_ids": [],
@@ -1522,6 +1552,8 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
     state = _read_state(data)
     if state is None:
         return {"continue": True} if event in {"Stop", "SubagentStop"} else None
+    if _migrate_state_identity(state):
+        _write_existing_state(data, state)
 
     decision = state["decision"]
     if event == "SubagentStart":
@@ -1717,6 +1749,8 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         return {"continue": True}
 
     if event == "Stop":
+        if state.get("status") in {"COMPLETE", "FAILED_OPEN"}:
+            return {"continue": True}
         state["status"] = "VERIFYING"
         _reconcile_subagent_transcript(data, state)
         problems: list[str] = []
@@ -1780,9 +1814,9 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             _write_state(data, state)
             return {"decision": "block", "reason": "Router completion gate: " + "; ".join(problems) + "."}
         state["status"] = "COMPLETE" if not problems else "FAILED_OPEN"
-        _write_state(data, state)
         if problems:
-            return {"continue": True, "systemMessage": "Router failed open with unmet hard gates: " + "; ".join(problems)}
+            state["failed_open_problems"] = problems
+        _write_state(data, state)
         return {"continue": True}
 
     return None

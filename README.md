@@ -102,6 +102,8 @@ Standalone mode deliberately does not pretend to have plugin-hook enforcement. S
 - **Protected floors:** Token Saver never discounts security, payments, privacy, production, destructive actions, or other high-risk work.
 - **No silent speed changes:** Fast/Standard is inherited, not selected by the router.
 - **Post-mutation verification:** earlier checks cannot satisfy the completion gate.
+- **Non-recursive completion:** verification feedback can continue a turn once; terminal and duplicate Stop events cannot reinject the same gate.
+- **Upgrade-resilient hooks:** tasks created by this build can locate the newest installed router after their original immutable cache is replaced.
 - **Conflict-safe activation:** only six namespaced agent files are managed, with checksums, atomic replacement, rollback, crash recovery, and automatic migration from the private-beta role set.
 - **Prompt privacy:** routing ledgers contain no prompt content or prompt-derived hashes.
 
@@ -140,7 +142,7 @@ cd skills/route-gpt-5-6-work/scripts
 python3 -m unittest -v test_router test_routerctl
 ```
 
-The current suite covers 158 routing and lifecycle tests plus 5,000 deterministic fuzz cases per CI job, including all three profiles, Extra High selection, legacy-role migration, lifecycle ownership, concurrency, crash recovery, hook readiness, and clean-room standalone installation.
+The current suite covers 164 routing and lifecycle tests plus 5,000 deterministic fuzz cases per CI job, including all three profiles, Extra High selection, stale-cache migration, Stop idempotency, legacy-role migration, lifecycle ownership, concurrency, crash recovery, hook readiness, and clean-room standalone installation.
 
 ## License
 

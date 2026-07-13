@@ -42,6 +42,14 @@ The hook contract does not currently expose a guaranteed per-task UI Fast field.
 
 Confirm that the plugin is installed and enabled, hooks are enabled, the project is trusted where project configuration matters, and the exact plugin hook definition is trusted in `/hooks`. Managed policy can suppress plugin hooks even when files are present.
 
+## Completion feedback repeats after an update
+
+Tasks created by builds before the stale-cache launcher fix can retain a command resolved to that build's deleted cache directory. The entries under `[hooks.state]` in `config.toml` are trust records keyed by plugin and hook position; their presence is expected and does not identify the active task's resolved command.
+
+Update the plugin, review and trust the changed hook definitions, and open a fresh task once. Do not delete trust state or disable completion gates globally. Tasks created by the fixed build use a self-contained launcher that discovers the newest installed router hook when a later cache replacement removes their original version. If no valid cache exists, the launcher reports the condition once and then fails open without recursively continuing the task.
+
+Within the router, completion feedback is carried into at most one verification continuation. Successful verification—including package scripts such as `pnpm verify:fast`—settles the carried mutation generation. An unmet second Stop records `FAILED_OPEN` without injecting another message, and duplicate Stop delivery against `COMPLETE` or `FAILED_OPEN` is a no-op.
+
 ## Standalone install or recovery refuses a tree
 
 Do not delete the target, stage, quarantine, ownership manifest, or pending transaction reflexively. The standalone lifecycle fails closed for foreign content, path or mode drift, links, corrupt state, and post-crash edits. Preserve the reported paths and compare them with the release inventory. Use the durable controller printed by `install` if the original archive is gone. Standalone mode never qualifies as full plugin mode.

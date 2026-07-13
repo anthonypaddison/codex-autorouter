@@ -1,12 +1,12 @@
 # Release evidence
 
-Current source candidate: `0.1.0+codex.20260713112629`
+Current source candidate: `0.1.0+codex.20260713074636`
 Recorded: 2026-07-13
 
 ## Proven on the candidate source snapshot
 
 - Release, plugin, skill, and source-integrity validators pass.
-- 158 routing, profile-policy, activation, checker, standalone, ownership, concurrency, and crash-recovery tests pass locally on macOS with Python 3.14.
+- 164 routing, profile-policy, activation, stale-cache dispatch, Stop-idempotency, checker, standalone, ownership, concurrency, and crash-recovery tests pass locally on macOS with Python 3.14.
 - The deterministic routing fuzz suite passes 5,000 cases on every tested Python runtime.
 - GitHub Actions run [29231940583](https://github.com/vibeforge1111/Codex-Autorouter/actions/runs/29231940583) passes all 15 combinations of `ubuntu-latest`, `macos-latest`, and `windows-latest` with Python 3.10–3.14 on the six-role routing implementation at source snapshot `ccf0b39c92cccebd82264c08fbf711c52b44aaa1`. The current candidate changes only its cache version and this recorded evidence; its full local gate also passes.
 - Every hosted job validated the release, ran all 158 tests, ran 5,000 deterministic fuzz cases, and revalidated source integrity after execution.
@@ -32,6 +32,8 @@ Recorded: 2026-07-13
 - The same clean-room test confirmed that a symlinked `/var` temporary ancestor is refused while its canonical `/private/var` physical path succeeds, preserving the path-safety contract on macOS.
 
 ## Regressions caught by live acceptance
+
+- A pre-fix open task retained an absolute command into a retired plugin cache. Its successful `pnpm verify:fast` was not recognized, the carried mutation generation remained unpaid, and terminal `FAILED_OPEN` stops emitted another system message. The hook command now resolves the newest installed sibling cache, package `verify:*` scripts count only with successful tool evidence, completion feedback is carried once, and terminal Stop delivery is idempotent.
 
 - Candidate `0.1.0+codex.20260713005838` used the custom role only as `task_name`; Codex launched built-in `default`. The completion hook rejected it.
 - Candidate `0.1.0+codex.20260713012039` added `agent_type`, but the model's first attempt used the default full-history fork. Codex inherited `default`; a corrective custom spawn succeeded, but the ledger correctly remained `FAILED_OPEN` because the unexpected worker could not be erased.

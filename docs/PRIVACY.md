@@ -4,7 +4,7 @@ Plugin hooks keep one JSON ledger per routed turn under `${PLUGIN_DATA}/router-s
 
 Ledgers contain opaque session and turn identifiers; the selected route and orchestration plan; task-profile categories and signal names; custom-agent identifiers, lifecycle status, and model/configuration attestation; mutation and verification counters; violations; timestamps; and routing-council recommendations when used. They do not contain prompt text, assistant responses, tool output, prompt hashes, or other prompt-derived digests.
 
-The persistent routing preference file contains only a schema version and one enum value: `token-saver`, `balanced`, or `max-quality`. It contains no prompt, task, model transcript, account, or usage data.
+The persistent routing preference file contains only a schema version and one enum value: `token-saver`, `balanced`, or `max-quality`. It contains no prompt, task, model transcript, account, or usage data. The hook launcher may also create one empty `.gpt56-stale-hook-reported` marker in plugin data after a missing-cache failure so that the diagnostic is emitted only once.
 
 Ledgers older than 14 days are removed opportunistically when a later user prompt reaches the router. If no later prompt occurs, metadata can remain until manual cleanup or plugin-data removal. Each state directory has a private ownership marker, and each ledger carries that installation's random ownership nonce. Purge refuses an unmarked or mismatched directory. To remove all valid router ledgers immediately while preserving unrelated or malformed JSON files, pass the exact state directory reported for the installed plugin:
 

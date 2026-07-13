@@ -781,6 +781,81 @@ class RouterTests(unittest.TestCase):
         self.assertTrue(still_blocked["continue"])
         final_state = json.loads((Path(self.temp.name) / "stop-continuation--t2.json").read_text())
         self.assertEqual("FAILED_OPEN", final_state["status"])
+        duplicate = router_hook.handle({
+            "hook_event_name": "Stop", "session_id": "stop-continuation", "turn_id": "t2",
+            "stop_hook_active": False,
+        })
+        self.assertEqual({"continue": True}, duplicate)
+        unchanged = json.loads((Path(self.temp.name) / "stop-continuation--t2.json").read_text())
+        self.assertEqual("FAILED_OPEN", unchanged["status"])
+
+    def test_stop_continuation_completes_after_custom_verify_script(self) -> None:
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "custom-verify", "turn_id": "t1",
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo in this file.",
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": "custom-verify", "turn_id": "t1",
+            "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
+        })
+        blocked = router_hook.handle({
+            "hook_event_name": "Stop", "session_id": "custom-verify", "turn_id": "t1",
+            "stop_hook_active": False,
+        })
+        self.assertEqual("block", blocked["decision"])
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "custom-verify", "turn_id": "t2",
+            "model": "gpt-5.6-terra", "prompt": blocked["reason"],
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": "custom-verify", "turn_id": "t2",
+            "tool_name": "Bash", "tool_input": {"command": "pnpm verify:fast"},
+            "tool_response": {"exit_code": 0},
+        })
+        completed = router_hook.handle({
+            "hook_event_name": "Stop", "session_id": "custom-verify", "turn_id": "t2",
+            "stop_hook_active": True,
+        })
+        self.assertEqual({"continue": True}, completed)
+        state = json.loads((Path(self.temp.name) / "custom-verify--t2.json").read_text())
+        self.assertEqual("COMPLETE", state["status"])
+        self.assertEqual(state["mutation_generation"], state["verified_generation"])
+
+    def test_no_mutation_conversation_completes_without_feedback(self) -> None:
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "conversation", "turn_id": "t1",
+            "model": "gpt-5.6-terra", "prompt": "How are things now?",
+        })
+        completed = router_hook.handle({
+            "hook_event_name": "Stop", "session_id": "conversation", "turn_id": "t1",
+            "stop_hook_active": False,
+        })
+        self.assertEqual({"continue": True}, completed)
+        state = json.loads((Path(self.temp.name) / "conversation--t1.json").read_text())
+        self.assertEqual(0, state["mutation_generation"])
+        self.assertEqual("COMPLETE", state["status"])
+
+    def test_terminal_router_feedback_is_not_reclassified_or_reinjected(self) -> None:
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "terminal-feedback", "turn_id": "t1",
+            "model": "gpt-5.6-terra", "prompt": "How are things now?",
+        })
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": "terminal-feedback", "turn_id": "t1",
+            "stop_hook_active": False,
+        })
+        feedback = router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "terminal-feedback", "turn_id": "t2",
+            "model": "gpt-5.6-terra",
+            "prompt": "Router completion gate: run the required verification gate after the final mutation: answer check.",
+        })
+        self.assertIsNone(feedback)
+        self.assertFalse((Path(self.temp.name) / "terminal-feedback--t2.json").exists())
+        duplicate = router_hook.handle({
+            "hook_event_name": "Stop", "session_id": "terminal-feedback", "turn_id": "t2",
+            "stop_hook_active": False,
+        })
+        self.assertEqual({"continue": True}, duplicate)
 
     def test_unknown_verification_result_does_not_pass(self) -> None:
         self.assertFalse(router_hook._response_succeeded({}))
@@ -792,7 +867,27 @@ class RouterTests(unittest.TestCase):
         self.assertFalse(router_hook._is_verification("printf build"))
         self.assertTrue(router_hook._is_verification("python3 -m pytest -q"))
         self.assertTrue(router_hook._is_verification("npm run build"))
+        self.assertTrue(router_hook._is_verification("pnpm verify:fast"))
+        self.assertTrue(router_hook._is_verification("npm run check:release"))
         self.assertTrue(router_hook._is_verification("cargo check"))
+
+    def test_ledger_identity_migrates_across_plugin_cache_versions(self) -> None:
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "plugin-upgrade", "turn_id": "t1",
+            "model": "gpt-5.6-terra", "prompt": "How are things now?",
+        })
+        ledger = Path(self.temp.name) / "plugin-upgrade--t1.json"
+        state = json.loads(ledger.read_text())
+        state["plugin_version"] = "0.1.0+codex.retired"
+        ledger.write_text(json.dumps(state), encoding="utf-8")
+        completed = router_hook.handle({
+            "hook_event_name": "Stop", "session_id": "plugin-upgrade", "turn_id": "t1",
+            "stop_hook_active": False,
+        })
+        self.assertEqual({"continue": True}, completed)
+        migrated = json.loads(ledger.read_text())
+        self.assertEqual(router_hook.PLUGIN_VERSION, migrated["plugin_version"])
+        self.assertEqual("0.1.0+codex.retired", migrated["migrated_from_plugin_version"])
 
     def test_structured_return_requires_nonempty_sections(self) -> None:
         self.assertFalse(router_hook._structured_return("Evidence:\nVerification: ok\nUncertainty: none"))

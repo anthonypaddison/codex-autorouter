@@ -58,7 +58,7 @@ Repair recreates missing owned files only when the bundled checksum matches the 
 ## Update
 
 1. Update or reinstall the plugin from the marketplace.
-2. Start a new task.
+2. Start a new task. This one-time boundary is required for tasks created by builds before the stale-cache launcher fix; tasks created by the fixed build can follow later cache replacements automatically, but a new task remains the supported way to pick up changed skill instructions.
 3. Review and trust changed hooks in `/hooks`.
 4. Run `routerctl.py activate` again. Upgrade proceeds only when every currently managed file still matches its recorded installed hash.
 5. Run `routerctl.py status` and the smoke prompts in the release checklist.

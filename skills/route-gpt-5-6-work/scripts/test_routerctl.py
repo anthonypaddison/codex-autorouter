@@ -94,6 +94,66 @@ class RouterCtlTests(unittest.TestCase):
         for name in routerctl.AGENT_NAMES:
             self.assertRegex(Path(name).stem, r"^[a-z0-9_]+$")
 
+    def _run_hook_command(self, command: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            command,
+            input=json.dumps({
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "stale-cache",
+                "turn_id": "t1",
+                "model": "gpt-5.6-terra",
+                "prompt": "How are things now?",
+            }),
+            env=env,
+            text=True,
+            capture_output=True,
+            shell=True,
+            check=False,
+        )
+
+    def test_cached_hook_command_migrates_from_a_missing_old_plugin_version(self) -> None:
+        cache = self.root / "cache" / "gpt-5-6-router"
+        old_root = cache / "0.1.0+codex.retired"
+        current_root = cache / "0.1.0+codex.current"
+        hook_target = current_root / "skills" / "route-gpt-5-6-work" / "scripts" / "router_hook.py"
+        hook_target.parent.mkdir(parents=True)
+        hook_target.write_bytes((PLUGIN_ROOT / "skills" / "route-gpt-5-6-work" / "scripts" / "router_hook.py").read_bytes())
+        manifest = current_root / ".codex-plugin" / "plugin.json"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_text(json.dumps({"name": "gpt-5-6-router", "version": "0.1.0+codex.current"}), encoding="utf-8")
+        self.assertFalse(old_root.exists())
+        hooks = json.loads(HOOKS.read_text(encoding="utf-8"))["hooks"]
+        hook = hooks["UserPromptSubmit"][0]["hooks"][0]
+        command = hook["commandWindows" if os.name == "nt" else "command"]
+        env = {
+            **self.env,
+            "PLUGIN_ROOT": str(old_root),
+            "CODEX_ROUTER_STATE_DIR": str(self.data / "router-state-v2"),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+        result = self._run_hook_command(command, env)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        payload = json.loads(result.stdout)
+        self.assertEqual("UserPromptSubmit", payload["hookSpecificOutput"]["hookEventName"])
+        self.assertTrue((self.data / "router-state-v2" / "stale-cache--t1.json").is_file())
+
+    def test_cached_hook_command_fails_open_with_only_one_missing_cache_diagnostic(self) -> None:
+        old_root = self.root / "empty-cache" / "gpt-5-6-router" / "0.1.0+codex.retired"
+        hooks = json.loads(HOOKS.read_text(encoding="utf-8"))["hooks"]
+        hook = hooks["UserPromptSubmit"][0]["hooks"][0]
+        command = hook["commandWindows" if os.name == "nt" else "command"]
+        env = {
+            **self.env,
+            "PLUGIN_ROOT": str(old_root),
+            "PYTHONDONTWRITEBYTECODE": "1",
+        }
+        first = self._run_hook_command(command, env)
+        second = self._run_hook_command(command, env)
+        self.assertEqual(0, first.returncode, first.stdout + first.stderr)
+        self.assertEqual(0, second.returncode, second.stdout + second.stderr)
+        self.assertIn("systemMessage", json.loads(first.stdout))
+        self.assertEqual({"continue": True}, json.loads(second.stdout))
+
     def test_profile_defaults_to_balanced_and_persists_all_three_modes(self) -> None:
         initial = self.payload(self.run_ctl("profile"))
         self.assertEqual("balanced", initial["profile"])

@@ -9,6 +9,8 @@
 - Added bounded single-delegate, parallel-leaf, evidence-owner, and uncertainty-council plans.
 - Added Sol Extra High for narrowly qualified Max Quality work and removed the separate judge stage in favor of useful evidence workers plus one final executor.
 - Added native plugin hooks using `${PLUGIN_ROOT}` and persistent state under `${PLUGIN_DATA}`.
+- Made cached hook commands upgrade-resilient: open tasks discover the newest installed router after cache replacement, while a missing installation reports once and then fails open silently.
+- Made Stop completion idempotent and non-recursive, migrated ledger build identity across cache versions, and recognized successful `verify:*`, `check:*`, and `ci:*` package scripts as verification evidence.
 - Added explicit `ADVISORY` and `MANAGED_BLOCKED` local modes, with full readiness reserved for exact app-server and hook-trust attestation.
 - Added transactional custom-agent activation, recovery, repair, conflict-safe upgrade behavior, and deactivation.
 - Added adversarial routing, lifecycle, concurrency, crash-recovery, symlink, managed-policy, and portability tests.
