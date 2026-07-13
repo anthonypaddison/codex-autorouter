@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="620" viewBox="0 0 1600 620" role="img" aria-labelledby="title desc">
+  <title id="title">Autorouter readiness path</title>
+  <desc id="desc">Five steps from installing Autorouter to proving a live routed task: install, trust hooks, activate roles, check readiness, and run a live smoke.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#090C13"/>
+      <stop offset="1" stop-color="#101722"/>
+    </linearGradient>
+    <linearGradient id="route" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#A78BFA"/>
+      <stop offset="0.5" stop-color="#48D7E8"/>
+      <stop offset="1" stop-color="#FDBA4A"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0L10 5L0 10Z" fill="#566477"/>
+    </marker>
+  </defs>
+  <rect width="1600" height="620" rx="34" fill="url(#bg)"/>
+
+  <g font-family="Inter, ui-sans-serif, system-ui, sans-serif">
+    <text x="70" y="70" fill="#F8FAFC" font-size="38" font-weight="760">From installed to actually ready</text>
+    <text x="70" y="108" fill="#95A2B5" font-size="19">Files are not proof. Trust, current agent definitions, app-server discovery, and one live ledger are.</text>
+    <path d="M268 287H352M568 287H652M868 287H952M1168 287H1252" fill="none" stroke="#566477" stroke-width="3" marker-end="url(#arrow)"/>
+
+    <g transform="translate(68 174)">
+      <rect width="200" height="226" rx="26" fill="#161B27" stroke="#344052"/>
+      <circle cx="100" cy="68" r="34" fill="#202838" stroke="#A78BFA"/>
+      <path d="M86 65H114M86 78H108M92 51H114V84H86V57Z" fill="none" stroke="#C9B9FF" stroke-width="3" stroke-linejoin="round"/>
+      <text x="100" y="132" text-anchor="middle" fill="#F3F6FA" font-size="20" font-weight="720">1 · Install</text>
+      <text x="100" y="164" text-anchor="middle" fill="#9EAABC" font-size="14">exact marketplace</text>
+      <text x="100" y="186" text-anchor="middle" fill="#9EAABC" font-size="14">candidate</text>
+    </g>
+
+    <g transform="translate(368 174)">
+      <rect width="200" height="226" rx="26" fill="#171526" stroke="#A78BFA" stroke-opacity="0.72"/>
+      <circle cx="100" cy="68" r="34" fill="#28223C"/>
+      <path d="M100 43L122 52V69C122 84 112 94 100 99C88 94 78 84 78 69V52Z" fill="none" stroke="#C9B9FF" stroke-width="3"/>
+      <path d="M89 69L97 77L112 61" fill="none" stroke="#C9B9FF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="100" y="132" text-anchor="middle" fill="#F5F1FF" font-size="20" font-weight="720">2 · Trust</text>
+      <text x="100" y="164" text-anchor="middle" fill="#AAA3BE" font-size="14">review all five</text>
+      <text x="100" y="186" text-anchor="middle" fill="#AAA3BE" font-size="14">lifecycle hooks</text>
+    </g>
+
+    <g transform="translate(668 174)">
+      <rect width="200" height="226" rx="26" fill="#102126" stroke="#48D7E8" stroke-opacity="0.78"/>
+      <circle cx="100" cy="68" r="34" fill="#16363D"/>
+      <circle cx="84" cy="63" r="8" fill="#48D7E8"/><circle cx="116" cy="63" r="8" fill="#48D7E8"/><circle cx="100" cy="86" r="8" fill="#48D7E8"/>
+      <path d="M89 67L96 80M111 67L104 80" stroke="#9BF0F7" stroke-width="2"/>
+      <text x="100" y="132" text-anchor="middle" fill="#ECFDFF" font-size="20" font-weight="720">3 · Activate</text>
+      <text x="100" y="164" text-anchor="middle" fill="#9CBCC0" font-size="14">six namespaced</text>
+      <text x="100" y="186" text-anchor="middle" fill="#9CBCC0" font-size="14">agent roles</text>
+    </g>
+
+    <g transform="translate(968 174)">
+      <rect width="200" height="226" rx="26" fill="#13201D" stroke="#65D7A2" stroke-opacity="0.72"/>
+      <circle cx="100" cy="68" r="34" fill="#193128"/>
+      <path d="M82 68L95 81L119 55" fill="none" stroke="#65D7A2" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="100" y="132" text-anchor="middle" fill="#F0FCF6" font-size="20" font-weight="720">4 · Check</text>
+      <text x="100" y="164" text-anchor="middle" fill="#A9C8B8" font-size="14">five trusted hooks</text>
+      <text x="100" y="186" text-anchor="middle" fill="#A9C8B8" font-size="14">+ current roles</text>
+    </g>
+
+    <g transform="translate(1268 174)">
+      <rect width="264" height="226" rx="26" fill="#251C11" stroke="#FDBA4A" stroke-opacity="0.78"/>
+      <circle cx="132" cy="68" r="34" fill="#3A2912"/>
+      <path d="M103 71H116L124 52L137 87L146 65H161" fill="none" stroke="#FDBA4A" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>
+      <text x="132" y="132" text-anchor="middle" fill="#FFF6E6" font-size="20" font-weight="720">5 · Live smoke</text>
+      <text x="132" y="164" text-anchor="middle" fill="#CCB99A" font-size="14">matching role + model</text>
+      <text x="132" y="186" text-anchor="middle" fill="#CCB99A" font-size="14">COMPLETE · 0 violations</text>
+    </g>
+
+    <g transform="translate(68 448)">
+      <rect width="1464" height="114" rx="24" fill="#141A24" stroke="#303A4A"/>
+      <rect x="24" y="22" width="436" height="70" rx="18" fill="#0E131B"/>
+      <text x="46" y="50" fill="#7FC6A3" font-size="13" font-weight="760">STATIC PROOF</text>
+      <text x="46" y="77" fill="#E7EDF4" font-size="17">scripts/check_hooks.py → ready: true</text>
+      <text x="504" y="64" fill="#566477" font-size="30">+</text>
+      <rect x="552" y="22" width="400" height="70" rx="18" fill="#0E131B"/>
+      <text x="574" y="50" fill="#D9BC85" font-size="13" font-weight="760">RUNTIME PROOF</text>
+      <text x="574" y="77" fill="#E7EDF4" font-size="17">successful non-current live ledger</text>
+      <text x="1002" y="64" fill="#566477" font-size="30">=</text>
+      <rect x="1050" y="22" width="390" height="70" rx="18" fill="#17241F" stroke="#65D7A2" stroke-opacity="0.5"/>
+      <text x="1245" y="51" text-anchor="middle" fill="#F0FCF6" font-size="18" font-weight="720">FULL ROUTING PROOF</text>
+      <text x="1245" y="76" text-anchor="middle" fill="#A9C8B8" font-size="14">Desktop smoke uses a fresh manual task</text>
+    </g>
+  </g>
+</svg>

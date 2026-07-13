@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1500" height="720" viewBox="0 0 1500 720" role="img" aria-labelledby="title desc">
-  <title id="title">Codex Autorouter profiles</title>
+  <title id="title">Autorouter profiles</title>
   <desc id="desc">Comparison of Token Saver, Balanced, and Max Quality routing profiles.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
@@ -21,7 +21,7 @@
       <path d="M36 142H384" stroke="#FFFFFF" stroke-opacity="0.08"/>
       <text x="36" y="188" fill="#F5F7FA" font-size="20" font-weight="650">How it behaves</text>
       <text x="36" y="230" fill="#B8C1CE" font-size="17">• One worker maximum</text>
-      <text x="36" y="266" fill="#B8C1CE" font-size="17">• No optional councils or fan-out</text>
+      <text x="36" y="266" fill="#B8C1CE" font-size="17">• No optional advisors or fan-out</text>
       <text x="36" y="302" fill="#B8C1CE" font-size="17">• Normal work steps down one tier</text>
       <rect x="36" y="344" width="348" height="62" rx="16" fill="#0D0F17"/>
       <text x="58" y="371" fill="#8F9CAF" font-size="14" font-weight="650">EXAMPLE</text>
@@ -39,7 +39,7 @@
       <text x="36" y="188" fill="#F5F7FA" font-size="20" font-weight="650">How it behaves</text>
       <text x="36" y="230" fill="#B8C9CC" font-size="17">• Uses the least sufficient route</text>
       <text x="36" y="266" fill="#B8C9CC" font-size="17">• Parallelizes only independent work</text>
-      <text x="36" y="302" fill="#B8C9CC" font-size="17">• Councils only when truly uncertain</text>
+      <text x="36" y="302" fill="#B8C9CC" font-size="17">• Read-only advisors only if uncertain</text>
       <rect x="36" y="344" width="348" height="62" rx="16" fill="#0B1518"/>
       <text x="58" y="371" fill="#7FA1A6" font-size="14" font-weight="650">EXAMPLE</text>
       <text x="58" y="394" fill="#E8F9FB" font-size="16">Terra Medium / High as needed</text>

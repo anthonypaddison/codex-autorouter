@@ -1,7 +1,7 @@
 {
   "name": "gpt-5-6-router",
-  "version": "0.1.0+codex.20260713074636",
-  "description": "Codex Autorouter automatically selects the right GPT-5.6 model, effort, and bounded agent plan for each task.",
+  "version": "0.1.0+codex.20260713131040",
+  "description": "Autorouter automatically selects the right GPT-5.6 model, effort, and bounded agent plan for each Codex task.",
   "author": {
     "name": "Alchemist"
   },
@@ -16,7 +16,7 @@
   ],
   "skills": "./skills/",
   "interface": {
-    "displayName": "Codex Autorouter",
+    "displayName": "Autorouter",
     "shortDescription": "The right model and effort for every Codex task",
     "longDescription": "Profiles each task, chooses an appropriate GPT-5.6 model and reasoning effort, orchestrates bounded subagents when useful, preserves Fast or Standard, and requires proportionate verification before completion.",
     "developerName": "Alchemist",

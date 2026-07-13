@@ -1,15 +1,15 @@
 # Release evidence
 
-Current source candidate: `0.1.0+codex.20260713074636`
+Current source candidate: `0.1.0+codex.20260713131040`
 Recorded: 2026-07-13
 
 ## Proven on the candidate source snapshot
 
 - Release, plugin, skill, and source-integrity validators pass.
-- 164 routing, profile-policy, activation, stale-cache dispatch, Stop-idempotency, checker, standalone, ownership, concurrency, and crash-recovery tests pass locally on macOS with Python 3.14.
+- 171 routing, profile-policy, activation, stale-cache dispatch, nested-tool verification, unobservable-result fail-open, wrapped Stop-idempotency, checker, standalone, ownership, concurrency, and crash-recovery tests pass locally on macOS with Python 3.14.
 - The deterministic routing fuzz suite passes 5,000 cases on every tested Python runtime.
-- GitHub Actions run [29231940583](https://github.com/vibeforge1111/Codex-Autorouter/actions/runs/29231940583) passes all 15 combinations of `ubuntu-latest`, `macos-latest`, and `windows-latest` with Python 3.10–3.14 on the six-role routing implementation at source snapshot `ccf0b39c92cccebd82264c08fbf711c52b44aaa1`. The current candidate changes only its cache version and this recorded evidence; its full local gate also passes.
-- Every hosted job validated the release, ran all 158 tests, ran 5,000 deterministic fuzz cases, and revalidated source integrity after execution.
+- GitHub Actions run [29233219101](https://github.com/vibeforge1111/Codex-Autorouter/actions/runs/29233219101) passes all 15 combinations of `ubuntu-latest`, `macos-latest`, and `windows-latest` with Python 3.10–3.14 at runtime snapshot `6e3a39f18055e3944ba27f9d46d65a3d5382b8ab`. The current candidate changes only user-facing Autorouter branding, README/docs, accessible SVG assets, and cache metadata; its full local runtime gate is repeated after those edits.
+- Every hosted job validated the release, ran all 164 tests, ran 5,000 deterministic fuzz cases, and revalidated source integrity after execution.
 - Hosted Windows tests exercise native file locking, atomic replacement, rollback, reparse-point refusal, hardlink handling, concurrency, and crash recovery; the Windows Desktop and CLI product surfaces remain separate real-host gates.
 - Fifty consecutive concurrent first-install stress rounds pass; a deterministic delayed-marker writer proves contenders wait for an exclusive standalone state claim to finish.
 - Every declared activation and standalone transaction boundary has rollback-or-commit coverage, including preservation of post-crash edits and terminal purge recovery.
@@ -20,20 +20,30 @@ Recorded: 2026-07-13
 ## Proven on the exact installed candidate
 
 - The installed cache is byte-for-byte identical to the candidate source.
-- App-server discovered the exact cached skill plus five enabled, trusted, error-free plugin hooks; all private-beta local custom-agent files were active and current. The new six-role candidate still requires an exact-build replay.
-- Installed-cache hook smokes on precursor cache `0.1.0+codex.20260713064025` proved Token Saver selected one Terra Medium worker, Max Quality selected one Sol Medium owner for the same ambiguous diagnosis, both preserved Fast, and the persistent preference was restored to Balanced afterward; the final cache changes only release metadata.
+- App-server discovered candidate `0.1.0+codex.20260713131040`, the exact cached skill, five enabled and trusted error-free plugin hooks, and six active current custom-agent definitions; `scripts/check_hooks.py` returned `ready: true` with no warnings or errors.
+- A fresh Codex CLI session started without another hook-review prompt after trust was recorded, proving the five unchanged definitions remained active across the cache replacement.
+- Installed-cache hook smokes on precursor cache `0.1.0+codex.20260713064025` proved Token Saver selected one Terra Medium worker, Max Quality selected one Sol Medium owner for the same ambiguous diagnosis, both preserved Fast, and the persistent preference was restored to Balanced afterward. The current candidate additionally hardens stale-hook dispatch, makes verification-only Stop state silent, and refreshes the public branding and documentation.
 - The preference survived immutable cache replacement, accepted every valid profile through the installed CLI, and remained independent of agent activation state.
-- A live macOS CLI security-analysis prompt selected the private-beta Sol High specialist with an exact custom `agent_type`, `fork_turns: "none"`, and no model, effort, or service-tier override.
-- The child lifecycle attested model `gpt-5.6-sol`, configured effort `high`, and inherited Fast service tier.
-- The nonce-bound ledger completed with route label `Sol High Fast`, exactly one required custom specialist, zero continuations, status `COMPLETE`, and zero violations.
+- A live macOS CLI security-analysis prompt on precursor candidate `0.1.0+codex.20260713113358` started from a Terra Medium root and selected `Terra Medium Fast ×2 → Sol High Fast`, the current Balanced consequential-work plan. Because the current candidate changes hook event normalization, the exact-candidate delegated CLI row must be replayed before public-stable release.
+- Two `gpt56_terra_worker` evidence leaves and one `gpt56_sol_deep` owner launched with exact custom `agent_type`, `fork_turns: "none"`, and no model, effort, or service-tier override. Lifecycle events attested both Terra models at configured Medium intent and the Sol model at configured High intent; all three inherited Fast and reported no mutation or recursive spawn.
+- The nonce-bound precursor ledger recorded plugin version `0.1.0+codex.20260713113358`, all three required agents complete, zero continuations, status `COMPLETE`, and zero violations.
 - The final response matched the bounded acceptance token `ROUTER_DELEGATED_OK`.
+- The first post-reinstall app-server readiness probe timed out during local Codex state-database slowness; an immediate retry returned `ready: true`. The ephemeral CLI smoke also logged transcript-path fallback warnings, but stable lifecycle events attested every required child and the completed ledger retained zero violations. These host warnings did not require a router retry or weaken an acceptance check.
 - The same runtime code passed five consecutive fresh-task delegated stability trials on precursor build `0.1.0+codex.20260713013700`; every ledger had the exact Sol High specialist, zero continuations, `COMPLETE`, and zero violations. The final documentation-only cache build was then replayed once against the same gate.
 - The extracted release ZIP passed a clean-room standalone lifecycle under a fresh canonical `CODEX_HOME`: inactive status, install, identical idempotent reinstall, agent activation, status, repair, deactivation, durable-controller status and uninstall, controller purge, and final target/agent absence checks.
 - The same clean-room test confirmed that a symlinked `/var` temporary ancestor is refused while its canonical `/private/var` physical path succeeds, preserving the path-safety contract on macOS.
 
+## README and visual QA
+
+- The user-facing plugin name is **Autorouter**. The technical `gpt-5-6-router` package ID remains stable so existing preferences, plugin state, and upgrades are not stranded.
+- The README presents six accessible SVG assets: icon/hero, model-effort routing map, profile comparison, bounded-subagent orchestration, routing architecture, and install-to-live-proof readiness.
+- Every SVG parses as valid XML, includes an accessible title and description, renders successfully at 1,600 pixels wide, and was visually inspected for clipping, contrast, and text legibility.
+- Every local README image and documentation link resolves in the candidate tree.
+
 ## Regressions caught by live acceptance
 
 - A pre-fix open task retained an absolute command into a retired plugin cache. Its successful `pnpm verify:fast` was not recognized, the carried mutation generation remained unpaid, and terminal `FAILED_OPEN` stops emitted another system message. The hook command now resolves the newest installed sibling cache, package `verify:*` scripts count only with successful tool evidence, completion feedback is carried once, and terminal Stop delivery is idempotent.
+- A later open-task replay exposed a second adapter defect: Codex's orchestration tool returns nested command inputs while unified-exec `PostToolUse` interception may omit the result entirely. The hook recognized the test command but could not prove its successful exit code, leaving mutation generations unpaid and producing the misleading gate `answer check after the final mutation`. The adapter now extracts literal nested commands, safely decodes bounded JSON result blocks when available, recognizes environment-prefixed verification, promotes any post-route mutation to a test/build gate, and discards the app's XML-wrapped legacy feedback instead of treating it as a new task. Verification state—including observable failure or unavailable results—is recorded silently for root ownership and can no longer inject Stop feedback; hard routing and orchestration violations remain independently enforceable.
 
 - Candidate `0.1.0+codex.20260713005838` used the custom role only as `task_name`; Codex launched built-in `default`. The completion hook rejected it.
 - Candidate `0.1.0+codex.20260713012039` added `agent_type`, but the model's first attempt used the default full-history fork. Codex inherited `default`; a corrective custom spawn succeeded, but the ledger correctly remained `FAILED_OPEN` because the unexpected worker could not be erased.

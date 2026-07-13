@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="820" viewBox="0 0 1600 820" role="img" aria-labelledby="title desc">
+  <title id="title">Autorouter subagent orchestration patterns</title>
+  <desc id="desc">Three bounded execution patterns: direct work, parallel independent leaves, and Terra evidence followed by a Sol owner.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#090C13"/>
+      <stop offset="1" stop-color="#111824"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+      <path d="M0 0L10 5L0 10Z" fill="#59677A"/>
+    </marker>
+  </defs>
+  <rect width="1600" height="820" rx="34" fill="url(#bg)"/>
+
+  <g font-family="Inter, ui-sans-serif, system-ui, sans-serif">
+    <text x="70" y="70" fill="#F8FAFC" font-size="38" font-weight="760">Subagents only when they reduce total work</text>
+    <text x="70" y="108" fill="#95A2B5" font-size="19">No mandatory model ladder. No recursive fan-out. The root agent always owns final acceptance.</text>
+
+    <g transform="translate(70 164)">
+      <rect width="450" height="500" rx="28" fill="#151B26" stroke="#334052"/>
+      <rect x="30" y="28" width="82" height="34" rx="17" fill="#222B38"/>
+      <text x="71" y="51" text-anchor="middle" fill="#C8D1DE" font-size="12" font-weight="760">DEFAULT</text>
+      <text x="30" y="104" fill="#F5F7FA" font-size="28" font-weight="750">Stay direct</text>
+      <text x="30" y="137" fill="#9EAABC" font-size="16">Small, single-path work stays current.</text>
+
+      <g transform="translate(70 196)">
+        <circle cx="155" cy="74" r="58" fill="#1B2431" stroke="#48D7E8" stroke-opacity="0.7"/>
+        <circle cx="155" cy="74" r="18" fill="#48D7E8"/>
+        <text x="155" y="160" text-anchor="middle" fill="#E7EDF4" font-size="18" font-weight="680">current agent</text>
+        <path d="M95 74C55 74 55 178 155 178C255 178 255 74 215 74" fill="none" stroke="#59677A" stroke-width="3" marker-end="url(#arrow)"/>
+        <text x="155" y="218" text-anchor="middle" fill="#8E9BAD" font-size="15">execute → verify → answer</text>
+      </g>
+
+      <rect x="30" y="430" width="390" height="42" rx="16" fill="#0D1118"/>
+      <text x="225" y="457" text-anchor="middle" fill="#AAB5C3" font-size="15">avoids handoff and context overhead</text>
+    </g>
+
+    <g transform="translate(575 164)">
+      <rect width="450" height="500" rx="28" fill="#151724" stroke="#A78BFA" stroke-opacity="0.65"/>
+      <text x="30" y="60" fill="#C9B9FF" font-size="13" font-weight="760" letter-spacing="1.1">INDEPENDENT UNITS</text>
+      <text x="30" y="104" fill="#F5F1FF" font-size="28" font-weight="750">Parallel leaves</text>
+      <text x="30" y="137" fill="#AAA3BE" font-size="16">Split only cleanly separable work.</text>
+
+      <g transform="translate(42 184)">
+        <rect x="126" y="0" width="114" height="54" rx="18" fill="#1A2230" stroke="#526075"/>
+        <text x="183" y="34" text-anchor="middle" fill="#F3F6FA" font-size="16" font-weight="700">root</text>
+        <path d="M183 54V88M183 88H55V118M183 88V118M183 88H311V118" fill="none" stroke="#59677A" stroke-width="3"/>
+        <g transform="translate(0 118)">
+          <circle cx="55" cy="55" r="46" fill="#211B34" stroke="#A78BFA"/>
+          <text x="55" y="50" text-anchor="middle" fill="#F4F0FF" font-size="15" font-weight="700">Luna</text>
+          <text x="55" y="70" text-anchor="middle" fill="#AFA5C5" font-size="11">unit A</text>
+        </g>
+        <g transform="translate(128 118)">
+          <circle cx="55" cy="55" r="46" fill="#11262B" stroke="#48D7E8"/>
+          <text x="55" y="50" text-anchor="middle" fill="#E8FDFF" font-size="15" font-weight="700">Terra</text>
+          <text x="55" y="70" text-anchor="middle" fill="#9CBCC0" font-size="11">unit B</text>
+        </g>
+        <g transform="translate(256 118)">
+          <circle cx="55" cy="55" r="46" fill="#11262B" stroke="#48D7E8"/>
+          <text x="55" y="50" text-anchor="middle" fill="#E8FDFF" font-size="15" font-weight="700">Terra</text>
+          <text x="55" y="70" text-anchor="middle" fill="#9CBCC0" font-size="11">unit C</text>
+        </g>
+        <path d="M55 228V258H183M183 228V280M311 228V258H183" fill="none" stroke="#59677A" stroke-width="3" marker-end="url(#arrow)"/>
+        <text x="183" y="302" text-anchor="middle" fill="#C8D1DE" font-size="15" font-weight="680">root checks coverage + conflicts</text>
+      </g>
+    </g>
+
+    <g transform="translate(1080 164)">
+      <rect width="450" height="500" rx="28" fill="#211A12" stroke="#FDBA4A" stroke-opacity="0.72"/>
+      <text x="30" y="60" fill="#D9BC85" font-size="13" font-weight="760" letter-spacing="1.1">CONSEQUENTIAL WORK</text>
+      <text x="30" y="104" fill="#FFF6E6" font-size="28" font-weight="750">Evidence → owner</text>
+      <text x="30" y="137" fill="#C6B499" font-size="16">Gather cheaply, then give one agent ownership.</text>
+
+      <g transform="translate(48 184)">
+        <g transform="translate(0 0)">
+          <circle cx="64" cy="54" r="48" fill="#10262B" stroke="#48D7E8"/>
+          <text x="64" y="50" text-anchor="middle" fill="#E8FDFF" font-size="15" font-weight="700">Terra</text>
+          <text x="64" y="70" text-anchor="middle" fill="#9CBCC0" font-size="11">evidence A</text>
+        </g>
+        <g transform="translate(0 126)">
+          <circle cx="64" cy="54" r="48" fill="#10262B" stroke="#48D7E8"/>
+          <text x="64" y="50" text-anchor="middle" fill="#E8FDFF" font-size="15" font-weight="700">Terra</text>
+          <text x="64" y="70" text-anchor="middle" fill="#9CBCC0" font-size="11">evidence B</text>
+        </g>
+        <path d="M112 54H186M112 180H156V54H186" fill="none" stroke="#59677A" stroke-width="3" marker-end="url(#arrow)"/>
+        <circle cx="244" cy="54" r="58" fill="#2B2112" stroke="#FDBA4A" stroke-width="2"/>
+        <text x="244" y="49" text-anchor="middle" fill="#FFF6E6" font-size="18" font-weight="740">Sol</text>
+        <text x="244" y="72" text-anchor="middle" fill="#CCB99A" font-size="11">owns outcome</text>
+        <path d="M244 112V190" fill="none" stroke="#59677A" stroke-width="3" marker-end="url(#arrow)"/>
+        <rect x="176" y="190" width="136" height="54" rx="18" fill="#1A2230" stroke="#526075"/>
+        <text x="244" y="224" text-anchor="middle" fill="#F3F6FA" font-size="16" font-weight="700">root verifies</text>
+        <text x="177" y="292" text-anchor="middle" fill="#B7A487" font-size="14">distilled evidence only</text>
+      </g>
+    </g>
+
+    <g transform="translate(70 706)">
+      <rect width="1460" height="72" rx="24" fill="#141A24" stroke="#303A4A"/>
+      <text x="32" y="31" fill="#F1F5F9" font-size="18" font-weight="700">Hard limits:</text>
+      <text x="142" y="31" fill="#BCC6D3" font-size="18">depth 1 · maximum 3 agents · one evidence-backed route-up</text>
+      <text x="32" y="55" fill="#8F9CAF" font-size="15">When advisors disagree, the deterministic route remains—there is no separate judge role.</text>
+      <text x="1428" y="43" text-anchor="end" fill="#65D7A2" font-size="14" font-weight="700">ROOT ACCEPTS OR REJECTS</text>
+    </g>
+  </g>
+</svg>

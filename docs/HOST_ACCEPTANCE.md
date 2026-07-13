@@ -19,7 +19,7 @@ A passing route requires `COMPLETE`, the expected custom role and model, zero un
 
 ## CLI plugin smoke
 
-1. Install the exact marketplace version and start a fresh task.
+1. Install the exact marketplace version and start a fresh Terra Medium task. This acceptance root is intentionally below the required Sol route so the smoke proves real delegation rather than legitimately staying in an already-capable Sol High root.
 2. Review and trust the five plugin hooks.
 3. From the installed cache root, run:
 
@@ -33,14 +33,14 @@ A passing route requires `COMPLETE`, the expected custom role and model, zero un
 
    > Perform a bounded security review of this hypothetical only; do not inspect files or use shell tools. The handler verifies an RS256 signature, pins issuer and audience, validates exp and nbf, binds tenant_id to the authenticated account, requires exact admin:write scope, rejects missing claims, and rejects alg none. Follow the installed GPT-5.6 routing policy exactly. The specialist must return Evidence:, Verification:, and Uncertainty:. After verifying it, reply exactly ROUTER_DELEGATED_OK.
 
-6. Confirm `Sol High Fast` or the truthful current speed label, one `gpt56_sol_deep` child, Sol/high attestation, inherited speed, zero continuations, `COMPLETE`, zero violations, and `ROUTER_DELEGATED_OK`.
+6. Confirm `Terra Medium Fast ×2 → Sol High Fast` or the truthful current speed label, two `gpt56_terra_worker` evidence children, one `gpt56_sol_deep` owner, matching Terra/medium and Sol/high attestations, inherited speed, zero continuations, `COMPLETE`, zero violations, and `ROUTER_DELEGATED_OK`.
 7. Purge test ledgers if desired, deactivate the agents, and confirm owned files are removed or reviewed originals are restored.
 
 On native Windows use `py -3` where `python3` is unavailable. Exercise the Windows lock, atomic replacement, rollback, reparse-point, and hardlink cases through the automated suite before accepting the host.
 
 ## Desktop plugin smoke
 
-1. Install or enable the exact candidate, then fully start a new Desktop task so discovery is not inherited from an older task.
+1. Install or enable the exact candidate, then fully start a new Terra Medium Desktop task so discovery is not inherited from an older task and the smoke must exercise a higher-capability delegated route.
 2. Open `/hooks`, inspect the exact five entries, and trust them. Changed definitions must require renewed trust.
 3. Activate the six custom agents from the exact installed cache and run `scripts/check_hooks.py`.
 4. Submit the same bounded security prompt above in the new Desktop task.

@@ -1,24 +1,9 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
-  <title id="title">Codex Autorouter</title>
-  <desc id="desc">Three colored route points orbiting a central routing core.</desc>
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#101521"/>
-      <stop offset="1" stop-color="#080B11"/>
-    </linearGradient>
-    <linearGradient id="route" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#A78BFA"/>
-      <stop offset="0.52" stop-color="#48D7E8"/>
-      <stop offset="1" stop-color="#FDBA4A"/>
-    </linearGradient>
-  </defs>
-  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
-  <circle cx="128" cy="128" r="88" fill="#121925" stroke="#334055" stroke-width="4"/>
-  <circle cx="128" cy="128" r="50" fill="none" stroke="#48D7E8" stroke-opacity="0.82" stroke-width="5"/>
-  <path d="M56 131C75 73 150 57 196 99C226 127 207 183 162 202" fill="none" stroke="#283448" stroke-width="16" stroke-linecap="round"/>
-  <path d="M56 131C75 73 150 57 196 99C226 127 207 183 162 202" fill="none" stroke="url(#route)" stroke-width="8" stroke-linecap="round"/>
-  <circle cx="56" cy="131" r="15" fill="#A78BFA"/>
-  <circle cx="198" cy="101" r="15" fill="#48D7E8"/>
-  <circle cx="162" cy="202" r="17" fill="#FDBA4A"/>
-  <circle cx="128" cy="128" r="14" fill="#F8FAFC"/>
+  <title id="title">Autorouter</title>
+  <desc id="desc">Three dotted inputs merging into one routed output arrow.</desc>
+  <rect width="256" height="256" rx="56" fill="#080B10"/>
+  <path d="M55 70L123 128M55 128H123M55 186L123 128M119 128H199M178 107L200 128L178 149" fill="none" stroke="#FFFFFF" stroke-width="15" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="55" cy="70" r="11" fill="#FFFFFF"/>
+  <circle cx="55" cy="128" r="11" fill="#FFFFFF"/>
+  <circle cx="55" cy="186" r="11" fill="#FFFFFF"/>
 </svg>

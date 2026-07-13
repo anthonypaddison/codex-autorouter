@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="860" viewBox="0 0 1600 860" role="img" aria-labelledby="title desc">
+  <title id="title">Autorouter model and effort map</title>
+  <desc id="desc">A practical comparison of when Autorouter uses Luna, Terra, and Sol, including their reasoning efforts and safety boundaries.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#080B12"/>
+      <stop offset="1" stop-color="#101722"/>
+    </linearGradient>
+    <linearGradient id="route" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#A78BFA"/>
+      <stop offset="0.5" stop-color="#48D7E8"/>
+      <stop offset="1" stop-color="#FDBA4A"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1600" height="860" rx="34" fill="url(#bg)"/>
+  <path d="M72 132H1528" stroke="url(#route)" stroke-width="3" opacity="0.8"/>
+
+  <g font-family="Inter, ui-sans-serif, system-ui, sans-serif">
+    <text x="72" y="70" fill="#F8FAFC" font-size="38" font-weight="760">Use the least expensive route that can finish correctly</text>
+    <text x="72" y="108" fill="#95A2B5" font-size="19">Model family handles capability. Reasoning effort handles uncertainty and edge cases.</text>
+
+    <g transform="translate(70 174)">
+      <rect width="450" height="540" rx="28" fill="#171526" stroke="#A78BFA" stroke-opacity="0.7"/>
+      <circle cx="48" cy="50" r="12" fill="#A78BFA"/>
+      <text x="76" y="60" fill="#F5F1FF" font-size="32" font-weight="760">Luna</text>
+      <rect x="318" y="30" width="96" height="36" rx="18" fill="#28223C"/>
+      <text x="366" y="54" text-anchor="middle" fill="#C9B9FF" font-size="14" font-weight="760">LOW</text>
+      <text x="36" y="108" fill="#AAA3BE" font-size="18">Narrow, explicit, objectively checked</text>
+      <path d="M36 138H414" stroke="#FFFFFF" stroke-opacity="0.08"/>
+
+      <text x="36" y="184" fill="#F8FAFC" font-size="20" font-weight="700">Best for</text>
+      <text x="36" y="226" fill="#C3BCD2" font-size="17">• repeated mechanical edits</text>
+      <text x="36" y="262" fill="#C3BCD2" font-size="17">• fixed-schema extraction</text>
+      <text x="36" y="298" fill="#C3BCD2" font-size="17">• formatting and case expansion</text>
+      <text x="36" y="334" fill="#C3BCD2" font-size="17">• complete rules with cheap tests</text>
+
+      <rect x="36" y="372" width="378" height="116" rx="18" fill="#0E0D16" stroke="#332B4B"/>
+      <text x="58" y="402" fill="#A99BC9" font-size="13" font-weight="760" letter-spacing="1.2">NOT A SCOUT</text>
+      <text x="58" y="434" fill="#E2DDED" font-size="16">No discovery, architecture, root-cause</text>
+      <text x="58" y="462" fill="#E2DDED" font-size="16">analysis, or consequential ownership.</text>
+      <text x="36" y="520" fill="#8F88A1" font-size="15">Use only when verification is cheap.</text>
+    </g>
+
+    <g transform="translate(575 174)">
+      <rect width="450" height="540" rx="28" fill="#102126" stroke="#48D7E8" stroke-width="2"/>
+      <circle cx="48" cy="50" r="12" fill="#48D7E8"/>
+      <text x="76" y="60" fill="#ECFDFF" font-size="32" font-weight="760">Terra</text>
+      <text x="36" y="108" fill="#9CBCC0" font-size="18">The cost-effective workhorse</text>
+      <path d="M36 138H414" stroke="#FFFFFF" stroke-opacity="0.08"/>
+
+      <rect x="36" y="168" width="378" height="142" rx="18" fill="#0B171A" stroke="#28535A"/>
+      <rect x="58" y="190" width="92" height="30" rx="15" fill="#183D43"/>
+      <text x="104" y="211" text-anchor="middle" fill="#7BE3EE" font-size="12" font-weight="760">MEDIUM</text>
+      <text x="58" y="248" fill="#F0FAFB" font-size="18" font-weight="680">Explore · implement · process</text>
+      <text x="58" y="278" fill="#ADC7CA" font-size="16">ordinary code, docs, data, integrations</text>
+
+      <rect x="36" y="330" width="378" height="142" rx="18" fill="#0B171A" stroke="#28535A"/>
+      <rect x="58" y="352" width="74" height="30" rx="15" fill="#183D43"/>
+      <text x="95" y="373" text-anchor="middle" fill="#7BE3EE" font-size="12" font-weight="760">HIGH</text>
+      <text x="58" y="410" fill="#F0FAFB" font-size="18" font-weight="680">Resolve ambiguity and edge cases</text>
+      <text x="58" y="440" fill="#ADC7CA" font-size="16">flaky CI, subtle bugs, complex validation</text>
+
+      <text x="36" y="502" fill="#89A9AD" font-size="15">Raise effort before capability when</text>
+      <text x="36" y="525" fill="#89A9AD" font-size="15">uncertainty—not model ceiling—is the issue.</text>
+    </g>
+
+    <g transform="translate(1080 174)">
+      <rect width="450" height="540" rx="28" fill="#251C11" stroke="#FDBA4A" stroke-opacity="0.76"/>
+      <circle cx="48" cy="50" r="12" fill="#FDBA4A"/>
+      <text x="76" y="60" fill="#FFF6E6" font-size="32" font-weight="760">Sol</text>
+      <text x="36" y="108" fill="#CCB99A" font-size="18">Deep ownership when capability matters</text>
+      <path d="M36 138H414" stroke="#FFFFFF" stroke-opacity="0.08"/>
+
+      <g transform="translate(36 168)">
+        <rect width="378" height="82" rx="18" fill="#17120C" stroke="#5A4525"/>
+        <text x="22" y="30" fill="#DABF8E" font-size="13" font-weight="760">MEDIUM</text>
+        <text x="22" y="60" fill="#FFF3DE" font-size="17">architecture · migrations · synthesis</text>
+      </g>
+      <g transform="translate(36 266)">
+        <rect width="378" height="82" rx="18" fill="#17120C" stroke="#5A4525"/>
+        <text x="22" y="30" fill="#DABF8E" font-size="13" font-weight="760">HIGH</text>
+        <text x="22" y="60" fill="#FFF3DE" font-size="17">hard security · expensive-to-reverse</text>
+      </g>
+      <g transform="translate(36 364)">
+        <rect width="378" height="100" rx="18" fill="#17120C" stroke="#8C692D"/>
+        <text x="22" y="30" fill="#FFD98E" font-size="13" font-weight="760">EXTRA HIGH · MAX QUALITY ONLY</text>
+        <text x="22" y="60" fill="#FFF3DE" font-size="17">hardest deep-debugging, security,</text>
+        <text x="22" y="84" fill="#FFF3DE" font-size="17">research, and critical changes</text>
+      </g>
+      <text x="36" y="502" fill="#B7A487" font-size="15">Not a default. Use when extra depth is</text>
+      <text x="36" y="525" fill="#B7A487" font-size="15">likely to improve the verified outcome.</text>
+    </g>
+
+    <g transform="translate(70 752)">
+      <rect width="1460" height="70" rx="24" fill="#141A24" stroke="#303A4A"/>
+      <circle cx="40" cy="35" r="10" fill="#65D7A2"/>
+      <text x="68" y="31" fill="#F1F5F9" font-size="18" font-weight="700">Safety floors never step down.</text>
+      <text x="68" y="54" fill="#9CA9BA" font-size="15">Security, payments, privacy, production, destructive actions, and other high-risk work keep their required capability.</text>
+      <text x="1418" y="43" text-anchor="end" fill="#7F8C9E" font-size="14">Fast / Standard stays independent</text>
+    </g>
+  </g>
+</svg>

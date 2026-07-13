@@ -218,7 +218,11 @@ NATURAL_CONTINUATION = re.compile(
     r"proceed|go ahead)(?:\s+please)?\s*[.!]*\s*$",
     re.I,
 )
-ROUTER_CONTINUATION = re.compile(r"^\s*Router completion gate:\s*", re.I)
+ROUTER_CONTINUATION = re.compile(
+    r"^\s*(?:<hook_prompt\b[^>]*>\s*)?Router completion gate:\s*.+?"
+    r"(?:\s*</hook_prompt>)?\s*$",
+    re.I | re.S,
+)
 
 
 def _route(route: str, confidence: float, reason: str, verification: str, parallel: bool = False) -> dict[str, Any]:
@@ -1231,15 +1235,56 @@ def _context(decision: dict[str, Any]) -> str:
 
 def _command_from(data: dict[str, Any]) -> str:
     tool_input = data.get("tool_input")
+    if isinstance(tool_input, str):
+        return tool_input
     if not isinstance(tool_input, dict):
         return ""
-    return str(tool_input.get("command") or tool_input.get("cmd") or "")
+    return str(
+        tool_input.get("command")
+        or tool_input.get("cmd")
+        or tool_input.get("source")
+        or tool_input.get("input")
+        or ""
+    )
 
 
-def _response_succeeded(response: Any) -> bool:
+def _embedded_command_values(source: str) -> list[str]:
+    """Extract literal command/cmd fields from JavaScript tool orchestration."""
+    values: list[str] = []
+    field = re.compile(r"\b(?:command|cmd)\s*:\s*([`\"'])")
+    for match in field.finditer(source):
+        quote = match.group(1)
+        cursor = match.end()
+        escaped = False
+        collected: list[str] = []
+        while cursor < len(source):
+            character = source[cursor]
+            cursor += 1
+            if escaped:
+                collected.append(character)
+                escaped = False
+            elif character == "\\":
+                collected.append(character)
+                escaped = True
+            elif character == quote:
+                values.append("".join(collected))
+                break
+            else:
+                collected.append(character)
+    return values
+
+
+def _command_candidates(command: str) -> list[str]:
+    embedded = _embedded_command_values(command)
+    return embedded if embedded else [command]
+
+
+def _response_status(response: Any) -> bool | None:
     evidence: list[bool] = []
 
-    def visit(value: Any) -> None:
+    def visit(value: Any, depth: int = 0) -> None:
+        if depth > 20:
+            return
         if isinstance(value, dict):
             for key, child in value.items():
                 if key in {"exit_code", "exitCode"}:
@@ -1249,13 +1294,30 @@ def _response_succeeded(response: Any) -> bool:
                 elif key == "status" and child in {"success", "completed", "ok", "failed", "error"}:
                     evidence.append(child in {"success", "completed", "ok"})
                 else:
-                    visit(child)
+                    visit(child, depth + 1)
         elif isinstance(value, list):
             for child in value:
-                visit(child)
+                visit(child, depth + 1)
+        elif isinstance(value, str):
+            candidate = value.strip()
+            if len(candidate) > 2 * 1024 * 1024:
+                return
+            json_candidate = candidate
+            if candidate.startswith("Script completed") and "\nOutput:\n" in candidate:
+                json_candidate = candidate.rsplit("\nOutput:\n", 1)[1].strip()
+            if json_candidate[:1] in {"{", "["}:
+                try:
+                    decoded = json.loads(json_candidate)
+                except json.JSONDecodeError:
+                    return
+                visit(decoded, depth + 1)
 
     visit(response)
-    return bool(evidence) and all(evidence)
+    return all(evidence) if evidence else None
+
+
+def _response_succeeded(response: Any) -> bool:
+    return _response_status(response) is True
 
 
 def _is_mutation(tool: str, command: str) -> bool:
@@ -1263,13 +1325,25 @@ def _is_mutation(tool: str, command: str) -> bool:
         return True
     if tool.startswith("mcp__") and re.search(r"(?:^|__)(?:create|update|write|delete|execute|apply)(?:_|$)", tool, re.I):
         return True
-    return bool(re.search(r"(?:^|[;&|]\s*)(?:rm|mv|cp|mkdir|touch|install)\b|\bsed\s+-i\b|\bgit\s+(?:commit|push|merge)\b|(?:^|\s)>{1,2}\s*\S", command, re.I))
+    if tool in {"exec", "functions.exec"} and re.search(r"\btools\.apply_patch\s*\(", command):
+        return True
+    mutation = re.compile(
+        r"(?:^|[;&|\n]\s*|\\n\s*)(?:rm|mv|cp|mkdir|touch|install|rsync)\b|\bsed\s+-i\b|"
+        r"\bgit\s+(?:commit|push|merge)\b|(?:^|\s)>{1,2}\s*\S",
+        re.I,
+    )
+    return any(mutation.search(candidate) for candidate in _command_candidates(command))
 
 
 def _is_verification(command: str) -> bool:
-    segments = re.split(r"(?:^|[;&|]\s*)", command)
+    segments = [
+        segment
+        for candidate in _command_candidates(command)
+        for segment in re.split(r"(?:^|[;&|\n]\s*|\\n\s*)", candidate)
+    ]
     verifier = re.compile(
-        r"^\s*(?:(?:python\d*(?:\.\d+)?|uv\s+run|poetry\s+run)\s+(?:-m\s+)?(?:pytest|unittest|mypy|ruff|py_compile|json\.tool)|"
+        r"^\s*(?:(?:env\s+)?(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)+)?"
+        r"(?:(?:python\d*(?:\.\d+)?|uv\s+run|poetry\s+run)\s+(?:-m\s+)?(?:pytest|unittest|mypy|ruff|py_compile|json\.tool)|"
         r"pytest|ruff|mypy|eslint|biome|tsc|rspec|rubocop|"
         r"(?:npm|pnpm|yarn)\s+(?:(?:run\s+)?(?:test|lint|typecheck|build|verify(?::[\w.-]+)?|check(?::[\w.-]+)?|ci(?::[\w.-]+)?)|test)|"
         r"cargo\s+(?:test|check|build)|go\s+test|swift\s+test|"
@@ -1277,6 +1351,13 @@ def _is_verification(command: str) -> bool:
         re.I,
     )
     return any(verifier.search(segment) for segment in segments)
+
+
+def _effective_verification(state: dict[str, Any]) -> str:
+    verification = str(state["decision"].get("verification") or "evidence check")
+    if state.get("mutation_generation", 0) > 0 and verification in {"answer check", "evidence check"}:
+        return "targeted tests or build"
+    return verification
 
 
 def _structured_return(message: str) -> bool:
@@ -1539,6 +1620,9 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             "mutation_generation": 0,
             "verification_attempts": 0,
             "verification_successes": 0,
+            "verification_failures": 0,
+            "verification_unobservable_attempts": 0,
+            "last_unobservable_verification_generation": -1,
             "verified_generation": -1,
             "continuations": 0,
             "violations": [],
@@ -1634,9 +1718,15 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
                 state["violations"].append(f"advisor_mutation:{agent_id}")
         if _is_verification(command):
             state["verification_attempts"] += 1
-            if _response_succeeded(data.get("tool_response")):
+            response_status = _response_status(data.get("tool_response"))
+            if response_status is True:
                 state["verification_successes"] += 1
                 state["verified_generation"] = state.get("mutation_generation", 0)
+            elif response_status is False:
+                state["verification_failures"] = state.get("verification_failures", 0) + 1
+            else:
+                state["verification_unobservable_attempts"] = state.get("verification_unobservable_attempts", 0) + 1
+                state["last_unobservable_verification_generation"] = state.get("mutation_generation", 0)
         _write_state(data, state)
         return None
 
@@ -1776,8 +1866,9 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
                     problems.append("execute with the exact routing-council selected role")
         if any(item.startswith(("unexpected_agent:", "worker_cap_exceeded:", "ordering_violation:", "advisor_mutation:")) for item in state["violations"]):
             problems.append("resolve unexpected-agent, worker-cap, orchestration-order, or advisor-mutation violations")
+        verification_problem = None
         if state.get("mutation_generation", 0) > 0 and state.get("mutation_generation", 0) > state.get("verified_generation", -1):
-            problems.append(f"run the required verification gate after the final mutation: {decision['verification']}")
+            verification_problem = f"run the required verification gate after the final mutation: {_effective_verification(state)}"
         matched_counts: dict[str, int] = {}
         mismatched_required = False
         for agent_id, attestation in state.get("agent_attestations", {}).items():
@@ -1808,6 +1899,20 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
                         problems.append(f"routing advisor `{agent_id}` delegated recursively")
         if plan["required_agents"] and not state.get("service_tier_inheritance_verified", False):
             problems.append("spawn the child without a service-tier override so it inherits the UI Fast setting")
+        # PostToolUse does not reliably expose unified-exec results. Keep
+        # verification debt in the ledger for the root agent, but never turn it
+        # into Stop-hook feedback by itself. Routing/orchestration violations
+        # remain enforceable below.
+        if verification_problem is not None and not problems:
+            state["status"] = "FAILED_OPEN"
+            state["verification_observability"] = (
+                "unavailable"
+                if state.get("last_unobservable_verification_generation", -1) >= state.get("mutation_generation", 0)
+                else "root_owned"
+            )
+            state["failed_open_problems"] = [verification_problem]
+            _write_state(data, state)
+            return {"continue": True}
         if problems and not data.get("stop_hook_active") and state["continuations"] < decision["max_escalations"]:
             state["continuations"] += 1
             state["violations"].extend(problems)

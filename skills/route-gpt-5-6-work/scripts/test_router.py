@@ -708,10 +708,10 @@ class RouterTests(unittest.TestCase):
         second = router_hook.handle(stop)
         self.assertTrue(second["continue"])
 
-    def test_edit_requires_successful_verification(self) -> None:
+    def test_edit_records_verification_debt_without_stop_feedback(self) -> None:
         start = {
             "hook_event_name": "UserPromptSubmit", "session_id": "s3", "turn_id": "t3",
-            "model": "gpt-5.6-terra", "prompt": "Fix the typo in this file.",
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo in this file.",
         }
         router_hook.handle(start)
         router_hook.handle({
@@ -721,12 +721,15 @@ class RouterTests(unittest.TestCase):
         stop = router_hook.handle({
             "hook_event_name": "Stop", "session_id": "s3", "turn_id": "t3", "stop_hook_active": False,
         })
-        self.assertEqual("block", stop["decision"])
+        self.assertEqual({"continue": True}, stop)
+        state = json.loads((Path(self.temp.name) / "s3--t3.json").read_text())
+        self.assertEqual("FAILED_OPEN", state["status"])
+        self.assertEqual("root_owned", state["verification_observability"])
 
     def test_verification_must_follow_final_mutation(self) -> None:
         start = {
             "hook_event_name": "UserPromptSubmit", "session_id": "generation", "turn_id": "t1",
-            "model": "gpt-5.6-terra", "prompt": "Fix the typo in this file.",
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo in this file.",
         }
         router_hook.handle(start)
         router_hook.handle({
@@ -741,55 +744,40 @@ class RouterTests(unittest.TestCase):
             "hook_event_name": "PostToolUse", "session_id": "generation", "turn_id": "t1",
             "tool_name": "apply_patch", "tool_input": {"command": "patch two"}, "tool_response": {},
         })
-        blocked = router_hook.handle({
+        stopped = router_hook.handle({
             "hook_event_name": "Stop", "session_id": "generation", "turn_id": "t1", "stop_hook_active": False,
         })
-        self.assertEqual("block", blocked["decision"])
-        router_hook.handle({
-            "hook_event_name": "PostToolUse", "session_id": "generation", "turn_id": "t1",
-            "tool_name": "Bash", "tool_input": {"command": "pytest"}, "tool_response": {"exit_code": 0},
-        })
-        passed = router_hook.handle({
-            "hook_event_name": "Stop", "session_id": "generation", "turn_id": "t1", "stop_hook_active": True,
-        })
-        self.assertTrue(passed["continue"])
+        self.assertEqual({"continue": True}, stopped)
+        state = json.loads((Path(self.temp.name) / "generation--t1.json").read_text())
+        self.assertEqual("FAILED_OPEN", state["status"])
+        self.assertEqual(2, state["mutation_generation"])
+        self.assertEqual(1, state["verified_generation"])
 
-    def test_stop_generated_continuation_preserves_verification_debt(self) -> None:
+    def test_stop_does_not_generate_continuation_for_verification_debt(self) -> None:
         router_hook.handle({
             "hook_event_name": "UserPromptSubmit", "session_id": "stop-continuation", "turn_id": "t1",
-            "model": "gpt-5.6-terra", "prompt": "Fix the typo in this file.",
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo in this file.",
         })
         router_hook.handle({
             "hook_event_name": "PostToolUse", "session_id": "stop-continuation", "turn_id": "t1",
             "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
         })
-        blocked = router_hook.handle({
+        stopped = router_hook.handle({
             "hook_event_name": "Stop", "session_id": "stop-continuation", "turn_id": "t1", "stop_hook_active": False,
         })
-        self.assertEqual("block", blocked["decision"])
-        router_hook.handle({
-            "hook_event_name": "UserPromptSubmit", "session_id": "stop-continuation", "turn_id": "t2",
-            "model": "gpt-5.6-terra", "prompt": blocked["reason"],
-        })
-        inherited = json.loads((Path(self.temp.name) / "stop-continuation--t2.json").read_text())
-        self.assertEqual("t1", inherited["inherited_from_turn"])
-        self.assertEqual(1, inherited["mutation_generation"])
-        self.assertEqual(-1, inherited["verified_generation"])
-        still_blocked = router_hook.handle({
-            "hook_event_name": "Stop", "session_id": "stop-continuation", "turn_id": "t2", "stop_hook_active": True,
-        })
-        self.assertTrue(still_blocked["continue"])
-        final_state = json.loads((Path(self.temp.name) / "stop-continuation--t2.json").read_text())
+        self.assertEqual({"continue": True}, stopped)
+        final_state = json.loads((Path(self.temp.name) / "stop-continuation--t1.json").read_text())
         self.assertEqual("FAILED_OPEN", final_state["status"])
+        self.assertEqual(0, final_state["continuations"])
         duplicate = router_hook.handle({
-            "hook_event_name": "Stop", "session_id": "stop-continuation", "turn_id": "t2",
+            "hook_event_name": "Stop", "session_id": "stop-continuation", "turn_id": "t1",
             "stop_hook_active": False,
         })
         self.assertEqual({"continue": True}, duplicate)
-        unchanged = json.loads((Path(self.temp.name) / "stop-continuation--t2.json").read_text())
+        unchanged = json.loads((Path(self.temp.name) / "stop-continuation--t1.json").read_text())
         self.assertEqual("FAILED_OPEN", unchanged["status"])
 
-    def test_stop_continuation_completes_after_custom_verify_script(self) -> None:
+    def test_custom_verify_script_completes_without_stop_continuation(self) -> None:
         router_hook.handle({
             "hook_event_name": "UserPromptSubmit", "session_id": "custom-verify", "turn_id": "t1",
             "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo in this file.",
@@ -798,26 +786,17 @@ class RouterTests(unittest.TestCase):
             "hook_event_name": "PostToolUse", "session_id": "custom-verify", "turn_id": "t1",
             "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
         })
-        blocked = router_hook.handle({
-            "hook_event_name": "Stop", "session_id": "custom-verify", "turn_id": "t1",
-            "stop_hook_active": False,
-        })
-        self.assertEqual("block", blocked["decision"])
         router_hook.handle({
-            "hook_event_name": "UserPromptSubmit", "session_id": "custom-verify", "turn_id": "t2",
-            "model": "gpt-5.6-terra", "prompt": blocked["reason"],
-        })
-        router_hook.handle({
-            "hook_event_name": "PostToolUse", "session_id": "custom-verify", "turn_id": "t2",
+            "hook_event_name": "PostToolUse", "session_id": "custom-verify", "turn_id": "t1",
             "tool_name": "Bash", "tool_input": {"command": "pnpm verify:fast"},
             "tool_response": {"exit_code": 0},
         })
         completed = router_hook.handle({
-            "hook_event_name": "Stop", "session_id": "custom-verify", "turn_id": "t2",
-            "stop_hook_active": True,
+            "hook_event_name": "Stop", "session_id": "custom-verify", "turn_id": "t1",
+            "stop_hook_active": False,
         })
         self.assertEqual({"continue": True}, completed)
-        state = json.loads((Path(self.temp.name) / "custom-verify--t2.json").read_text())
+        state = json.loads((Path(self.temp.name) / "custom-verify--t1.json").read_text())
         self.assertEqual("COMPLETE", state["status"])
         self.assertEqual(state["mutation_generation"], state["verified_generation"])
 
@@ -857,10 +836,53 @@ class RouterTests(unittest.TestCase):
         })
         self.assertEqual({"continue": True}, duplicate)
 
+    def test_xml_wrapped_terminal_feedback_is_not_reclassified_or_reinjected(self) -> None:
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "wrapped-feedback", "turn_id": "t1",
+            "model": "gpt-5.6-terra", "prompt": "How are things now?",
+        })
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": "wrapped-feedback", "turn_id": "t1",
+            "stop_hook_active": False,
+        })
+        feedback = router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "wrapped-feedback", "turn_id": "t2",
+            "model": "gpt-5.6-terra",
+            "prompt": (
+                '<hook_prompt hook_run_id="stop:4:/retired/hooks/hooks.json">'
+                "Router completion gate: run the required verification gate after the final mutation: answer check."
+                "</hook_prompt>"
+            ),
+        })
+        self.assertIsNone(feedback)
+        self.assertFalse((Path(self.temp.name) / "wrapped-feedback--t2.json").exists())
+
     def test_unknown_verification_result_does_not_pass(self) -> None:
         self.assertFalse(router_hook._response_succeeded({}))
         self.assertFalse(router_hook._response_succeeded({"output": "looks good"}))
         self.assertTrue(router_hook._response_succeeded({"exit_code": 0}))
+
+    def test_nested_exec_json_output_proves_success(self) -> None:
+        response = [
+            {"type": "input_text", "text": "Script completed\nOutput:\n"},
+            {"type": "input_text", "text": json.dumps({"exit_code": 0, "output": "164 tests passed"})},
+        ]
+        self.assertTrue(router_hook._response_succeeded(response))
+        failed = [{"type": "input_text", "text": json.dumps({"exit_code": 1, "output": "failed"})}]
+        self.assertFalse(router_hook._response_succeeded(failed))
+
+    def test_flattened_exec_wrapper_proves_only_structured_success(self) -> None:
+        completed = (
+            "Script completed\nWall time 0.2 seconds\nOutput:\n"
+            + json.dumps({"chunk_id": "abc", "exit_code": 0, "output": "OK"})
+        )
+        failed = (
+            "Script completed\nWall time 0.2 seconds\nOutput:\n"
+            + json.dumps({"chunk_id": "abc", "exit_code": 1, "output": "failed"})
+        )
+        self.assertTrue(router_hook._response_succeeded(completed))
+        self.assertFalse(router_hook._response_succeeded(failed))
+        self.assertFalse(router_hook._response_succeeded("Script completed\nOutput:\nnot JSON"))
 
     def test_verification_command_allowlist_rejects_ceremonial_checks(self) -> None:
         self.assertFalse(router_hook._is_verification("echo check"))
@@ -870,6 +892,108 @@ class RouterTests(unittest.TestCase):
         self.assertTrue(router_hook._is_verification("pnpm verify:fast"))
         self.assertTrue(router_hook._is_verification("npm run check:release"))
         self.assertTrue(router_hook._is_verification("cargo check"))
+        self.assertTrue(router_hook._is_verification("PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -q"))
+        self.assertTrue(router_hook._is_verification("set -e\\npython3 -m unittest -q"))
+
+    def test_nested_exec_verification_settles_the_latest_mutation(self) -> None:
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "nested-verify", "turn_id": "t1",
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "How are things now?",
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": "nested-verify", "turn_id": "t1",
+            "tool_name": "exec",
+            "tool_input": {"command": "const r = await tools.apply_patch(`*** patch ***`); text(r)"},
+            "tool_response": [{"type": "input_text", "text": "Done"}],
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": "nested-verify", "turn_id": "t1",
+            "tool_name": "exec",
+            "tool_input": (
+                "const r = await tools.exec_command({"
+                "cmd: \"env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -q test_router\""
+                "}); text(r)"
+            ),
+            "tool_response": [
+                {"type": "input_text", "text": "Script completed\nOutput:\n"},
+                {"type": "input_text", "text": json.dumps({"exit_code": 0, "output": "OK"})},
+            ],
+        })
+        completed = router_hook.handle({
+            "hook_event_name": "Stop", "session_id": "nested-verify", "turn_id": "t1",
+            "stop_hook_active": False,
+        })
+        self.assertEqual({"continue": True}, completed)
+        state = json.loads((Path(self.temp.name) / "nested-verify--t1.json").read_text())
+        self.assertEqual("COMPLETE", state["status"])
+        self.assertEqual(1, state["mutation_generation"])
+        self.assertEqual(1, state["verified_generation"])
+
+    def test_read_only_route_silently_records_real_gate_if_it_later_mutates(self) -> None:
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "raised-gate", "turn_id": "t1",
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "How are things now?",
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": "raised-gate", "turn_id": "t1",
+            "tool_name": "exec", "tool_input": "tools.apply_patch(`patch`)", "tool_response": {},
+        })
+        stopped = router_hook.handle({
+            "hook_event_name": "Stop", "session_id": "raised-gate", "turn_id": "t1",
+            "stop_hook_active": False,
+        })
+        self.assertEqual({"continue": True}, stopped)
+        state = json.loads((Path(self.temp.name) / "raised-gate--t1.json").read_text())
+        self.assertIn("targeted tests or build", state["failed_open_problems"][0])
+        self.assertNotIn("answer check", state["failed_open_problems"][0])
+
+    def test_unobservable_unified_exec_verification_fails_open_without_feedback(self) -> None:
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "unobservable", "turn_id": "t1",
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo.",
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": "unobservable", "turn_id": "t1",
+            "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": "unobservable", "turn_id": "t1",
+            "tool_name": "exec", "tool_input": "tools.exec_command({cmd: 'python3 -m unittest -q'})",
+            "tool_response": {},
+        })
+        stopped = router_hook.handle({
+            "hook_event_name": "Stop", "session_id": "unobservable", "turn_id": "t1",
+            "stop_hook_active": False,
+        })
+        self.assertEqual({"continue": True}, stopped)
+        state = json.loads((Path(self.temp.name) / "unobservable--t1.json").read_text())
+        self.assertEqual("FAILED_OPEN", state["status"])
+        self.assertEqual("unavailable", state["verification_observability"])
+        self.assertEqual(0, state["continuations"])
+        self.assertIn("run the required verification gate", state["failed_open_problems"][0])
+
+    def test_observable_failed_verification_is_root_owned_without_feedback(self) -> None:
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "observable-failure", "turn_id": "t1",
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo.",
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": "observable-failure", "turn_id": "t1",
+            "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": "observable-failure", "turn_id": "t1",
+            "tool_name": "Bash", "tool_input": {"command": "python3 -m unittest -q"},
+            "tool_response": {"exit_code": 1},
+        })
+        stopped = router_hook.handle({
+            "hook_event_name": "Stop", "session_id": "observable-failure", "turn_id": "t1",
+            "stop_hook_active": False,
+        })
+        self.assertEqual({"continue": True}, stopped)
+        state = json.loads((Path(self.temp.name) / "observable-failure--t1.json").read_text())
+        self.assertEqual("FAILED_OPEN", state["status"])
+        self.assertEqual("root_owned", state["verification_observability"])
 
     def test_ledger_identity_migrates_across_plugin_cache_versions(self) -> None:
         router_hook.handle({
