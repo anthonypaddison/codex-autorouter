@@ -6,7 +6,7 @@ Record candidate-specific proof in `RELEASE_EVIDENCE.md`; never infer a checked 
 
 - [x] Plugin manifest and skill validation pass.
 - [x] Router and activator tests pass on Python 3.10, 3.11, 3.12, 3.13, and the current runtime.
-- [ ] Tests pass on macOS, Ubuntu, and native Windows.
+- [x] Tests pass on hosted macOS, Ubuntu, and native Windows across Python 3.10–3.14 ([run 29227761286](https://github.com/vibeforge1111/gpt-5-6-router/actions/runs/29227761286)).
 - [x] Clean install, identical reinstall, conflict refusal, reviewed replacement, upgrade, repair, deactivation, and modified-file preservation pass.
 - [x] Exception and hard-crash failure injection at every declared failpoint restore the exact pre-operation agent tree.
 - [x] Concurrent lifecycle commands serialize without lost ownership state.
@@ -25,7 +25,7 @@ Complete every row with the released archive or marketplace snapshot, not the so
 | OS | Surface | Install/cache relocation | Hook trust | Route smoke | Activate/deactivate | Result |
 |---|---|---:|---:|---:|---:|---|
 | macOS | Desktop | required | required | required | required | pending |
-| macOS | CLI | pass | pass | pass | pass | accepted on `0.1.0+codex.20260713015500` |
+| macOS | CLI | pass | pass | pass | pass | accepted; final replay on `0.1.0+codex.20260713060419` |
 | Linux | CLI | required | required | required | required | pending |
 | Windows | Desktop | required | required | required | required | pending |
 | Windows | CLI | required | required | required | required | pending |
@@ -40,7 +40,7 @@ IDE extensions are excluded from the full-plugin matrix because Codex plugins ar
 - [x] `allow_managed_hooks_only` reports managed blocked and never attempts bypass.
 - [x] Missing custom agents remain advisory without breaking normal Codex work.
 - [x] Fast and effort labels never claim unavailable runtime attestation.
-- [ ] The published repository or marketplace exposes a tested private vulnerability-reporting channel.
+- [ ] The public repository or marketplace exposes a tested private vulnerability-reporting channel (GitHub makes repository private reporting available only after public visibility).
 
 ## Public-release decision
 

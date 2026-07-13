@@ -2,7 +2,7 @@
 
 GPT-5.6 Router profiles each Codex task and chooses the least expensive GPT-5.6 route likely to produce a verified result. It distinguishes Sol, Terra, and Luna work; selects low, medium, or high configured reasoning effort; and uses bounded depth-1 subagents only when delegation repays its overhead.
 
-> **Public release pending:** macOS CLI acceptance now passes on the exact installed candidate, including a native custom-agent delegation with zero routing violations. Ubuntu, native Windows, remaining real-host rows, and a tested private vulnerability-reporting channel are still required before a public-stable declaration. See [release evidence](docs/RELEASE_EVIDENCE.md).
+> **Public-stable release pending:** the full hosted matrix now passes on macOS, Ubuntu, and Windows across Python 3.10–3.14, and macOS CLI acceptance includes native custom-agent delegation with zero routing violations. Remaining Desktop/Linux/Windows real-host rows and a tested private vulnerability-reporting channel are still required before broad publication. See [release evidence](docs/RELEASE_EVIDENCE.md).
 
 The installed skill is namespaced as `$gpt-5-6-router:route-gpt-5-6-work`.
 

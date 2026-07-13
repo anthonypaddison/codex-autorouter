@@ -1,6 +1,6 @@
 # Release evidence
 
-Current installed candidate: `0.1.0+codex.20260713015500`
+Current installed candidate: `0.1.0+codex.20260713060419`
 Recorded: 2026-07-13
 
 ## Proven on the candidate source snapshot
@@ -8,6 +8,9 @@ Recorded: 2026-07-13
 - Release, plugin, skill, and source-integrity validators pass.
 - 142 routing, activation, checker, standalone, ownership, concurrency, and crash-recovery tests pass on macOS with Python 3.10, 3.11, 3.12, 3.13, and 3.14.
 - The deterministic routing fuzz suite passes 5,000 cases on every tested Python runtime.
+- GitHub Actions run [29227761286](https://github.com/vibeforge1111/gpt-5-6-router/actions/runs/29227761286) passes all 15 combinations of `ubuntu-latest`, `macos-latest`, and `windows-latest` with Python 3.10–3.14 on source snapshot `5ea0dfce31b0f63260f69a4a01ab1e3f986b0cbe`.
+- Every hosted job validates the release, runs all 142 tests, runs 5,000 deterministic fuzz cases, and revalidates source integrity after execution.
+- Hosted Windows tests exercise native file locking, atomic replacement, rollback, reparse-point refusal, hardlink handling, concurrency, and crash recovery; the Windows Desktop and CLI product surfaces remain separate real-host gates.
 - Fifty consecutive concurrent first-install stress rounds pass; a deterministic delayed-marker writer proves contenders wait for an exclusive standalone state claim to finish.
 - Every declared activation and standalone transaction boundary has rollback-or-commit coverage, including preservation of post-crash edits and terminal purge recovery.
 - Adversarial contract, security, and routing re-audits reproduced the reported failures, verified their fixes, and returned no remaining P0/P1 finding.
@@ -35,10 +38,8 @@ Recorded: 2026-07-13
 
 ## External acceptance still required
 
-- Ubuntu and native Windows CI runs on the published candidate.
-- Native Windows filesystem locking, replacement, rollback, reparse-point, and hardlink behavior.
 - macOS Desktop, Linux CLI, Windows CLI, and Windows Desktop real-host acceptance.
 - Codex Desktop UI automation is safety-blocked from controlling the Codex app itself, so the Desktop row requires a manual fresh-task smoke rather than an app-server-only substitute.
-- A tested private vulnerability-reporting channel on the eventual public distribution.
+- A tested private vulnerability-reporting channel on the eventual public distribution. GitHub exposes this feature only after the repository is public, so enabling it remains a publication-time gate.
 
-The current candidate clears the macOS CLI and native custom-agent gates. Pending external rows still block a public-stable declaration; a clearly labeled private beta may proceed.
+The current candidate clears every automated gate plus the macOS CLI and native custom-agent gates. Pending real-host UI/CLI rows and the publication-time reporting channel still block a public-stable declaration; a clearly labeled private beta may proceed.
