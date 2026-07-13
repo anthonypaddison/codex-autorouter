@@ -15,6 +15,7 @@ from pathlib import Path
 
 
 SCRIPT = Path(__file__).with_name("standalonectl.py")
+ARCHIVE_IGNORE = shutil.ignore_patterns(".git", "__pycache__", "*.pyc", "*.pyo")
 
 
 class StandaloneCtlTests(unittest.TestCase):
@@ -191,7 +192,7 @@ class StandaloneCtlTests(unittest.TestCase):
 
     def test_durable_controller_survives_original_archive_removal(self) -> None:
         distribution = self.root / "removable-distribution"
-        shutil.copytree(SCRIPT.parents[1], distribution, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"))
+        shutil.copytree(SCRIPT.parents[1], distribution, ignore=ARCHIVE_IGNORE)
         installed = self.payload(self.run_script(distribution / "scripts" / "standalonectl.py", "install"))
         controller = Path(installed["controller"])
         self.assertTrue(controller.is_file())
@@ -391,7 +392,7 @@ class StandaloneCtlTests(unittest.TestCase):
 
     def test_managed_update_is_transactional(self) -> None:
         distribution = self.root / "distribution"
-        shutil.copytree(SCRIPT.parents[1], distribution, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"))
+        shutil.copytree(SCRIPT.parents[1], distribution, ignore=ARCHIVE_IGNORE)
         script = distribution / "scripts" / "standalonectl.py"
         self.assertEqual(0, self.run_script(script, "install").returncode)
         reference = distribution / "skills" / "route-gpt-5-6-work" / "references" / "product-routing.md"
@@ -410,7 +411,7 @@ class StandaloneCtlTests(unittest.TestCase):
 
     def test_update_crash_before_manifest_rolls_back_exact_old_tree(self) -> None:
         distribution = self.root / "distribution"
-        shutil.copytree(SCRIPT.parents[1], distribution, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"))
+        shutil.copytree(SCRIPT.parents[1], distribution, ignore=ARCHIVE_IGNORE)
         script = distribution / "scripts" / "standalonectl.py"
         self.assertEqual(0, self.run_script(script, "install").returncode)
         before = {path.relative_to(self.target).as_posix(): path.read_bytes() for path in self.target.rglob("*") if path.is_file()}
@@ -430,7 +431,7 @@ class StandaloneCtlTests(unittest.TestCase):
 
     def test_update_crash_after_manifest_commits_new_tree(self) -> None:
         distribution = self.root / "distribution"
-        shutil.copytree(SCRIPT.parents[1], distribution, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"))
+        shutil.copytree(SCRIPT.parents[1], distribution, ignore=ARCHIVE_IGNORE)
         script = distribution / "scripts" / "standalonectl.py"
         self.assertEqual(0, self.run_script(script, "install").returncode)
         source = distribution / "skills" / "route-gpt-5-6-work" / "SKILL.md"
@@ -471,7 +472,7 @@ class StandaloneCtlTests(unittest.TestCase):
 
     def test_every_update_crash_boundary_rolls_back_or_commits(self) -> None:
         distribution = self.root / "boundary-distribution"
-        shutil.copytree(SCRIPT.parents[1], distribution, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"))
+        shutil.copytree(SCRIPT.parents[1], distribution, ignore=ARCHIVE_IGNORE)
         script = distribution / "scripts" / "standalonectl.py"
         points = ("update-prepared", "update-staged", "update-old-renamed", "update-target", "update-active")
         for point in points:
@@ -565,7 +566,7 @@ class StandaloneCtlTests(unittest.TestCase):
         if not hasattr(os, "link"):
             self.skipTest("hardlinks unavailable")
         distribution = self.root / "hardlinked-distribution"
-        shutil.copytree(SCRIPT.parents[1], distribution, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"))
+        shutil.copytree(SCRIPT.parents[1], distribution, ignore=ARCHIVE_IGNORE)
         skill = distribution / "skills" / "route-gpt-5-6-work"
         linked = skill / "references" / "hardlinked.md"
         os.link(skill / "SKILL.md", linked)
