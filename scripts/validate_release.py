@@ -31,7 +31,12 @@ def require(condition: bool, message: str) -> None:
 
 def main() -> int:
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
-    require(manifest.get("name") in {ROOT.name, ROOT.parent.name}, "plugin name must match source or cache folder")
+    require(manifest.get("name") == "gpt-5-6-router", "stable plugin package name changed")
+    folder_names = {ROOT.name.lower(), ROOT.parent.name.lower()}
+    require(
+        bool(folder_names & {"gpt-5-6-router", "codex-autorouter"}),
+        "source folder must use the package or public repository name",
+    )
     require(bool(re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", str(manifest.get("version")))), "invalid semver")
     require(manifest.get("skills") == "./skills/", "skills path must be plugin-relative")
     require((ROOT / manifest["interface"]["logo"]).is_file(), "logo is missing")

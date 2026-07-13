@@ -1,6 +1,6 @@
 # Release evidence
 
-Current source candidate: `0.1.0+codex.20260713071942`
+Current source candidate: `0.1.0+codex.20260713072328`
 Recorded: 2026-07-13
 
 ## Proven on the candidate source snapshot
