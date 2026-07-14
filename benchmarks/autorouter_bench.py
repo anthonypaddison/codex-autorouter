@@ -382,6 +382,15 @@ EXPECTED_PLANS = {
 ROUTE_PROBES = (
     ("trivial", "Fix a typo in README.", "current", "direct"),
     ("batch", "Normalize 120 independent locale JSON catalogs using the exact schema and validator. Apply the same mechanical rule to every file.", "gpt56_luna_worker", "parallel_leaves"),
+    (
+        "delegated_fixture",
+        """<codex_delegation>
+<source_thread_id>019f4ab3-2b7a-7932-a6a6-f401afced4e3</source_thread_id>
+<input>Generate exactly 1,200 synthetic JSONL fixture records in three independent 400-record shards using fixed formulas. One example projectSlug is billing-reliability. These are synthetic fixtures, not customer data. Add a strict validator, do not modify runtime or database schema, and run tests, typecheck, lint, and build. Record the routing ledger.</input>
+</codex_delegation>""",
+        "gpt56_luna_worker",
+        "parallel_leaves",
+    ),
     ("ordinary", "Implement the bounded feedback tags API from complete acceptance tests.", "current", "direct"),
     ("ambiguous", "Diagnose and fix an intermittent CI-only webhook deduplication failure involving unclear concurrency edge cases.", "current", "direct"),
     ("critical", "Fix a critical authorization bypass in the production billing export endpoint and review adversarial edge cases.", "current", "direct"),

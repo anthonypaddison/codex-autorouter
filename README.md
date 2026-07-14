@@ -119,6 +119,7 @@ Standalone mode deliberately does not claim plugin-hook enforcement. See [standa
 - **Protected floors:** Token Saver never discounts security, payments, privacy, production, destructive actions, or other high-risk work.
 - **No silent speed changes:** Fast/Standard is inherited, not selected by Autorouter.
 - **Post-mutation verification:** the root agent remains responsible for checking the final mutated state; verification debt is recorded without interrupting Stop.
+- **Lifecycle-safe escalation:** delayed sibling completion is reconciled before staged execution, and route-up is limited to real task-capability ceilings—not hidden metadata or obsolete cache paths.
 - **Session-safe completion:** Stop and SubagentStop are advisory-only, record unmet gates as `FAILED_OPEN`, and never emit a replayable hard-block message; duplicate terminal events are idempotent.
 - **Upgrade-resilient hooks:** open tasks can locate the newest installed cache after their original immutable cache is replaced.
 - **Conflict-safe activation:** only six namespaced agent files are managed, with checksums, atomic replacement, rollback, crash recovery, and legacy-role migration.
@@ -166,7 +167,7 @@ cd ..
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v benchmarks.test_autorouter_bench
 ```
 
-The current suite covers 189 routing, lifecycle, and benchmark-harness tests plus 5,000 deterministic fuzz cases per CI job, including all three profiles, Extra High selection, stale-cache migration, terminal-hook poison prevention and offline repair, nested-tool verification, unobservable-result fail-open behavior, wrapped Stop-feedback idempotency, lifecycle ownership, concurrency, crash recovery, hook readiness, clean-room standalone installation, frozen capability-fixture validation, profile restoration, and end-to-end blind-panel claim boundaries.
+The current suite covers 199 routing, lifecycle, and benchmark-harness tests plus 5,000 deterministic fuzz cases per CI job, including all three profiles, Extra High selection, delegated-input isolation, repeated-role collaboration reconciliation, stale-cache migration, terminal-hook poison prevention and offline repair, nested-tool verification, unobservable-result fail-open behavior, wrapped Stop-feedback idempotency, lifecycle ownership, concurrency, crash recovery, hook readiness, clean-room standalone installation, frozen capability-fixture validation, profile restoration, and end-to-end blind-panel claim boundaries.
 
 ### Capability and efficiency benchmark
 
