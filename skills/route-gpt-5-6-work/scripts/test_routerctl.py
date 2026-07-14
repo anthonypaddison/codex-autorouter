@@ -603,6 +603,93 @@ class RouterCtlTests(unittest.TestCase):
         self.assertTrue(status["local_agent_ready"])
         self.assertEqual(6, len(list((self.home / "agents").glob("gpt56_*.toml"))))
 
+    def test_sanitize_repairs_top_level_and_compacted_poison_conservatively(self) -> None:
+        session = self.home / "sessions" / "2026" / "poisoned.jsonl"
+        session.parent.mkdir(parents=True)
+        uuid7_a = "019f5182-a1ce-72e1-aab4-5ee0c5de861f"
+        uuid7_b = "019f5182-a1ce-72e1-aab4-5ee0c5de8620"
+        uuid7_c = "019f5182-a1ce-72e1-aab4-5ee0c5de8621"
+        hook = '<hook_prompt hook_run_id="stop:4:test">secret gate text</hook_prompt>'
+        records = [
+            {"type": "response_item", "payload": {"type": "message", "id": "msg_valid", "role": "user", "content": [{"type": "input_text", "text": "normal"}]}},
+            {"type": "response_item", "payload": {"type": "message", "id": uuid7_a, "role": "user", "content": [{"type": "input_text", "text": hook}]}},
+            {"type": "compacted", "payload": {"replacement_history": [
+                {"type": "message", "id": uuid7_b, "role": "user", "content": [{"type": "input_text", "text": hook}]},
+                {"type": "message", "id": uuid7_c, "role": "user", "content": [{"type": "input_text", "text": "keep this request\n" + hook}]},
+            ]}},
+            {"type": "custom_tool_call_output", "id": uuid7_a, "output": hook},
+        ]
+        original = b"".join(json.dumps(record).encode() + b"\n" for record in records)
+        session.write_bytes(original)
+
+        result = self.run_ctl("sanitize", "--session", str(session))
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        payload = self.payload(result)
+        self.assertEqual(1, payload["files_modified"])
+        self.assertEqual(2, payload["messages_removed"])
+        self.assertEqual(1, payload["ids_removed"])
+        self.assertEqual(1, payload["lines_removed"])
+        self.assertNotIn("secret gate text", result.stdout)
+        backup = Path(payload["backups"][0])
+        self.assertEqual(original, backup.read_bytes())
+
+        sanitized = [json.loads(line) for line in session.read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(3, len(sanitized))
+        history = sanitized[1]["payload"]["replacement_history"]
+        self.assertEqual(1, len(history))
+        self.assertNotIn("id", history[0])
+        self.assertIn("keep this request", history[0]["content"][0]["text"])
+        self.assertEqual("custom_tool_call_output", sanitized[2]["type"])
+        self.assertEqual(uuid7_a, sanitized[2]["id"])
+
+    def test_sanitize_all_scans_active_and_archived_sessions_idempotently(self) -> None:
+        hook = "<hook_prompt>gate</hook_prompt>"
+        poisoned = {"type": "response_item", "payload": {"type": "message", "id": "019f5182-a1ce-72e1-aab4-5ee0c5de861f", "role": "user", "content": hook}}
+        for root, name in (("sessions", "active.jsonl"), ("archived_sessions", "old.jsonl")):
+            target = self.home / root / name
+            target.parent.mkdir(parents=True)
+            target.write_text(json.dumps(poisoned) + "\n", encoding="utf-8")
+        first = self.payload(self.run_ctl("sanitize", "--all"))
+        self.assertEqual(2, first["files_scanned"])
+        self.assertEqual(2, first["files_modified"])
+        self.assertEqual(2, first["lines_removed"])
+        second = self.payload(self.run_ctl("sanitize", "--all"))
+        self.assertEqual(2, second["files_scanned"])
+        self.assertEqual(0, second["files_modified"])
+        self.assertEqual([], second["backups"])
+
+    def test_sanitize_invalid_json_fails_closed_without_backup_or_rewrite(self) -> None:
+        session = self.home / "sessions" / "broken.jsonl"
+        session.parent.mkdir(parents=True)
+        original = b'{"valid":true}\n{broken\n'
+        session.write_bytes(original)
+        result = self.run_ctl("sanitize", "--session", str(session))
+        self.assertEqual(2, result.returncode)
+        self.assertEqual(original, session.read_bytes())
+        self.assertEqual([], list(session.parent.glob("*.autorouter-backup.*")))
+
+    @unittest.skipIf(not hasattr(os, "symlink"), "symlinks unavailable")
+    def test_sanitize_refuses_linked_session(self) -> None:
+        external = self.root / "external.jsonl"
+        external.write_text('{"safe":true}\n', encoding="utf-8")
+        linked = self.root / "linked.jsonl"
+        linked.symlink_to(external)
+        result = self.run_ctl("sanitize", "--session", str(linked))
+        self.assertEqual(2, result.returncode)
+        self.assertIn("refusing", result.stdout)
+        self.assertEqual('{"safe":true}\n', external.read_text(encoding="utf-8"))
+
+    @unittest.skipIf(not hasattr(os, "link"), "hard links unavailable")
+    def test_sanitize_refuses_hard_linked_session(self) -> None:
+        original = self.root / "original.jsonl"
+        original.write_text('{"safe":true}\n', encoding="utf-8")
+        linked = self.root / "hard-linked.jsonl"
+        os.link(original, linked)
+        result = self.run_ctl("sanitize", "--session", str(linked))
+        self.assertEqual(2, result.returncode)
+        self.assertIn("hard-linked", result.stdout)
+        self.assertEqual('{"safe":true}\n', original.read_text(encoding="utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

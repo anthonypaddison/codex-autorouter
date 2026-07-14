@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -430,7 +431,12 @@ class RouterTests(unittest.TestCase):
             "prompt": "Rename a secret field in 100 JSON files and validate the schema.",
         }
         output = router_hook.handle(data)
-        self.assertIn("additionalContext", output["hookSpecificOutput"])
+        context = output["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("PROACTIVE GOVERNANCE CONTRACT", context)
+        self.assertIn("exact required-agent multiset", context)
+        self.assertIn("lifecycle-attest", context)
+        self.assertIn("verification gate after the final mutation", context)
+        self.assertIn("Stop and SubagentStop are advisory-only", context)
         ledger = json.loads(next(Path(self.temp.name).glob("*.json")).read_text())
         self.assertNotIn(data["prompt"], json.dumps(ledger))
         self.assertNotIn("prompt_hash", ledger)
@@ -695,7 +701,7 @@ class RouterTests(unittest.TestCase):
                 actual = router_hook._service_tier({"service_tier": tier})
                 self.assertEqual(expected, actual["fast_enabled"])
 
-    def test_stop_continues_once_when_route_not_executed(self) -> None:
+    def test_stop_advises_once_when_route_not_executed(self) -> None:
         start = {
             "hook_event_name": "UserPromptSubmit", "session_id": "s2", "turn_id": "t2",
             "model": "gpt-5.6-terra", "prompt": "Review OAuth security for auth bypasses.",
@@ -703,10 +709,13 @@ class RouterTests(unittest.TestCase):
         router_hook.handle(start)
         stop = {"hook_event_name": "Stop", "session_id": "s2", "turn_id": "t2", "stop_hook_active": False}
         first = router_hook.handle(stop)
-        self.assertEqual("block", first["decision"])
+        self.assertTrue(first["continue"])
+        self.assertIn("Router completion gate (advisory)", first["systemMessage"])
+        self.assertNotIn("decision", first)
         stop["stop_hook_active"] = True
         second = router_hook.handle(stop)
         self.assertTrue(second["continue"])
+        self.assertNotIn("systemMessage", second)
 
     def test_edit_records_verification_debt_without_stop_feedback(self) -> None:
         start = {
@@ -1042,8 +1051,9 @@ class RouterTests(unittest.TestCase):
         result = router_hook.handle({
             "hook_event_name": "Stop", "session_id": "coverage", "turn_id": "t1", "stop_hook_active": False,
         })
-        self.assertEqual("block", result["decision"])
-        self.assertIn("complete 2 required", result["reason"])
+        self.assertTrue(result["continue"])
+        self.assertNotIn("decision", result)
+        self.assertIn("complete 2 required", result["systemMessage"])
 
     def test_parallel_luna_plan_completes_with_two_attested_workers(self) -> None:
         result, ledger = self._complete_transcript_plan(
@@ -1308,7 +1318,8 @@ class RouterTests(unittest.TestCase):
                 "Route recommendation: not_a_route\nEvidence: guess\nVerification: none available\nUncertainty: high"
             ),
         })
-        self.assertEqual("block", result["decision"])
+        self.assertTrue(result["continue"])
+        self.assertNotIn("decision", result)
         ledger = json.loads((Path(self.temp.name) / f"{session}--t1.json").read_text())
         self.assertIn("advisor_mutation:advisor", ledger["violations"])
         self.assertIn("invalid_route_recommendation:gpt56_terra_worker", ledger["violations"])
@@ -1340,7 +1351,7 @@ class RouterTests(unittest.TestCase):
         ledger = json.loads((Path(self.temp.name) / "order--t1.json").read_text())
         self.assertIn("ordering_violation:evidence_then_owner:gpt56_sol_owner", ledger["violations"])
 
-    def test_repeated_stop_never_marks_unmet_hard_gates_complete(self) -> None:
+    def test_repeated_stop_records_unmet_gates_failed_open_without_reinjection(self) -> None:
         router_hook.handle({
             "hook_event_name": "UserPromptSubmit", "session_id": "hard", "turn_id": "t1",
             "model": "gpt-5.6-terra", "prompt": "Review OAuth security for auth bypasses.",
@@ -1348,7 +1359,9 @@ class RouterTests(unittest.TestCase):
         first = router_hook.handle({
             "hook_event_name": "Stop", "session_id": "hard", "turn_id": "t1", "stop_hook_active": False,
         })
-        self.assertEqual("block", first["decision"])
+        self.assertTrue(first["continue"])
+        self.assertNotIn("decision", first)
+        self.assertIn("systemMessage", first)
         second = router_hook.handle({
             "hook_event_name": "Stop", "session_id": "hard", "turn_id": "t1", "stop_hook_active": True,
         })
@@ -1471,8 +1484,9 @@ class RouterTests(unittest.TestCase):
             "hook_event_name": "Stop", "session_id": "attest", "turn_id": "t1",
             "stop_hook_active": False, "transcript_path": str(transcript),
         })
-        self.assertEqual("block", result["decision"])
-        self.assertIn("attest the child model", result["reason"])
+        self.assertTrue(result["continue"])
+        self.assertNotIn("decision", result)
+        self.assertIn("attest the child model", result["systemMessage"])
 
     def test_child_attestation_detects_advisor_mutation_and_recursive_spawn(self) -> None:
         parent = Path(self.temp.name) / "parent.jsonl"
@@ -1493,10 +1507,16 @@ class RouterTests(unittest.TestCase):
             "hook_event_name": "UserPromptSubmit", "session_id": "stable-attest", "turn_id": "t1",
             "model": "gpt-5.6-terra", "prompt": "Diagnose why this flaky test fails intermittently.",
         })
-        router_hook.handle({
+        output = router_hook.handle({
             "hook_event_name": "SubagentStart", "session_id": "stable-attest", "turn_id": "t1",
             "agent_type": "gpt56_terra_deep", "agent_id": "stable-child", "model": "gpt-5.6-terra",
         })
+        context = output["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("proactive governance contract", context)
+        self.assertIn("lifecycle-attest", context)
+        self.assertIn("without a service-tier override", context)
+        self.assertIn("never delegate recursively", context)
+        self.assertIn("advisory-only", context)
         ledger = json.loads((Path(self.temp.name) / "stable-attest--t1.json").read_text())
         attestation = ledger["agent_attestations"]["stable-child"]
         self.assertTrue(attestation["matched"])
@@ -1504,6 +1524,56 @@ class RouterTests(unittest.TestCase):
         self.assertTrue(attestation["runtime_model_attested"])
         self.assertEqual("owned_agent_config_intent", attestation["effort_evidence"])
         self.assertTrue(attestation["service_tier_inherited"])
+
+    def test_terminal_hook_source_cannot_emit_a_block_decision(self) -> None:
+        source = Path(router_hook.__file__).read_text(encoding="utf-8")
+        self.assertIsNone(re.search(r'["\']decision["\']\s*:\s*["\']block["\']', source))
+
+    def test_terminal_event_matrix_never_returns_a_block_decision(self) -> None:
+        outputs = [
+            router_hook.handle({"hook_event_name": "Stop", "session_id": "missing", "turn_id": "t1"}),
+            router_hook.handle({"hook_event_name": "SubagentStop", "session_id": "missing", "turn_id": "t1"}),
+        ]
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "matrix-done", "turn_id": "t1",
+            "model": "gpt-5.6-terra", "prompt": "Hi",
+        })
+        outputs.append(router_hook.handle({
+            "hook_event_name": "Stop", "session_id": "matrix-done", "turn_id": "t1", "stop_hook_active": False,
+        }))
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "matrix-unmet", "turn_id": "t1",
+            "model": "gpt-5.6-terra", "prompt": "Review OAuth security for auth bypasses.",
+        })
+        outputs.append(router_hook.handle({
+            "hook_event_name": "Stop", "session_id": "matrix-unmet", "turn_id": "t1", "stop_hook_active": False,
+        }))
+        outputs.append(router_hook.handle({
+            "hook_event_name": "Stop", "session_id": "matrix-unmet", "turn_id": "t1", "stop_hook_active": True,
+        }))
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "matrix-child", "turn_id": "t1",
+            "model": "gpt-5.6-terra", "prompt": "Diagnose why this flaky test fails intermittently.",
+        })
+        router_hook.handle({
+            "hook_event_name": "SubagentStart", "session_id": "matrix-child", "turn_id": "t1",
+            "agent_type": "gpt56_terra_deep", "agent_id": "child",
+        })
+        outputs.append(router_hook.handle({
+            "hook_event_name": "SubagentStop", "session_id": "matrix-child", "turn_id": "t1",
+            "agent_type": "gpt56_terra_deep", "agent_id": "child", "stop_hook_active": False,
+            "last_assistant_message": "incomplete",
+        }))
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "matrix-council", "turn_id": "t1",
+            "model": "gpt-5.6-terra", "prompt": "Build a product, but I am not sure which architecture to use.",
+        })
+        outputs.append(router_hook.handle({
+            "hook_event_name": "Stop", "session_id": "matrix-council", "turn_id": "t1", "stop_hook_active": False,
+        }))
+        for output in outputs:
+            self.assertIsInstance(output, dict)
+            self.assertNotEqual("block", output.get("decision"))
 
     def test_service_tier_override_in_spawn_is_rejected(self) -> None:
         router_hook.handle({
@@ -1523,8 +1593,9 @@ class RouterTests(unittest.TestCase):
             "hook_event_name": "Stop", "session_id": "tier-spawn", "turn_id": "t1",
             "stop_hook_active": False, "transcript_path": str(transcript),
         })
-        self.assertEqual("block", result["decision"])
-        self.assertIn("without a service-tier override", result["reason"])
+        self.assertTrue(result["continue"])
+        self.assertNotIn("decision", result)
+        self.assertIn("without a service-tier override", result["systemMessage"])
 
     def test_parallel_ledger_updates_are_not_lost(self) -> None:
         router_hook.handle({

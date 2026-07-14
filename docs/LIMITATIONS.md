@@ -34,6 +34,12 @@ Lifecycle input exposes the child model but not a guaranteed live reasoning-effo
 
 Codex documents transcript format as unstable. Transcript reconciliation is bounded compatibility support, not correctness-authoritative attestation.
 
+## Terminal hooks cannot safely hard-block on affected Codex builds
+
+Some Codex builds replay a `Stop` or `SubagentStop` block reason as a persisted user message with a client UUIDv7 identifier. The Responses API later rejects that identifier because message IDs must use the server `msg_` form, which can brick every later turn in the task. Autorouter therefore enforces routing proactively through trusted prompt/subagent context and uses terminal hooks only for advisory ledger recording. True safe terminal hard blocking requires an upstream Codex replay fix that omits the client-generated ID or replaces it with a valid server message ID.
+
+`routerctl sanitize` is an offline persisted-transcript repair, not live in-memory recovery. Close the affected task, sanitize its JSONL (or all persisted sessions), and then reopen it. The command makes a byte-exact sibling backup before atomically replacing changed files. Codex transcript internals remain undocumented, so the sanitizer deliberately targets only the observed UUIDv7 + `<hook_prompt>` signature and fails closed on malformed input.
+
 ## Managed environments may block enforcement
 
 `allow_managed_hooks_only`, feature requirements, marketplace restrictions, or disabled multi-agent support can force advisory or managed-blocked operation. The plugin never bypasses organizational policy.

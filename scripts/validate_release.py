@@ -44,6 +44,8 @@ def main() -> int:
     require((ROOT / "scripts" / "standalonectl.py").is_file(), "standalone lifecycle helper is missing")
     require((ROOT / "docs" / "PRIVACY.md").is_file(), "privacy documentation is missing")
     require((ROOT / "scripts" / "fuzz_router.py").is_file(), "routing fuzz runner is missing")
+    require((ROOT / "benchmarks" / "autorouter_bench.py").is_file(), "capability benchmark is missing")
+    require((ROOT / "benchmarks" / "README.md").is_file(), "capability benchmark guide is missing")
 
     hooks = json.loads(HOOKS.read_text(encoding="utf-8")).get("hooks")
     require(isinstance(hooks, dict) and set(hooks) == EVENTS, "unexpected hook event set")
@@ -62,6 +64,11 @@ def main() -> int:
     skill_text = (SKILL / "SKILL.md").read_text(encoding="utf-8")
     require(skill_text.startswith("---\nname: route-gpt-5-6-work\n"), "invalid skill frontmatter")
     require("record a prompt hash" not in skill_text.lower(), "skill privacy contract reintroduced prompt hashing")
+    hook_source = (SKILL / "scripts" / "router_hook.py").read_text(encoding="utf-8")
+    require(
+        re.search(r'["\']decision["\']\s*:\s*["\']block["\']', hook_source) is None,
+        "terminal-hook hard block can poison Codex session history",
+    )
 
     forbidden = (re.compile(r"/Users/[A-Za-z0-9._-]+/"), re.compile(r"[A-Za-z]:\\Users\\[^\\]+\\"))
     for path in ROOT.rglob("*"):

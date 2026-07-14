@@ -16,7 +16,9 @@ Record candidate-specific proof in `RELEASE_EVIDENCE.md`; never infer a checked 
 - [x] Installed-cache hooks use only plugin-relative commands and plugin data.
 - [x] Missing retired cache paths migrate to the newest installed hook, emit at most one no-cache diagnostic, and duplicate terminal Stop delivery is idempotent.
 - [x] Nested Codex commands and JSON-wrapped results preserve successful verification evidence; XML-wrapped Stop feedback cannot create a recursive routing turn, and post-route mutations cannot retain an `answer check` gate.
-- [x] `scripts/check_hooks.py` observes exactly five trusted, enabled, error-free plugin hooks and six active current agent definitions after explicit review on candidate `0.1.0+codex.20260713131040`.
+- [x] Stop and SubagentStop never emit a block decision across satisfied, unmet, duplicate, active-stop, malformed-child, and routing-council states; the release validator rejects any reintroduction.
+- [x] Offline session repair covers top-level and compacted poison, mixed legitimate content, byte-exact backup, atomic replacement, malformed JSON fail-closed behavior, links, hard links, idempotency, and privacy-safe reporting.
+- [x] `scripts/check_hooks.py` observes exactly five trusted, enabled, error-free plugin hooks and six active current agent definitions after explicit review on candidate `0.1.0+codex.20260714074631`.
 - [x] All README SVGs parse, render at 1,600 pixels wide, retain accessible titles/descriptions, and pass visual clipping/legibility review; all local README links resolve.
 - [x] Routing golden cases, product taxonomy, adversarial prompts, continuations, Fast reporting, and 5,000-case fuzzing pass.
 - [x] `ADVISORY`, local-agent-ready, authoritative full-ready, and `MANAGED_BLOCKED` diagnostics are covered.

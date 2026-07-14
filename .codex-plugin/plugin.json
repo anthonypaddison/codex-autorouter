@@ -1,6 +1,6 @@
 {
   "name": "gpt-5-6-router",
-  "version": "0.1.0+codex.20260713131040",
+  "version": "0.1.0+codex.20260714074631",
   "description": "Autorouter automatically selects the right GPT-5.6 model, effort, and bounded agent plan for each Codex task.",
   "author": {
     "name": "Alchemist"
