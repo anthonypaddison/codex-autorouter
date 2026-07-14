@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="640" viewBox="0 0 1600 640" role="img" aria-labelledby="title desc">
   <title id="title">Autorouter</title>
-  <desc id="desc">A clean dark banner showing an automatic route across Luna, Terra, and Sol.</desc>
+  <desc id="desc">A clean dark banner showing Luna, Terra, and Sol connected as three inputs to the Autorouter mark, with one selected route continuing forward.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#090B11"/>
@@ -11,11 +11,6 @@
       <stop offset="0" stop-color="#FDBA4A" stop-opacity="0.34"/>
       <stop offset="1" stop-color="#FDBA4A" stop-opacity="0"/>
     </radialGradient>
-    <linearGradient id="route" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#A78BFA"/>
-      <stop offset="0.5" stop-color="#48D7E8"/>
-      <stop offset="1" stop-color="#FDBA4A"/>
-    </linearGradient>
   </defs>
 
   <rect width="1600" height="640" rx="36" fill="url(#bg)"/>
@@ -31,7 +26,7 @@
       <circle cx="18" cy="67" r="4.5" fill="#F8FAFC"/>
     </g>
     <text x="110" y="38" fill="#F8FAFC" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="30" font-weight="760" letter-spacing="0.5">AUTOROUTER</text>
-    <text x="110" y="70" fill="#8E9AAD" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="17" font-weight="500" letter-spacing="2.5">FOR CODEX</text>
+    <text x="110" y="70" fill="#8E9AAD" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="17" font-weight="500" letter-spacing="2.5">MADE FOR CODEX 5.6</text>
   </g>
 
   <g transform="translate(92 258)" font-family="Inter, ui-sans-serif, system-ui, sans-serif">
@@ -40,30 +35,52 @@
     <text x="0" y="140" fill="#93A0B5" font-size="26" font-weight="450">Automatically routed for precision, speed, and total token cost.</text>
   </g>
 
-  <g transform="translate(930 185)" font-family="Inter, ui-sans-serif, system-ui, sans-serif">
-    <path d="M70 230C180 80 300 365 474 130" fill="none" stroke="#2A3444" stroke-width="14" stroke-linecap="round"/>
-    <path d="M70 230C180 80 300 365 474 130" fill="none" stroke="url(#route)" stroke-width="4" stroke-linecap="round"/>
+  <g font-family="Inter, ui-sans-serif, system-ui, sans-serif">
+    <text x="932" y="158" fill="#778399" font-size="14" font-weight="700" letter-spacing="2.2">THREE CAPABILITY ROUTES</text>
 
-    <g transform="translate(18 190)">
-      <rect width="170" height="86" rx="22" fill="#171526" stroke="#A78BFA" stroke-opacity="0.72"/>
-      <circle cx="33" cy="31" r="9" fill="#A78BFA"/>
-      <text x="54" y="38" fill="#F4F0FF" font-size="24" font-weight="700">Luna</text>
-      <text x="30" y="66" fill="#A9A2BE" font-size="15">bounded + verified</text>
+    <!-- Each model is an explicit input to Autorouter. -->
+    <path d="M1130 215C1194 215 1206 260 1267 260" fill="none" stroke="#A78BFA" stroke-width="4" stroke-linecap="round"/>
+    <path d="M1130 305H1267" fill="none" stroke="#48D7E8" stroke-width="4" stroke-linecap="round"/>
+    <path d="M1130 395C1194 395 1206 350 1267 350" fill="none" stroke="#FDBA4A" stroke-width="4" stroke-linecap="round"/>
+
+    <g transform="translate(930 180)">
+      <rect width="200" height="70" rx="20" fill="#171526" stroke="#A78BFA" stroke-opacity="0.72"/>
+      <circle cx="32" cy="28" r="8" fill="#A78BFA"/>
+      <text x="52" y="35" fill="#F4F0FF" font-size="22" font-weight="720">Luna</text>
+      <text x="32" y="56" fill="#A9A2BE" font-size="13">repeat + verify</text>
+      <circle cx="200" cy="35" r="5" fill="#A78BFA"/>
     </g>
 
-    <g transform="translate(204 292)">
-      <rect width="184" height="86" rx="22" fill="#102126" stroke="#48D7E8" stroke-opacity="0.72"/>
-      <circle cx="33" cy="31" r="9" fill="#48D7E8"/>
-      <text x="54" y="38" fill="#E8FDFF" font-size="24" font-weight="700">Terra</text>
-      <text x="30" y="66" fill="#9BB8BC" font-size="15">build + reason</text>
+    <g transform="translate(930 270)">
+      <rect width="200" height="70" rx="20" fill="#102126" stroke="#48D7E8" stroke-opacity="0.72"/>
+      <circle cx="32" cy="28" r="8" fill="#48D7E8"/>
+      <text x="52" y="35" fill="#E8FDFF" font-size="22" font-weight="720">Terra</text>
+      <text x="32" y="56" fill="#9BB8BC" font-size="13">build + investigate</text>
+      <circle cx="200" cy="35" r="5" fill="#48D7E8"/>
     </g>
 
-    <g transform="translate(404 72)">
-      <rect width="170" height="86" rx="22" fill="#271D11" stroke="#FDBA4A" stroke-opacity="0.8"/>
-      <circle cx="33" cy="31" r="9" fill="#FDBA4A"/>
-      <text x="54" y="38" fill="#FFF6E6" font-size="24" font-weight="700">Sol</text>
-      <text x="30" y="66" fill="#C9B79D" font-size="15">deep execution</text>
+    <g transform="translate(930 360)">
+      <rect width="200" height="70" rx="20" fill="#271D11" stroke="#FDBA4A" stroke-opacity="0.8"/>
+      <circle cx="32" cy="28" r="8" fill="#FDBA4A"/>
+      <text x="52" y="35" fill="#FFF6E6" font-size="22" font-weight="720">Sol</text>
+      <text x="32" y="56" fill="#C9B79D" font-size="13">own hard outcomes</text>
+      <circle cx="200" cy="35" r="5" fill="#FDBA4A"/>
     </g>
+
+    <!-- The current three-input logo is the routing decision point. -->
+    <g transform="translate(1240 224) scale(1.5)" aria-label="Autorouter mark">
+      <rect x="2" y="2" width="88" height="88" rx="24" fill="#0B1018" stroke="#3B4658" stroke-width="2"/>
+      <path d="M18 24L48 45M18 45H48M18 66L48 45M45 45H76M67 37L76 45L67 53" fill="none" stroke="#F8FAFC" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="18" cy="24" r="4.5" fill="#F8FAFC"/>
+      <circle cx="18" cy="45" r="4.5" fill="#F8FAFC"/>
+      <circle cx="18" cy="66" r="4.5" fill="#F8FAFC"/>
+    </g>
+
+    <path d="M1374 292H1412" fill="none" stroke="#CBD5E1" stroke-width="5" stroke-linecap="round"/>
+    <rect x="1412" y="266" width="120" height="52" rx="18" fill="#151A25" stroke="#64748B"/>
+    <text x="1472" y="298" text-anchor="middle" fill="#E2E8F0" font-size="13" font-weight="750" letter-spacing="1.5">BEST FIT</text>
+    <text x="1308" y="390" text-anchor="middle" fill="#F8FAFC" font-size="15" font-weight="720">AUTOROUTER</text>
+    <text x="1308" y="412" text-anchor="middle" fill="#7F8A9D" font-size="13">model · effort · agents</text>
   </g>
 
   <g transform="translate(92 518)" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="15" font-weight="650">
