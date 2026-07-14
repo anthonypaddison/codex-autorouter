@@ -10,161 +10,208 @@
 </p>
 
 <p align="center">
-  <strong>Automatic model, effort, and subagent routing for Codex.</strong><br>
-  Spend tokens where they improve the verified result—not everywhere by default.
+  <strong>Install it once, then use Codex normally.</strong><br>
+  Autorouter chooses the model, reasoning effort, and useful subagents for each task.
 </p>
 
 ---
 
-## Install the private beta from GitHub
+## Start here
 
-The repository is currently private, so this route requires GitHub access. Once the repository is public, the same commands work for anyone:
+You do not need to learn Luna, Terra, Sol, effort levels, or agent orchestration before using Autorouter. Describe what you want built, fixed, researched, or reviewed. Autorouter handles the routing in the background.
+
+### What you need
+
+- Codex Desktop or Codex CLI
+- Python 3.10 or newer
+- Access to this GitHub repository during the private beta
+
+### 1. Install Autorouter
+
+No ZIP download or manual file copying is needed. Codex downloads the plugin into its own plugin cache. Open a terminal and run:
 
 ```bash
 codex plugin marketplace add vibeforge1111/Codex-Autorouter --ref main
 codex plugin add gpt-5-6-router@codex-autorouter
 ```
 
-Restart Codex after installation, review the five hooks, then follow the readiness steps below. After OpenAI approves the public submission, users will also be able to install **Autorouter** directly from the universal plugin directory.
+The second command prints an **Installed plugin root**. Copy that path—you will use it once during setup. This command-line path is recommended because it makes the location needed in step 2 explicit.
 
-## What Autorouter does
+> The repository is private during beta, so installation currently requires GitHub access. When it becomes public, the same path will work for everyone.
 
-Autorouter profiles each task, chooses the least expensive GPT-5.6 route likely to finish it correctly, and requires proportionate evidence before completion. It can keep work in the current agent or delegate bounded units to Luna, Terra, or Sol with an appropriate configured reasoning effort.
-
-- **Understands the work:** risk, ambiguity, product area, volume, mutation scope, verification strength, and safe parallelism.
-- **Routes the whole plan:** model family, reasoning effort, Fast/Standard inheritance, subagent shape, and verification gate.
-- **Optimizes total cost:** context handoffs and retries count too; the cheapest request is not always the cheapest correct outcome.
-
-Public labels stay factual: `Terra High Standard`, `Sol Extra High Fast`, or `Luna Low Speed unknown`. Autorouter never invents live model, effort, or speed evidence that Codex did not expose.
-
-## Which model gets used
-
-<p align="center">
-  <img src="assets/readme/routing-map.svg" alt="Luna repeats checked work, Terra builds and investigates, and Sol owns the hardest outcomes" width="100%">
-</p>
-
-Luna is not the scouting model. It is reserved for narrow, explicit, low-consequence work with cheap objective checks. Terra handles most exploration, implementation, processing, and ambiguous debugging. Sol owns architecture, migrations, demanding synthesis, difficult security, and other consequential work. Extra High is a narrow Max Quality route—not a blanket default.
-
-The router understands strategy, requirements, UX, frontend, backend, databases, mobile, AI, integrations, payments, QA, analytics, growth, accessibility, localization, DevOps, reliability, security, privacy, performance, launch, and maintenance. Each work unit is routed independently.
-
-## Three optimization profiles
-
-<p align="center">
-  <img src="assets/readme/profiles.svg" alt="Token Saver, Balanced, and Max Quality control how Autorouter spends tokens" width="100%">
-</p>
-
-Set the persistent preference from the installed plugin directory:
+Private-beta users should make sure Git can access the repository before installing. If you use GitHub CLI, the usual setup is:
 
 ```bash
-python3 skills/route-gpt-5-6-work/scripts/routerctl.py profile token-saver
-python3 skills/route-gpt-5-6-work/scripts/routerctl.py profile balanced
-python3 skills/route-gpt-5-6-work/scripts/routerctl.py profile max-quality
+gh auth login
+gh auth setup-git
 ```
 
-Inspect it with:
+### 2. Turn on the model routes
+
+Change into the installed plugin root printed above, then run:
 
 ```bash
-python3 skills/route-gpt-5-6-work/scripts/routerctl.py profile
+cd "<installed plugin root>"
+python3 skills/route-gpt-5-6-work/scripts/routerctl.py activate
 ```
 
-The preference survives plugin upgrades and applies to the next new task. Fast/Standard remains a separate Codex setting: Autorouter inherits it and never silently toggles it.
+This adds six Autorouter model choices to Codex. It does not replace your other agents or change your Fast/Standard preference.
 
-## Subagents without sprawl
+### 3. Review the five Autorouter checks
 
-<p align="center">
-  <img src="assets/readme/orchestration.svg" alt="Autorouter stays direct, splits matching parallel workers, or gathers Terra evidence before one Sol owner" width="100%">
-</p>
+Restart Codex and start a new task. If Codex asks about hooks, review and trust the five Autorouter entries. They are small local checks that keep routing and final verification in sync.
 
-Small work stays direct. Independent units can fan out to bounded Luna or Terra leaves. Consequential work can gather evidence with Terra before one Sol agent owns the outcome. Advisors are read-only and do not form a separate judge layer; the root agent verifies coverage, resolves conflicts, and accepts or rejects the result.
+In Codex CLI, enter `/hooks` if you need to reopen the review screen.
 
-Hard limits remain simple: depth 1, at most three agents, and at most one evidence-backed route-up per turn.
+### 4. Confirm everything is ready
 
-## How routing works
+From the installed plugin root, run:
 
-<p align="center">
-  <img src="assets/readme/architecture.svg" alt="Autorouter profiles a task, chooses model and effort, executes a bounded plan, and verifies the result" width="100%">
-</p>
+```bash
+python3 scripts/check_hooks.py
+```
 
-1. **Profile** trusted user intent and current task state.
-2. **Select** one capability route and one bounded orchestration plan.
-3. **Execute** directly or through exact depth-1 custom-agent roles.
-4. **Verify** after the final mutation with the cheapest relevant deterministic evidence.
-5. **Route up once** only when completed work demonstrates a real capability limit.
+Look for:
 
-## Install and prove readiness
+```text
+"ready": true
+```
+
+If it says `false`, follow the short [troubleshooting guide](docs/TROUBLESHOOTING.md). You do not need to interpret the full diagnostic yourself.
 
 <p align="center">
   <img src="assets/readme/readiness.svg" alt="Install, trust, activate, check, and prove one real routed task" width="100%">
 </p>
 
-### Marketplace plugin — full routing and hooks
+## Your first task
 
-The plugin is **Autorouter**. Its technical package ID remains `gpt-5-6-router` so existing private-beta installs, preferences, and upgrade paths are not stranded.
+That is it—prompt Codex normally. A good first test is:
 
-```bash
-codex plugin marketplace add vibeforge1111/Codex-Autorouter --ref main
-codex plugin add gpt-5-6-router@codex-autorouter
-
-python3 skills/route-gpt-5-6-work/scripts/routerctl.py status
-python3 skills/route-gpt-5-6-work/scripts/routerctl.py activate
-python3 scripts/check_hooks.py
+```text
+Review this project and recommend one small, useful improvement. Do not edit
+files yet. Choose the best model and effort automatically, and tell me the
+route in one short line before you begin.
 ```
 
-Review the five lifecycle hooks when Codex prompts. In the CLI/TUI, `/hooks` reopens the review screen. Plugin installation does not imply hook trust. Python 3.10 or newer is required.
+You should see a simple label such as `Terra High Fast` or `Sol Medium Standard`. You can then stop thinking about model selection and focus on the work.
 
-`scripts/check_hooks.py` must report `ready: true`, exactly five trusted hooks, the exact cached skill version, and six current custom-agent definitions. One successful non-current live ledger with matching lifecycle attestation is the final runtime proof.
+## Pick your optimization style
 
-### GitHub archive — standalone advisory mode
+Autorouter starts in **Balanced**, the recommended setting for most people.
 
-Codex IDE extensions do not currently load plugins. A release archive can instead install the conflict-safe advisory skill:
+<p align="center">
+  <img src="assets/readme/profiles.svg" alt="Token Saver, Balanced, and Max Quality control how Autorouter spends tokens" width="100%">
+</p>
+
+| Setting | Best for | What it does |
+|---|---|---|
+| **Token Saver** | Routine work and tighter budgets | Uses cheaper routes when they can still finish safely |
+| **Balanced** | Everyday product building | Balances quality, speed, and token use |
+| **Max Quality** | Important launches and difficult problems | Uses stronger reasoning and more evidence when it is likely to help |
+
+Change the setting from the installed plugin root:
 
 ```bash
-python3 scripts/standalonectl.py status
-python3 scripts/standalonectl.py install
+# Pick one
+python3 skills/route-gpt-5-6-work/scripts/routerctl.py profile token-saver
+python3 skills/route-gpt-5-6-work/scripts/routerctl.py profile balanced
+python3 skills/route-gpt-5-6-work/scripts/routerctl.py profile max-quality
+
+# See the current setting
+python3 skills/route-gpt-5-6-work/scripts/routerctl.py profile
 ```
 
-Standalone mode deliberately does not claim plugin-hook enforcement. See [standalone installation](docs/STANDALONE.md) and [known limitations](docs/LIMITATIONS.md).
+The choice is remembered across updates and applies to your next new task.
 
-## Safety by design
+## Fast and Standard
 
-- **Bounded delegation:** maximum depth 1 and maximum three agents.
-- **Protected floors:** Token Saver never discounts security, payments, privacy, production, destructive actions, or other high-risk work.
-- **No silent speed changes:** Fast/Standard is inherited, not selected by Autorouter.
-- **Post-mutation verification:** the root agent remains responsible for checking the final mutated state; verification debt is recorded without interrupting Stop.
-- **Observable custom checks:** explicitly named Python validators count only with a machine-readable successful exit; when Desktop omits `transcript_path`, bounded same-session recovery can reconcile the paired result.
-- **Lifecycle-safe escalation:** delayed sibling completion is reconciled before staged execution, and route-up is limited to real task-capability ceilings—not hidden metadata or obsolete cache paths.
-- **Session-safe completion:** Stop and SubagentStop are advisory-only, record unmet gates as `FAILED_OPEN`, and never emit a replayable hard-block message; duplicate terminal events are idempotent.
-- **Upgrade-resilient hooks:** open tasks can locate the newest installed cache after their original immutable cache is replaced.
-- **Conflict-safe activation:** only six namespaced agent files are managed, with checksums, atomic replacement, rollback, crash recovery, and legacy-role migration.
-- **Prompt privacy:** routing ledgers contain no prompt content or prompt-derived hashes.
+Fast/Standard is a Codex speed preference. It is separate from Token Saver, Balanced, and Max Quality.
 
-## Honest readiness states
+- **Fast:** choose it when you want shorter waits and accept higher credit use.
+- **Standard:** choose it when saving credits matters more than response time.
+- **Autorouter never switches this setting for you.** Every selected model and subagent inherits your current choice.
 
-| State | Meaning |
+In Codex Desktop, use the visible Fast control. In Codex CLI, use:
+
+```text
+/fast on
+/fast off
+/fast status
+```
+
+If you turn Fast on, a route can appear as `Terra High Fast`. Turn it off and new work will use Standard, such as `Terra High Standard`. If your current Codex model or account does not offer Fast, Codex simply keeps Standard available.
+
+**A useful default:** keep Balanced + Standard for normal background work. Turn Fast on for interactive building sessions. Use Max Quality when the outcome matters more than speed or token use.
+
+See the official [Codex speed guide](https://learn.chatgpt.com/docs/agent-configuration/speed) for current Fast availability and credit behavior.
+
+## What Autorouter chooses
+
+<p align="center">
+  <img src="assets/readme/routing-map.svg" alt="Luna repeats checked work, Terra builds and investigates, and Sol owns the hardest outcomes" width="100%">
+</p>
+
+- **Luna** handles clear, repetitive work that is easy to check.
+- **Terra** handles most building, exploration, testing, and debugging.
+- **Sol** handles architecture, difficult decisions, deep debugging, and high-impact work.
+
+You do not need to request one by name. Autorouter chooses per task—and can choose differently for separate parts of a larger project.
+
+## When subagents help
+
+<p align="center">
+  <img src="assets/readme/orchestration.svg" alt="Autorouter stays direct, splits matching parallel workers, or gathers Terra evidence before one Sol owner" width="100%">
+</p>
+
+Small tasks stay in one agent. Larger tasks may split into a few independent pieces, or gather evidence before one agent owns the final result. Autorouter keeps this bounded so a simple request does not turn into an expensive swarm.
+
+## Tips for better results
+
+1. **Describe the outcome, not the model.** Say what you want built or fixed; let Autorouter choose Luna, Terra, or Sol.
+2. **Include “done when.”** Mention the test, behavior, or visible result that should prove completion.
+3. **Start with Balanced.** Move to Token Saver or Max Quality only when you have a reason.
+4. **Use Fast for active collaboration.** Standard is a good default for work that can run in the background.
+5. **Start a new task after setup or profile changes.** New tasks pick up the latest plugin instructions and preference cleanly.
+6. **Ask when you are curious.** “Show me the route and why in one line” gives you the model, effort, speed, and plan without a technical dump.
+7. **Let verification finish.** The cheapest successful run is the one that does not need to be redone.
+
+## What Autorouter will—and will not—do
+
+- It chooses a cost-effective GPT-5.6 route for each task.
+- It can use a small number of specialized subagents when they materially help.
+- It keeps important work on appropriately capable routes, even in Token Saver.
+- It verifies file-changing work before reporting success.
+- It does not change your Fast/Standard preference.
+- It does not store your prompt text or a hash of it in its routing records.
+
+## Update or remove Autorouter
+
+For updates, reinstall from the marketplace, run `routerctl.py activate` again from the new installed root, then restart Codex and begin a new task. Your optimization profile is preserved.
+
+For step-by-step update, repair, and removal instructions, use the [installation and lifecycle guide](docs/INSTALL.md).
+
+## Help and deeper documentation
+
+| Guide | Use it when |
 |---|---|
-| `ADVISORY` | The skill can advise or work in the current agent; full enforcement is not proven. |
-| `ADVISORY` + `local_agent_ready: true` | Agent definitions are current, but filesystem state cannot attest hook discovery. |
-| `scripts/check_hooks.py` → `ready: true` | App-server discovery, trusted hooks, and current agent files match this build. |
-| Successful non-current live ledger | Codex actually selected the required custom role and model. |
-| `MANAGED_BLOCKED` | Organization policy permits only managed hooks; Autorouter does not bypass it. |
+| [Installation and lifecycle](docs/INSTALL.md) | You are installing, updating, repairing, or removing Autorouter |
+| [Troubleshooting](docs/TROUBLESHOOTING.md) | The readiness check does not say `true` |
+| [Privacy](docs/PRIVACY.md) | You want to know what local routing data is stored |
+| [Known limitations](docs/LIMITATIONS.md) | You want exact runtime and platform boundaries |
+| [Standalone advisory mode](docs/STANDALONE.md) | You are using a surface without full plugin support |
 
-> **Release status:** the automated matrix passes on macOS, Ubuntu, and Windows across Python 3.10–3.14. Broad public-stable release still requires the remaining real-host acceptance rows and a tested private vulnerability-reporting channel after the repository becomes public. See [release evidence](docs/RELEASE_EVIDENCE.md).
+<details>
+<summary><strong>Developer and release details</strong></summary>
 
-## Documentation
+### How routing works
 
-| Guide | Use it for |
-|---|---|
-| [Installation and lifecycle](docs/INSTALL.md) | Plugin install, activation, upgrade, repair, and uninstall |
-| [Standalone advisory mode](docs/STANDALONE.md) | GitHub archive and IDE-compatible installation |
-| [Known limitations](docs/LIMITATIONS.md) | Runtime, hooks, Fast, and custom-agent boundaries |
-| [Privacy](docs/PRIVACY.md) | Local preference and ledger contents |
-| [Troubleshooting](docs/TROUBLESHOOTING.md) | Readiness, trust, recovery, and routing-profile issues |
-| [Upstream hook replay report](docs/UPSTREAM_CODEX_HOOK_REPLAY_BUG.md) | Reproduction and required Codex-side fix for poisoned terminal-hook messages |
-| [Real-host acceptance](docs/HOST_ACCEPTANCE.md) | Exact release smoke procedure |
-| [Release checklist](docs/RELEASE_CHECKLIST.md) | Automated and public-launch gates |
-| [Release evidence](docs/RELEASE_EVIDENCE.md) | Candidate-specific validation proof |
+<p align="center">
+  <img src="assets/readme/architecture.svg" alt="Autorouter profiles a task, chooses model and effort, executes a bounded plan, and verifies the result" width="100%">
+</p>
 
-## Development
+Autorouter profiles the task, selects one route and bounded plan, executes it directly or through depth-1 agents, and verifies the final result. It permits at most three subagents and one evidence-backed route-up.
+
+### Local verification
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_release.py
@@ -180,25 +227,9 @@ cd ..
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v benchmarks.test_autorouter_bench
 ```
 
-The current suite covers 200 routing, lifecycle, and benchmark-harness tests plus 5,000 deterministic fuzz cases per CI job, including all three profiles, Extra High selection, delegated-input isolation, repeated-role collaboration reconciliation, stale-cache migration, terminal-hook poison prevention and offline repair, standard and custom-script verification, unobservable-result fail-open behavior, wrapped Stop-feedback idempotency, lifecycle ownership, concurrency, crash recovery, hook readiness, clean-room standalone installation, frozen capability-fixture validation, profile restoration, and end-to-end blind-panel claim boundaries.
+The release gate covers 200 routing, lifecycle, and benchmark tests plus 5,000 deterministic fuzz cases on every hosted Python and operating-system combination. See [release evidence](docs/RELEASE_EVIDENCE.md), the [release checklist](docs/RELEASE_CHECKLIST.md), and [Autorouter Arena](benchmarks/README.md) for the full proof and benchmark method.
 
-### Capability and efficiency benchmark
-
-Unit tests prove routing policy; they do not prove that routing improves a real
-task. [Autorouter Arena](benchmarks/README.md) runs frozen product-building
-cases against plain Codex, Token Saver, Balanced, and Max Quality from identical
-starters, then reports outcome quality, actual routing/subagent evidence,
-tokens, and elapsed time separately. An optional private GLM 5.2 + DeepSeek V4
-Pro blind panel can provide separated qualitative review during development;
-that reviewer machinery is not part of the runtime plugin.
-
-```bash
-python3 benchmarks/autorouter_bench.py route-audit
-python3 benchmarks/autorouter_bench.py prepare --output /tmp/autorouter-arena
-```
-
-Paid A/B runs require explicit execution and reviewed-hook acknowledgements;
-the benchmark never spends tokens by default.
+</details>
 
 ## License
 
