@@ -48,7 +48,16 @@ Tasks created by builds before the stale-cache launcher fix can retain a command
 
 Update the plugin, review and trust the changed hook definitions, and open a fresh task once. Do not delete trust state or disable completion gates globally. Tasks created by the fixed build use a self-contained launcher that discovers the newest installed router hook when a later cache replacement removes their original version. If no valid cache exists, the launcher reports the condition once and then fails open without recursively continuing the task.
 
-Within the router, verification state never creates a Stop continuation. Successful observable verification—including package scripts such as `pnpm verify:fast` and tests executed through nested Codex orchestration—settles the current mutation generation. If a nominally read-only turn later mutates files, its recorded gate is promoted from `answer check` to targeted tests or a build. When Codex's incomplete unified-exec interception omits the result, or when an observable verification fails, the ledger records a silent `FAILED_OPEN` with root verification still required; it does not pretend the check passed or inject another message. XML-wrapped feedback from an older build is recognized and discarded rather than reclassified as a new user task, and duplicate Stop delivery against either terminal state is a no-op.
+Within the current router, Stop and SubagentStop never hard-block. Successful observable verification—including package scripts such as `pnpm verify:fast` and tests executed through nested Codex orchestration—settles the current mutation generation. If a nominally read-only turn later mutates files, its recorded gate is promoted from `answer check` to targeted tests or a build. When Codex's incomplete unified-exec interception omits the result, when verification fails, or when orchestration is incomplete, the ledger records `FAILED_OPEN` with root verification still required; it does not pretend the check passed or inject a replayable user message. XML-wrapped feedback from an older build is recognized and discarded rather than reclassified as a new user task, and duplicate Stop delivery against either terminal state is a no-op.
+
+If an older build already poisoned the persisted transcript, first close the affected task. Then run one of:
+
+```bash
+python3 skills/route-gpt-5-6-work/scripts/routerctl.py sanitize --session /absolute/path/to/session.jsonl
+python3 skills/route-gpt-5-6-work/scripts/routerctl.py sanitize --all
+```
+
+The command reports counts and backup paths without printing prompt contents. It removes a message only when it is a UUIDv7-tagged user message containing only `<hook_prompt>` feedback; for mixed legitimate content, it preserves the message and removes only the invalid ID. It also repairs nested `compacted.replacement_history`, leaves unrelated tool output untouched, refuses links/hard links, fails closed on invalid JSONL, and writes nothing when no match exists. Reopen the task after repair. A task whose transcript is already loaded must be closed and reopened; no plugin hook can reliably rewrite that live request history.
 
 ## Standalone install or recovery refuses a tree
 

@@ -119,7 +119,7 @@ Standalone mode deliberately does not claim plugin-hook enforcement. See [standa
 - **Protected floors:** Token Saver never discounts security, payments, privacy, production, destructive actions, or other high-risk work.
 - **No silent speed changes:** Fast/Standard is inherited, not selected by Autorouter.
 - **Post-mutation verification:** the root agent remains responsible for checking the final mutated state; verification debt is recorded without interrupting Stop.
-- **Non-recursive completion:** verification state alone never injects hook feedback; hard routing continuations remain one-shot and duplicate Stop events are idempotent.
+- **Session-safe completion:** Stop and SubagentStop are advisory-only, record unmet gates as `FAILED_OPEN`, and never emit a replayable hard-block message; duplicate terminal events are idempotent.
 - **Upgrade-resilient hooks:** open tasks can locate the newest installed cache after their original immutable cache is replaced.
 - **Conflict-safe activation:** only six namespaced agent files are managed, with checksums, atomic replacement, rollback, crash recovery, and legacy-role migration.
 - **Prompt privacy:** routing ledgers contain no prompt content or prompt-derived hashes.
@@ -145,6 +145,7 @@ Standalone mode deliberately does not claim plugin-hook enforcement. See [standa
 | [Known limitations](docs/LIMITATIONS.md) | Runtime, hooks, Fast, and custom-agent boundaries |
 | [Privacy](docs/PRIVACY.md) | Local preference and ledger contents |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | Readiness, trust, recovery, and routing-profile issues |
+| [Upstream hook replay report](docs/UPSTREAM_CODEX_HOOK_REPLAY_BUG.md) | Reproduction and required Codex-side fix for poisoned terminal-hook messages |
 | [Real-host acceptance](docs/HOST_ACCEPTANCE.md) | Exact release smoke procedure |
 | [Release checklist](docs/RELEASE_CHECKLIST.md) | Automated and public-launch gates |
 | [Release evidence](docs/RELEASE_EVIDENCE.md) | Candidate-specific validation proof |
@@ -160,9 +161,30 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_router test_routerctl
 
 cd ../../../scripts
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_check_hooks test_standalonectl
+
+cd ..
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v benchmarks.test_autorouter_bench
 ```
 
-The current suite covers 171 routing and lifecycle tests plus 5,000 deterministic fuzz cases per CI job, including all three profiles, Extra High selection, stale-cache migration, nested-tool verification, unobservable-result fail-open behavior, wrapped Stop-feedback idempotency, lifecycle ownership, concurrency, crash recovery, hook readiness, and clean-room standalone installation.
+The current suite covers 189 routing, lifecycle, and benchmark-harness tests plus 5,000 deterministic fuzz cases per CI job, including all three profiles, Extra High selection, stale-cache migration, terminal-hook poison prevention and offline repair, nested-tool verification, unobservable-result fail-open behavior, wrapped Stop-feedback idempotency, lifecycle ownership, concurrency, crash recovery, hook readiness, clean-room standalone installation, frozen capability-fixture validation, profile restoration, and end-to-end blind-panel claim boundaries.
+
+### Capability and efficiency benchmark
+
+Unit tests prove routing policy; they do not prove that routing improves a real
+task. [Autorouter Arena](benchmarks/README.md) runs frozen product-building
+cases against plain Codex, Token Saver, Balanced, and Max Quality from identical
+starters, then reports outcome quality, actual routing/subagent evidence,
+tokens, and elapsed time separately. An optional private GLM 5.2 + DeepSeek V4
+Pro blind panel can provide separated qualitative review during development;
+that reviewer machinery is not part of the runtime plugin.
+
+```bash
+python3 benchmarks/autorouter_bench.py route-audit
+python3 benchmarks/autorouter_bench.py prepare --output /tmp/autorouter-arena
+```
+
+Paid A/B runs require explicit execution and reviewed-hook acknowledgements;
+the benchmark never spends tokens by default.
 
 ## License
 

@@ -25,3 +25,7 @@
 - Accepted substantive multiline Evidence, Verification, and Uncertainty sections without weakening empty-section rejection.
 - Added five-run native delegation stability acceptance and a final exact-installed-cache replay.
 - Added cross-platform CI bytecode hygiene and a clean-room release-archive lifecycle gate.
+- Made `Stop` and `SubagentStop` strictly advisory: terminal hooks record unmet routing, attestation, and verification debt as `FAILED_OPEN` and can no longer emit a hard-block response that Codex may replay as a poisoned user message.
+- Front-loaded required-agent coverage, lifecycle attestation, final-mutation verification, service-tier inheritance, and no-recursion rules into trusted `UserPromptSubmit` and `SubagentStart` context.
+- Added `routerctl sanitize --session PATH|--all` for conservative offline repair of already-poisoned JSONL sessions, including nested compacted history, exact backups, atomic replacement, idempotency, and fail-closed malformed-input handling.
+- Added a release guard that rejects any reintroduced `{"decision":"block"}` terminal response, plus regression coverage and an upstream Codex replay bug report.

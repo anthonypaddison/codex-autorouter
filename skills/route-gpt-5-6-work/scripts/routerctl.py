@@ -76,6 +76,16 @@ LEGACY_AGENT_NAMES = (
     "gpt56_sol_judge.toml",
 )
 SUPPORTED_AGENT_NAMES = frozenset((*AGENT_NAMES, *LEGACY_AGENT_NAMES))
+UUIDV7_PATTERN = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    re.IGNORECASE,
+)
+HOOK_PROMPT_PATTERN = re.compile(r"<hook_prompt\b[^>]*>.*?</hook_prompt>", re.IGNORECASE | re.DOTALL)
+PURE_HOOK_PROMPTS_PATTERN = re.compile(
+    r"^\s*(?:<hook_prompt\b[^>]*>.*?</hook_prompt>\s*)+$",
+    re.IGNORECASE | re.DOTALL,
+)
+_DROP = object()
 
 
 class RouterCtlError(RuntimeError):
@@ -181,6 +191,152 @@ def _atomic_bytes(path: Path, content: bytes, mode: int = 0o600) -> None:
     finally:
         if temporary.exists():
             temporary.unlink()
+
+
+def _message_text(value: Any) -> str:
+    """Extract only text-like message content, never arbitrary JSON fields."""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "\n".join(part for item in value if (part := _message_text(item)))
+    if not isinstance(value, dict):
+        return ""
+    if isinstance(value.get("text"), str):
+        return str(value["text"])
+    if isinstance(value.get("input_text"), str):
+        return str(value["input_text"])
+    if isinstance(value.get("content"), (str, list, dict)):
+        return _message_text(value["content"])
+    return ""
+
+
+def _sanitize_transcript_value(value: Any, stats: dict[str, int]) -> Any:
+    if isinstance(value, list):
+        sanitized = []
+        for item in value:
+            result = _sanitize_transcript_value(item, stats)
+            if result is not _DROP:
+                sanitized.append(result)
+        return sanitized
+    if not isinstance(value, dict):
+        return value
+
+    is_message = value.get("type") == "message" and value.get("role") == "user"
+    message_id = value.get("id")
+    message_text = _message_text(value.get("content")) if is_message else ""
+    poisoned = (
+        is_message
+        and isinstance(message_id, str)
+        and UUIDV7_PATTERN.fullmatch(message_id) is not None
+        and HOOK_PROMPT_PATTERN.search(message_text) is not None
+    )
+    if poisoned and PURE_HOOK_PROMPTS_PATTERN.fullmatch(message_text) is not None:
+        stats["messages_removed"] += 1
+        return _DROP
+
+    sanitized: dict[str, Any] = {}
+    for key, item in value.items():
+        if poisoned and key == "id":
+            stats["ids_removed"] += 1
+            continue
+        result = _sanitize_transcript_value(item, stats)
+        if result is _DROP:
+            if value.get("type") == "response_item" and key == "payload":
+                return _DROP
+            continue
+        sanitized[key] = result
+    return sanitized
+
+
+def _safe_transcript_path(path: Path) -> Path:
+    candidate = path.expanduser().absolute()
+    _require_canonical_path(candidate)
+    if _is_linklike(candidate):
+        raise RouterCtlError(f"refusing symlink, junction, or reparse session: {candidate}")
+    if not candidate.is_file() or candidate.suffix.lower() != ".jsonl":
+        raise RouterCtlError(f"expected a JSONL session file: {candidate}")
+    info = candidate.stat()
+    if info.st_nlink != 1:
+        raise RouterCtlError(f"refusing hard-linked session file: {candidate}")
+    return candidate
+
+
+def _sanitize_session(path: Path) -> dict[str, Any]:
+    target = _safe_transcript_path(path)
+    initial_info = target.stat()
+    original = target.read_bytes()
+    output: list[bytes] = []
+    stats = {"messages_removed": 0, "ids_removed": 0, "lines_removed": 0}
+    changed = False
+    for line_number, raw_line in enumerate(original.splitlines(keepends=True), start=1):
+        body = raw_line.rstrip(b"\r\n")
+        ending = raw_line[len(body):]
+        if not body.strip():
+            output.append(raw_line)
+            continue
+        try:
+            value = json.loads(body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RouterCtlError(f"invalid JSONL at {target}:{line_number}: {exc}") from exc
+        before = (stats["messages_removed"], stats["ids_removed"])
+        sanitized = _sanitize_transcript_value(value, stats)
+        if sanitized is _DROP:
+            stats["lines_removed"] += 1
+            changed = True
+            continue
+        if before != (stats["messages_removed"], stats["ids_removed"]):
+            changed = True
+            output.append(json.dumps(sanitized, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + ending)
+        else:
+            output.append(raw_line)
+
+    result: dict[str, Any] = {"path": str(target), "modified": changed, **stats}
+    if not changed:
+        return result
+    timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    backup = target.with_name(f"{target.name}.autorouter-backup.{timestamp}.{uuid.uuid4().hex[:8]}")
+    mode = stat.S_IMODE(target.stat().st_mode)
+    _atomic_bytes(backup, original, mode)
+    current_info = target.stat()
+    if (
+        current_info.st_dev,
+        current_info.st_ino,
+        current_info.st_size,
+        current_info.st_mtime_ns,
+    ) != (
+        initial_info.st_dev,
+        initial_info.st_ino,
+        initial_info.st_size,
+        initial_info.st_mtime_ns,
+    ):
+        raise RouterCtlError(f"session changed during sanitization; original preserved and backup retained: {target}")
+    _atomic_bytes(target, b"".join(output), mode)
+    result["backup"] = str(backup)
+    return result
+
+
+def sanitize_sessions(*, session: Path | None = None, all_sessions: bool = False) -> dict[str, Any]:
+    if (session is None) == (not all_sessions):
+        raise RouterCtlError("choose exactly one of --session PATH or --all")
+    if session is not None:
+        paths = [session]
+    else:
+        paths = sorted({
+            path
+            for root in (CODEX_HOME / "sessions", CODEX_HOME / "archived_sessions")
+            if root.is_dir() and not _is_linklike(root)
+            for path in root.rglob("*.jsonl")
+        })
+    results = [_sanitize_session(path) for path in paths]
+    return {
+        "status": "sanitized",
+        "files_scanned": len(results),
+        "files_modified": sum(bool(item["modified"]) for item in results),
+        "messages_removed": sum(int(item["messages_removed"]) for item in results),
+        "ids_removed": sum(int(item["ids_removed"]) for item in results),
+        "lines_removed": sum(int(item["lines_removed"]) for item in results),
+        "backups": [str(item["backup"]) for item in results if "backup" in item],
+    }
 
 
 def _atomic_json(path: Path, value: dict[str, Any]) -> None:
@@ -824,6 +980,13 @@ def main() -> int:
     subparsers.add_parser("status")
     profile_parser = subparsers.add_parser("profile")
     profile_parser.add_argument("value", nargs="?", choices=tuple(ROUTING_PROFILES))
+    sanitize_parser = subparsers.add_parser(
+        "sanitize",
+        help="repair persisted sessions poisoned by replayed terminal-hook messages",
+    )
+    sanitize_group = sanitize_parser.add_mutually_exclusive_group(required=True)
+    sanitize_group.add_argument("--session", type=Path, metavar="PATH")
+    sanitize_group.add_argument("--all", action="store_true", dest="all_sessions")
     args = parser.parse_args()
     try:
         if args.command == "activate":
@@ -834,6 +997,8 @@ def main() -> int:
             result = repair()
         elif args.command == "status":
             result = status()
+        elif args.command == "sanitize":
+            result = sanitize_sessions(session=args.session, all_sessions=args.all_sessions)
         elif args.value:
             result = set_profile(args.value)
         else:
