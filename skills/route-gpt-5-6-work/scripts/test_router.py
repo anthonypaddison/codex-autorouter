@@ -125,6 +125,7 @@ class RouterTests(unittest.TestCase):
         router_hook.STATE_ROOT = Path(self.temp.name).resolve()
         router_hook.CONFIG_PATH = Path(self.config_temp.name).resolve() / "config.toml"
         router_hook.PROFILE_PATH = Path(self.config_temp.name).resolve() / "gpt-5-6-router" / "routing-profile.json"
+        router_hook.CODEX_HOME = Path(self.config_temp.name).resolve()
         router_hook.CONFIG_PATH.write_text("", encoding="utf-8")
         source_agents = Path(router_hook.__file__).resolve().parents[1] / "assets" / "agents"
         shutil.copytree(source_agents, router_hook.CONFIG_PATH.parent / "agents")
@@ -930,6 +931,55 @@ class RouterTests(unittest.TestCase):
         self.assertTrue(router_hook._is_verification("cargo check"))
         self.assertTrue(router_hook._is_verification("PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -q"))
         self.assertTrue(router_hook._is_verification("set -e\\npython3 -m unittest -q"))
+        self.assertTrue(router_hook._is_verification(
+            "python3 outputs/validate-router-smoke.py outputs/router-smoke.jsonl"
+        ))
+        self.assertTrue(router_hook._is_verification("python3 scripts/verify_schema.py fixture.json"))
+        self.assertTrue(router_hook._is_verification("uv run python scripts/check-output.py fixture.json"))
+        self.assertFalse(router_hook._is_verification("python3 scripts/deploy.py"))
+        self.assertFalse(router_hook._is_verification("python3 scripts/generate-fixtures.py"))
+
+    def test_transcript_custom_validator_settles_the_latest_mutation(self) -> None:
+        session = "transcript-custom-validator"
+        turn = "t1"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Create a fixture.",
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+            "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
+        })
+        metadata = {"turn_id": turn}
+        transcript_dir = router_hook.CODEX_HOME / "sessions" / "2026" / "07" / "14"
+        transcript_dir.mkdir(parents=True)
+        transcript = transcript_dir / f"rollout-{session}.jsonl"
+        records = [
+            {"payload": {
+                "type": "custom_tool_call", "name": "exec", "call_id": "verify-custom",
+                "input": (
+                    'const r = await tools.exec_command({cmd:'
+                    '"python3 outputs/validate-router-smoke.py outputs/router-smoke.jsonl"}); '
+                    'text(JSON.stringify({exit_code:r.exit_code,output:r.output}));'
+                ),
+                "internal_chat_message_metadata_passthrough": metadata,
+            }},
+            {"payload": {
+                "type": "custom_tool_call_output", "call_id": "verify-custom",
+                "output": [{"type": "input_text", "text": json.dumps({"exit_code": 0, "output": "PASS"})}],
+                "internal_chat_message_metadata_passthrough": metadata,
+            }},
+        ]
+        transcript.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
+        result = router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
+            "stop_hook_active": False,
+        })
+        state = json.loads((Path(self.temp.name) / f"{session}--{turn}.json").read_text())
+        self.assertEqual({"continue": True}, result)
+        self.assertEqual("COMPLETE", state["status"])
+        self.assertEqual(state["mutation_generation"], state["verified_generation"])
+        self.assertEqual("transcript_exit_status", state["verification_observability"])
 
     def test_nested_exec_verification_settles_the_latest_mutation(self) -> None:
         router_hook.handle({

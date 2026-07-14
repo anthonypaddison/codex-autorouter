@@ -1458,6 +1458,9 @@ def _is_verification(command: str) -> bool:
         r"pytest|ruff|mypy|eslint|biome|tsc|rspec|rubocop|"
         r"(?:npm|pnpm|yarn)\s+(?:(?:run\s+)?(?:test|lint|typecheck|build|verify(?::[\w.-]+)?|check(?::[\w.-]+)?|ci(?::[\w.-]+)?)|test)|"
         r"cargo\s+(?:test|check|build)|go\s+test|swift\s+test|"
+        r"(?:python\d*(?:\.\d+)?|uv\s+run\s+python\d*(?:\.\d+)?|poetry\s+run\s+python\d*(?:\.\d+)?)\s+"
+        r"(?:-[^\s]+\s+)*(?:[^\s]*/)?(?:validate|validator|verify|check|test)"
+        r"(?:[-_.][^\s/]*)?\.py\b|"
         r"[^\s]*quick_validate\.py\b)",
         re.I,
     )
@@ -1606,16 +1609,48 @@ def _transcript_tool_call(payload: dict[str, Any]) -> tuple[str, str, str] | Non
     return call_id, tool, command
 
 
+def _transcript_path(data: dict[str, Any]) -> Path | None:
+    """Return the host-supplied transcript or locate this exact Codex session.
+
+    Desktop currently omits ``transcript_path`` from some terminal hook events.
+    The fallback is deliberately limited to Codex's two session roots and an
+    inert session-id alphabet so hook input cannot broaden the filesystem scan.
+    """
+    path_value = data.get("transcript_path")
+    if isinstance(path_value, str):
+        return Path(path_value)
+    session_id = str(data.get("session_id") or "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", session_id):
+        return None
+    patterns = (
+        (CODEX_HOME / "sessions", f"*/*/*/*{session_id}.jsonl"),
+        (CODEX_HOME / "archived_sessions", f"*{session_id}.jsonl"),
+    )
+    candidates: list[Path] = []
+    for root, pattern in patterns:
+        try:
+            if root.is_dir() and not root.is_symlink():
+                candidates.extend(root.glob(pattern))
+        except OSError:
+            continue
+    regular = [path for path in candidates if path.is_file() and not path.is_symlink()]
+    if not regular:
+        return None
+    try:
+        return max(regular, key=lambda path: path.stat().st_mtime_ns)
+    except OSError:
+        return None
+
+
 def _reconcile_verification_transcript(data: dict[str, Any], state: dict[str, Any]) -> None:
     """Recover observable command results omitted from PostToolUse events.
 
     Only machine-readable exit status is accepted. Human completion prose and
     bare command output never settle the gate.
     """
-    path_value = data.get("transcript_path")
-    if not isinstance(path_value, str):
+    path = _transcript_path(data)
+    if path is None:
         return
-    path = Path(path_value)
     try:
         if path.is_symlink() or not path.is_file() or path.stat().st_size > 8 * 1024 * 1024:
             return
@@ -1689,10 +1724,9 @@ def _reconcile_subagent_transcript(data: dict[str, Any], state: dict[str, Any]) 
     lifetime_worker_cap = sum(max(0, int(candidate.get("max_workers", 0))) for candidate in valid_plans)
     if not allowed:
         return
-    path_value = data.get("transcript_path")
-    if not isinstance(path_value, str):
+    path = _transcript_path(data)
+    if path is None:
         return
-    path = Path(path_value)
     try:
         if not path.is_file() or path.stat().st_size > 8 * 1024 * 1024:
             return
