@@ -1,0 +1,21 @@
+{
+  "name": "codex-autorouter",
+  "interface": {
+    "displayName": "Codex Autorouter"
+  },
+  "plugins": [
+    {
+      "name": "gpt-5-6-router",
+      "source": {
+        "source": "url",
+        "url": "https://github.com/vibeforge1111/Codex-Autorouter.git",
+        "ref": "main"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Developer Tools"
+    }
+  ]
+}

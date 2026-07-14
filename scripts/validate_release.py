@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import json
 import re
+import struct
 import sys
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST = ROOT / ".codex-plugin" / "plugin.json"
+MARKETPLACE = ROOT / ".agents" / "plugins" / "marketplace.json"
 HOOKS = ROOT / "hooks" / "hooks.json"
 SKILL = ROOT / "skills" / "route-gpt-5-6-work"
 EVENTS = {"UserPromptSubmit", "SubagentStart", "PostToolUse", "SubagentStop", "Stop"}
@@ -29,6 +31,12 @@ def require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
+def png_dimensions(path: Path) -> tuple[int, int]:
+    data = path.read_bytes()
+    require(data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) >= 24, f"invalid PNG: {path.name}")
+    return struct.unpack(">II", data[16:24])
+
+
 def main() -> int:
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     require(manifest.get("name") == "gpt-5-6-router", "stable plugin package name changed")
@@ -40,12 +48,43 @@ def main() -> int:
     require(bool(re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", str(manifest.get("version")))), "invalid semver")
     require(manifest.get("skills") == "./skills/", "skills path must be plugin-relative")
     require((ROOT / manifest["interface"]["logo"]).is_file(), "logo is missing")
+    screenshots = manifest["interface"].get("screenshots")
+    require(isinstance(screenshots, list) and len(screenshots) == 3, "expected three listing screenshots")
+    for screenshot in screenshots:
+        screenshot_path = (ROOT / screenshot).resolve()
+        require(screenshot_path.is_relative_to(ROOT / "assets"), "screenshot must stay under assets")
+        require(screenshot_path.suffix.lower() == ".png" and screenshot_path.is_file(), "listing screenshot is missing or not PNG")
+        width, height = png_dimensions(screenshot_path)
+        require(width >= 1200 and height >= 600, f"listing screenshot is too small: {screenshot_path.name}")
+    social_svg = ROOT / "assets" / "social-preview.svg"
+    social_png = ROOT / "assets" / "social-preview.png"
+    require(social_svg.is_file() and social_png.is_file(), "social preview assets are missing")
+    require(png_dimensions(social_png) == (1280, 640), "social preview must be 1280x640")
+
+    infographic_svgs = sorted((ROOT / "assets" / "readme").glob("*.svg"))
+    require(len(infographic_svgs) == 6, "expected six README infographics")
+    for infographic in infographic_svgs:
+        infographic_text = infographic.read_text(encoding="utf-8")
+        require("Autorouter logo" in infographic_text or "Autorouter mark" in infographic_text, f"current logo missing from {infographic.name}")
     require((ROOT / "scripts" / "check_hooks.py").is_file(), "hook trust checker is missing")
     require((ROOT / "scripts" / "standalonectl.py").is_file(), "standalone lifecycle helper is missing")
     require((ROOT / "docs" / "PRIVACY.md").is_file(), "privacy documentation is missing")
     require((ROOT / "scripts" / "fuzz_router.py").is_file(), "routing fuzz runner is missing")
     require((ROOT / "benchmarks" / "autorouter_bench.py").is_file(), "capability benchmark is missing")
     require((ROOT / "benchmarks" / "README.md").is_file(), "capability benchmark guide is missing")
+
+    marketplace = json.loads(MARKETPLACE.read_text(encoding="utf-8"))
+    require(marketplace.get("name") == "codex-autorouter", "unexpected repo marketplace name")
+    entries = marketplace.get("plugins")
+    require(isinstance(entries, list) and len(entries) == 1, "repo marketplace must expose one plugin")
+    entry = entries[0]
+    require(entry.get("name") == "gpt-5-6-router", "repo marketplace package mismatch")
+    require(entry.get("category") == "Developer Tools", "repo marketplace category mismatch")
+    require(entry.get("source") == {
+        "source": "url",
+        "url": "https://github.com/vibeforge1111/Codex-Autorouter.git",
+        "ref": "main",
+    }, "repo marketplace source mismatch")
 
     hooks = json.loads(HOOKS.read_text(encoding="utf-8")).get("hooks")
     require(isinstance(hooks, dict) and set(hooks) == EVENTS, "unexpected hook event set")

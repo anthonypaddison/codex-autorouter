@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="620" viewBox="0 0 1600 620" role="img" aria-labelledby="title desc">
-  <title id="title">Autorouter readiness path</title>
-  <desc id="desc">Five steps from installing Autorouter to proving a live routed task: install, trust hooks, activate roles, check readiness, and run a live smoke.</desc>
+  <title id="title">How to prove Autorouter is working</title>
+  <desc id="desc">Install Autorouter, trust five hooks, activate six roles, check readiness, and prove one live routed task completes without violations.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#090C13"/>
@@ -18,8 +18,13 @@
   <rect width="1600" height="620" rx="34" fill="url(#bg)"/>
 
   <g font-family="Inter, ui-sans-serif, system-ui, sans-serif">
-    <text x="70" y="70" fill="#F8FAFC" font-size="38" font-weight="760">From installed to actually ready</text>
-    <text x="70" y="108" fill="#95A2B5" font-size="19">Files are not proof. Trust, current agent definitions, app-server discovery, and one live ledger are.</text>
+    <g transform="translate(1300 40)" aria-label="Autorouter logo">
+      <rect width="50" height="50" rx="14" fill="#0B1018" stroke="#334052"/>
+      <g transform="translate(3 1) scale(0.52)"><path d="M18 25L48 46M18 46H48M18 67L48 46M45 46H76M67 38L76 46L67 54" fill="none" stroke="#F8FAFC" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><circle cx="18" cy="25" r="4.5" fill="#F8FAFC"/><circle cx="18" cy="46" r="4.5" fill="#F8FAFC"/><circle cx="18" cy="67" r="4.5" fill="#F8FAFC"/></g>
+      <text x="64" y="31" fill="#F8FAFC" font-size="16" font-weight="760" letter-spacing="1">AUTOROUTER</text>
+    </g>
+    <text x="70" y="70" fill="#F8FAFC" font-size="38" font-weight="760">How do you know Autorouter is working?</text>
+    <text x="70" y="108" fill="#95A2B5" font-size="19">Install → trust → activate → check → prove one real routed task.</text>
     <path d="M268 287H352M568 287H652M868 287H952M1168 287H1252" fill="none" stroke="#566477" stroke-width="3" marker-end="url(#arrow)"/>
 
     <g transform="translate(68 174)">

@@ -4,6 +4,8 @@
 
 - Renamed the user-facing plugin to **Autorouter** while retaining the technical `gpt-5-6-router` package ID for upgrade continuity, and added a GitHub-ready visual system covering model choice, profiles, subagent orchestration, architecture, and readiness.
 - Replaced the orbit-heavy app icon with a simpler three-input, one-output routing mark and aligned the README hero branding with it.
+- Simplified every README infographic with plain-language headings, placed the current Autorouter mark on each graphic, corrected parallel leaves to use matching worker roles, and added three rendered plugin-listing screenshots.
+- Added a repo-backed `codex-autorouter` marketplace and exact GitHub beta installation commands while keeping the public-directory submission path distinct.
 - Added persistent Token Saver, Balanced, and Max Quality routing profiles with safety floors, bounded quality escalation, CLI/status visibility, and upgrade-stable storage independent of Fast/Standard.
 
 - Added deterministic task, risk, ambiguity, verification, volume, and product-area profiling.

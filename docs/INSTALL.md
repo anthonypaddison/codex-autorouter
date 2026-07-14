@@ -5,8 +5,11 @@ This page covers full plugin mode for Desktop and CLI. For IDE extensions or ano
 ## Install from a marketplace
 
 ```bash
-codex plugin add gpt-5-6-router@<marketplace>
+codex plugin marketplace add vibeforge1111/Codex-Autorouter --ref main
+codex plugin add gpt-5-6-router@codex-autorouter
 ```
+
+The repository is private during beta, so the GitHub marketplace requires repository access. After public-directory approval, users can instead install **Autorouter** directly from the universal plugin directory.
 
 Start a new task after installation or update so Codex reloads plugin skills and hooks.
 

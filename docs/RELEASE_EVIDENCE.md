@@ -8,7 +8,7 @@ Recorded: 2026-07-14
 - Release, plugin, skill, and source-integrity validators pass.
 - 200 routing, profile-policy, activation, sanitizer, terminal-event, benchmark-harness, stale-cache dispatch, delegated-input isolation, current collaboration transcript reconciliation, standard and custom-script verification, unobservable-result fail-open, wrapped Stop-idempotency, checker, standalone, ownership, concurrency, and crash-recovery tests pass locally on macOS with Python 3.14.
 - The deterministic routing fuzz suite passes 5,000 cases on every tested Python runtime.
-- GitHub Actions run [29233219101](https://github.com/vibeforge1111/Codex-Autorouter/actions/runs/29233219101) passes all 15 combinations of `ubuntu-latest`, `macos-latest`, and `windows-latest` with Python 3.10–3.14 at runtime snapshot `6e3a39f18055e3944ba27f9d46d65a3d5382b8ab`. The terminal-hook and sanitizer candidate has repeated the complete gate locally; its exact hosted branch run remains required before merge or public-stable promotion.
+- GitHub Actions run [29333382896](https://github.com/vibeforge1111/Codex-Autorouter/actions/runs/29333382896) passes all 15 combinations of `ubuntu-latest`, `macos-latest`, and `windows-latest` with Python 3.10–3.14 at commit `a0553d83fa965e451fa877ab8ee5e044a425974a`.
 - Every hosted job validates the release, runs all 200 tests, runs 5,000 deterministic fuzz cases, and revalidates source integrity after execution.
 - Hosted Windows tests exercise native file locking, atomic replacement, rollback, reparse-point refusal, hardlink handling, concurrency, and crash recovery; the Windows Desktop and CLI product surfaces remain separate real-host gates.
 - Fifty consecutive concurrent first-install stress rounds pass; a deterministic delayed-marker writer proves contenders wait for an exclusive standalone state claim to finish.
@@ -19,9 +19,9 @@ Recorded: 2026-07-14
 
 ## Proven on the exact installed candidate
 
-- The personal-marketplace installed cache contains the same 47-file, byte-for-byte inventory as the candidate source.
-- A fresh Desktop task on the installed candidate build created and ran a custom Python JSONL validator after its final mutation; the real hook ledger reached `COMPLETE` with matching mutation/verified generations, one transcript-observed success, zero failures, and zero violations even though the Stop event omitted `transcript_path`.
-- App-server discovered the current candidate, the exact cached skill, five enabled and trusted error-free plugin hooks, and six active current custom-agent definitions; `scripts/check_hooks.py` returned `ready: true` with no warnings or errors.
+- The personal-marketplace installed cache contains the same 53-file, byte-for-byte inventory as the candidate source.
+- A fresh Desktop task on the runtime-identical pre-branding build created and ran a custom Python JSONL validator after its final mutation; the real hook ledger reached `COMPLETE` with matching mutation/verified generations, one transcript-observed success, zero failures, and zero violations even though the Stop event omitted `transcript_path`.
+- App-server discovered that runtime build, the exact cached skill, five enabled and trusted error-free plugin hooks, and six active current custom-agent definitions; `scripts/check_hooks.py` returned `ready: true` with no warnings or errors. This branding-only cache refresh requires the standard post-update restart before the host can bind a new task to its exact cached skill.
 - `routerctl activate` migrated the six owned agent definitions to the current build. `routerctl status` reports Balanced, `local_agent_ready: true`, no conflicts or drift, and `activation_update_required: false`.
 - `codex plugin list` reports only the current candidate installed and enabled; the retired pre-hardening cache is absent.
 - A synthetic unmet `Stop` event returned `continue: true` plus an advisory `systemMessage`, wrote `FAILED_OPEN` and `failed_open_problems`, and contained no block decision.
@@ -40,7 +40,9 @@ Recorded: 2026-07-14
 ## README and visual QA
 
 - The user-facing plugin name is **Autorouter**. The technical `gpt-5-6-router` package ID remains stable so existing preferences, plugin state, and upgrades are not stranded.
-- The README presents six accessible SVG assets: icon/hero, model-effort routing map, profile comparison, bounded-subagent orchestration, routing architecture, and install-to-live-proof readiness.
+- The README presents six accessible SVG assets: icon/hero, model-effort routing map, profile comparison, bounded-subagent orchestration, routing architecture, and install-to-live-proof readiness. Every infographic carries the current three-input Autorouter mark and uses a plain-language first reading layer.
+- Three rendered PNGs—model routing, optimization profiles, and subagent orchestration—are bundled as plugin-directory listing screenshots.
+- A 1,280 × 640 social-preview image carries the same current logo and is ready for GitHub upload when the repository becomes public.
 - Every SVG parses as valid XML, includes an accessible title and description, renders successfully at 1,600 pixels wide, and was visually inspected for clipping, contrast, and text legibility.
 - Every local README image and documentation link resolves in the candidate tree.
 
