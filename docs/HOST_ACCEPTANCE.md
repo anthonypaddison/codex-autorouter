@@ -45,7 +45,7 @@ On native Windows use `py -3` where `python3` is unavailable. Exercise the Windo
 3. Activate the six custom agents from the exact installed cache and run `scripts/check_hooks.py`.
 4. Submit the same bounded security prompt above in the new Desktop task.
 5. Record the visible route, final response, and ledger evidence using the same acceptance criteria as CLI.
-6. Test Fast on and off in separate fresh tasks. The router must preserve the task's setting and must never claim UI attestation when only persisted configuration is available.
+6. Use the Codex Desktop UI to test Fast on and off in separate fresh tasks. Do not type `/fast on` or `/fast off` into the task. The router must preserve the UI setting and must never claim UI attestation when only persisted configuration is available.
 7. Deactivate the agents before uninstalling the plugin.
 
 Desktop acceptance is manual when UI automation policy prevents another Codex task from controlling the Codex app. Do not replace this row with a CLI run against the bundled Desktop binary.
