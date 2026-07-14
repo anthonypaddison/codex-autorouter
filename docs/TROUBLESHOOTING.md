@@ -50,6 +50,8 @@ Update the plugin, review and trust the changed hook definitions, and open a fre
 
 Within the current router, Stop and SubagentStop never hard-block. Successful observable verification—including package scripts such as `pnpm verify:fast` and tests executed through nested Codex orchestration—settles the current mutation generation. If a nominally read-only turn later mutates files, its recorded gate is promoted from `answer check` to targeted tests or a build. When Codex's incomplete unified-exec interception omits the result, when verification fails, or when orchestration is incomplete, the ledger records `FAILED_OPEN` with root verification still required; it does not pretend the check passed or inject a replayable user message. XML-wrapped feedback from an older build is recognized and discarded rather than reclassified as a new user task, and duplicate Stop delivery against either terminal state is a no-op.
 
+Desktop-created background tasks may wrap the real request in `<codex_delegation>` with a source thread id. Autorouter classifies only the complete wrapper's `<input>` value; source UUID digits never count as work units. For verification executed through nested `exec_command`, assign the result to `r` and emit `text(JSON.stringify({exit_code:r.exit_code,output:r.output}))`. Plain `r.output`, `exit_code=0` text, and completion prose are intentionally unobservable because they cannot safely prove process status.
+
 If an older build already poisoned the persisted transcript, first close the affected task. Then run one of:
 
 ```bash

@@ -57,11 +57,17 @@ Use only factual public route labels in the form `{Model} {Effort} {Speed}`: for
 
 For routed subagents, every `spawn_agent` call must include `agent_type` set to the exact selected custom role and `fork_turns` set to `"none"`. Use `task_name` only as a unique descriptive orchestration label; a matching task name does not select the custom model or instructions. Never use the default or `"all"` full-history fork with a custom `agent_type`, because Codex will either inherit the parent identity or reject the call. Omit `service_tier`, `model`, and `reasoning_effort` overrides, require a nonempty distilled return containing `Evidence:`, `Verification:`, and `Uncertainty:`, and close the agent after collecting its result. Do not delegate recursively. If a required agent is unavailable, fail open in the current agent, disclose the unmet gate, and preserve the selected verification gate.
 
+Because `fork_turns: "none"` intentionally supplies no parent prompt or history, every child `message` must be self-contained. Include the bounded contract, required inputs, ownership boundary, dependencies, and acceptance checks; never assume the child can infer them from the parent task.
+
+Treat the `SubagentStart` hook's lifecycle identity as authoritative for the child. A child must not re-read this skill through a versioned cache path or return `ROUTE_UP` merely because parent-only runtime metadata is hidden; cache replacement and lifecycle attestation are hook-owned concerns.
+
 Before emitting any routed spawn, self-check the literal argument shape and do not call the tool until all four keys are present: `spawn_agent({"agent_type":"<exact-role>","fork_turns":"none","task_name":"<unique-label>","message":"<distilled-task>"})`. The tool schema may not visibly advertise `agent_type`, but the native launcher accepts it; never simplify this call from memory.
 
 ## Task profile
 
 Use the hook-provided profile instead of guessing from one keyword. It records the primary task family, risk, ambiguity, verification strength, volume, mutation intent, unit count, and whether requested parallel work appears independent. Treat short prompts as high risk when they target production, customer data, payments, infrastructure, or external actions. Do not escalate harmless explanations merely because they mention OAuth, security, or production documentation.
+
+For bounded local or synthetic fixture batches with fixed-schema verification, classify the requested operation rather than incidental record values. Words such as `release`, `merge`, `schema`, or `policy` inside fixture labels do not override Luna eligibility; an affirmative live production, customer-data, payment, or external action still applies the safety floor.
 
 Recognize these task families: explanation, implementation, debugging, quality review, security review/change, research synthesis, exploration/extraction, architecture/migration, deployment/operations, dependency change, performance, data analysis, and mechanical batch work. Also record product areas and lifecycle stages independently because one feature often contains work units at several routes.
 
@@ -136,7 +142,7 @@ For a routing council, require `Route recommendation: <role>` plus nonempty `Evi
 
 Treat `current` as the actual active root route, not an extra model choice. Do not include a duplicate custom route when current already has the same model and effort.
 
-Permit one evidence-backed `ROUTE_UP` transition per turn: Luna → Terra Medium → Terra High → Sol Medium → Sol High → Sol Extra High. Preserve the completed agent's distilled evidence, replace the remaining plan with one next-capability delegate, announce the new factual route, and avoid repeating broad discovery. Do not route up merely because a worker is slow or uncertain; require a demonstrated capability limit or unresolved high-consequence ambiguity.
+Permit one evidence-backed `ROUTE_UP` transition per turn: Luna → Terra Medium → Terra High → Sol Medium → Sol High → Sol Extra High. Preserve the completed agent's distilled evidence, keep the completed prior plan valid, replace only the remaining plan with one next-capability delegate, announce the new factual route, and avoid repeating broad discovery. Do not route up merely because a worker is slow, uncertain, unable to see parent metadata, or sees a stale cache locator; require a demonstrated task-capability limit or unresolved high-consequence ambiguity.
 
 Use these patterns:
 
@@ -154,13 +160,14 @@ Before accepting delegated work:
 
 1. Run the cheapest relevant deterministic checks: tests, types, lint, schemas, build, or targeted reproduction.
 2. Run verification after the final mutation; earlier checks do not satisfy completion.
-3. For delegated work, attest the child model from the lifecycle event. Treat reasoning effort as owned agent-configuration intent because the hook event does not currently attest it.
-4. Verify that the spawn omitted `service_tier`, preserving inheritance from the UI Fast toggle.
-5. Compare the result with the task contract.
-6. Require every planned worker to complete and attest; one valid child cannot mask a missing, extra, or mismatched child.
-7. For a routing council, require two valid recommendations, a recorded selection, zero executor children for eligible `current` agreement or exactly one attested matching executor otherwise, and no advisor mutation.
-8. Escalate only when evidence shows unresolved ambiguity, insufficient capability, or high consequence.
-9. Keep the final answer concise; do not expose routing internals unless the user asks.
+3. When verification runs through a nested `exec_command`, expose its machine-readable result in the outer tool output with exactly `text(JSON.stringify({exit_code:r.exit_code,output:r.output}))` after assigning the nested result to `r`. Plain `text(r.output)`, `text(`exit_code=${r.exit_code}`)`, or completion prose is not proof of success. If `PostToolUse` omits the nested result, bounded same-turn transcript reconciliation may recover the paired structured status after the final mutation.
+4. For delegated work, attest the child model from the lifecycle event. Treat reasoning effort as owned agent-configuration intent because the hook event does not currently attest it.
+5. Verify that the spawn omitted `service_tier`, preserving inheritance from the UI Fast toggle.
+6. Compare the result with the task contract.
+7. Require every planned worker to complete and attest; one valid child cannot mask a missing, extra, or mismatched child.
+8. For a routing council, require two valid recommendations, a recorded selection, zero executor children for eligible `current` agreement or exactly one attested matching executor otherwise, and no advisor mutation.
+9. Escalate only when evidence shows unresolved ambiguity, insufficient capability, or high consequence.
+10. Keep the final answer concise; do not expose routing internals unless the user asks.
 
 The plugin hooks maintain an atomically locked per-turn ledger under `${PLUGIN_DATA}/router-state-v2` and record opaque task identifiers and routing metadata but no prompt contents or prompt-derived hashes. Required agents, model/effort attestation, final-mutation verification, service-tier inheritance, and no-recursion constraints are injected proactively at `UserPromptSubmit` and `SubagentStart`. Verification remains the root agent's responsibility and is recorded in the ledger, but `Stop` and `SubagentStop` are advisory-only: they return `continue: true`, may surface a non-replayable `systemMessage`, and record unmet gates as `FAILED_OPEN`. They must never emit `{"decision":"block"}` because Codex can replay its reason as a user message with an invalid client UUID. Duplicate terminal delivery against either terminal state is idempotent.
 

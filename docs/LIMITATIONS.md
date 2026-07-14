@@ -32,7 +32,7 @@ Lifecycle input exposes the child model but not a guaranteed live reasoning-effo
 
 ## Transcript compatibility is best effort
 
-Codex documents transcript format as unstable. Transcript reconciliation is bounded compatibility support, not correctness-authoritative attestation.
+Codex documents transcript format as unstable. Transcript reconciliation is bounded compatibility support, not correctness-authoritative attestation. Autorouter accepts only paired same-turn tool calls and machine-readable successful status after the final mutation, refuses linked or oversized transcript files, and otherwise fails open to root-owned verification.
 
 ## Terminal hooks cannot safely hard-block on affected Codex builds
 

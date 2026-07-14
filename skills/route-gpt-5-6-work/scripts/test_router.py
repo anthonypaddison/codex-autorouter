@@ -185,6 +185,31 @@ class RouterTests(unittest.TestCase):
                 actual = router_hook.classify_prompt(prompt, "gpt-5.6-terra")
                 self.assertEqual(expected, actual["route"])
 
+    def test_codex_delegation_metadata_never_contaminates_classification(self) -> None:
+        prompt = """<codex_delegation>
+  <source_thread_id>019f4ab3-2b7a-7932-a6a6-f401afced4e3</source_thread_id>
+  <input>Explain this small helper in one sentence.</input>
+</codex_delegation>"""
+        decision = router_hook.classify_prompt(prompt, "gpt-5.6-sol", "high")
+        self.assertEqual(0, decision["task_profile"]["unit_count"])
+        self.assertEqual("normal", decision["task_profile"]["risk"])
+        self.assertEqual("explanation", decision["task_profile"]["task_type"])
+
+    def test_relayforge_mechanical_fixture_prompt_routes_to_luna(self) -> None:
+        prompt = """<codex_delegation>
+  <source_thread_id>019f4ab3-2b7a-7932-a6a6-f401afced4e3</source_thread_id>
+  <input>Generate exactly 1,200 synthetic JSONL fixture records in three independent 400-record shards using the fixed schema and formulas. One example projectSlug is billing-reliability. These are synthetic fixtures, not customer data. Add a validator that rejects malformed JSON, wrong key order, formula mismatches, duplicates, and incorrect totals. Do not modify runtime or database schema. Run the validator, tests, typecheck, lint, and build. The routing ledger should show the selected workers.</input>
+</codex_delegation>"""
+        decision = router_hook.classify_prompt(prompt, "gpt-5.6-sol", "high")
+        profile = decision["task_profile"]
+        self.assertEqual("gpt56_luna_worker", decision["route"])
+        self.assertEqual("parallel_leaves", decision["orchestration"]["mode"])
+        self.assertEqual({"gpt56_luna_worker": 2}, decision["orchestration"]["required_agents"])
+        self.assertEqual(1200, profile["unit_count"])
+        self.assertEqual("mechanical_batch", profile["task_type"])
+        self.assertEqual("normal", profile["risk"])
+        self.assertEqual("general_product", profile["product"]["primary_area"])
+
     def test_three_profiles_shift_normal_work_monotonically(self) -> None:
         prompt = "Diagnose why this flaky test fails intermittently."
         expected = {
@@ -437,6 +462,7 @@ class RouterTests(unittest.TestCase):
         self.assertIn("lifecycle-attest", context)
         self.assertIn("verification gate after the final mutation", context)
         self.assertIn("Stop and SubagentStop are advisory-only", context)
+        self.assertIn("text(JSON.stringify({exit_code:r.exit_code,output:r.output}))", context)
         ledger = json.loads(next(Path(self.temp.name).glob("*.json")).read_text())
         self.assertNotIn(data["prompt"], json.dumps(ledger))
         self.assertNotIn("prompt_hash", ledger)
@@ -869,6 +895,7 @@ class RouterTests(unittest.TestCase):
     def test_unknown_verification_result_does_not_pass(self) -> None:
         self.assertFalse(router_hook._response_succeeded({}))
         self.assertFalse(router_hook._response_succeeded({"output": "looks good"}))
+        self.assertFalse(router_hook._response_succeeded("exit_code=0"))
         self.assertTrue(router_hook._response_succeeded({"exit_code": 0}))
 
     def test_nested_exec_json_output_proves_success(self) -> None:
@@ -937,6 +964,101 @@ class RouterTests(unittest.TestCase):
         self.assertEqual("COMPLETE", state["status"])
         self.assertEqual(1, state["mutation_generation"])
         self.assertEqual(1, state["verified_generation"])
+
+    def test_stop_recovers_machine_readable_verification_from_transcript(self) -> None:
+        session = "transcript-verify"
+        turn = "t1"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo.",
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+            "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
+        })
+        metadata = {"turn_id": turn}
+        transcript = Path(self.temp.name) / "verification-parent.jsonl"
+        records = [
+            {"payload": {
+                "type": "custom_tool_call", "name": "exec", "call_id": "patch-call",
+                "input": "const r = await tools.apply_patch(`patch`); text(r);",
+                "internal_chat_message_metadata_passthrough": metadata,
+            }},
+            {"payload": {
+                "type": "custom_tool_call_output", "call_id": "patch-call", "output": "Done",
+                "internal_chat_message_metadata_passthrough": metadata,
+            }},
+            {"payload": {
+                "type": "custom_tool_call", "name": "exec", "call_id": "verify-call",
+                "input": (
+                    'const r = await tools.exec_command({cmd:"python3 -m unittest -q"}); '
+                    'text(JSON.stringify({exit_code:r.exit_code,output:r.output}));'
+                ),
+                "internal_chat_message_metadata_passthrough": metadata,
+            }},
+            {"payload": {
+                "type": "custom_tool_call_output", "call_id": "verify-call",
+                "output": [
+                    {"type": "input_text", "text": "Script completed\nOutput:\n"},
+                    {"type": "input_text", "text": json.dumps({"exit_code": 0, "output": "OK"})},
+                ],
+                "internal_chat_message_metadata_passthrough": metadata,
+            }},
+        ]
+        transcript.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
+        result = router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
+            "stop_hook_active": False, "transcript_path": str(transcript),
+        })
+        state = json.loads((Path(self.temp.name) / f"{session}--{turn}.json").read_text())
+        self.assertEqual({"continue": True}, result)
+        self.assertEqual("COMPLETE", state["status"])
+        self.assertEqual(1, state["verified_generation"])
+        self.assertTrue(state["reconciled_verification_from_transcript"])
+        self.assertEqual("transcript_exit_status", state["verification_observability"])
+
+    def test_transcript_verification_python_version_comparison_is_not_a_mutation(self) -> None:
+        session = "transcript-verify-version-comparison"
+        turn = "t1"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo.",
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+            "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
+        })
+        metadata = {"turn_id": turn}
+        command = (
+            "const r = await tools.exec_command({cmd:`set -e\n"
+            "python3 -c 'import sys; assert sys.version_info >= (3, 10)'\n"
+            "python3 -m unittest -q`}); "
+            "text(JSON.stringify({exit_code:r.exit_code,output:r.output}));"
+        )
+        self.assertFalse(router_hook._is_mutation("exec", command))
+        self.assertTrue(router_hook._is_verification(command))
+        transcript = Path(self.temp.name) / "verification-version-comparison.jsonl"
+        records = [
+            {"payload": {
+                "type": "custom_tool_call", "name": "exec", "call_id": "verify-version",
+                "input": command, "internal_chat_message_metadata_passthrough": metadata,
+            }},
+            {"payload": {
+                "type": "custom_tool_call_output", "call_id": "verify-version",
+                "output": [{"type": "input_text", "text": json.dumps({"exit_code": 0, "output": "OK"})}],
+                "internal_chat_message_metadata_passthrough": metadata,
+            }},
+        ]
+        transcript.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
+        result = router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
+            "stop_hook_active": False, "transcript_path": str(transcript),
+        })
+        state = json.loads((Path(self.temp.name) / f"{session}--{turn}.json").read_text())
+        self.assertEqual({"continue": True}, result)
+        self.assertEqual("COMPLETE", state["status"])
+        self.assertEqual(state["mutation_generation"], state["verified_generation"])
+        self.assertEqual("transcript_exit_status", state["verification_observability"])
 
     def test_read_only_route_silently_records_real_gate_if_it_later_mutates(self) -> None:
         router_hook.handle({
@@ -1351,6 +1473,54 @@ class RouterTests(unittest.TestCase):
         ledger = json.loads((Path(self.temp.name) / "order--t1.json").read_text())
         self.assertIn("ordering_violation:evidence_then_owner:gpt56_sol_owner", ledger["violations"])
 
+    def test_local_release_fixture_batch_routes_to_luna_despite_domain_words(self) -> None:
+        decision = router_hook.classify_prompt(
+            (
+                "Create a local synthetic JSONL fixture with 2,400 release-event records. "
+                "Each row includes merge_policy and database_schema labels. Use the fixed schema "
+                "and run the validator. Do not deploy, publish, merge, push, or touch production, "
+                "customer data, payments, or external systems."
+            ),
+            "gpt-5.6-sol",
+            "high",
+        )
+        self.assertEqual("gpt56_luna_worker", decision["route"])
+        self.assertEqual("mechanical_batch", decision["task_profile"]["task_type"])
+        self.assertEqual("normal", decision["task_profile"]["risk"])
+        self.assertIn("safe_mechanical", decision["task_profile"]["signals"])
+        self.assertEqual({"gpt56_luna_worker": 2}, decision["orchestration"]["required_agents"])
+
+    def test_positive_live_release_target_does_not_use_safe_fixture_override(self) -> None:
+        decision = router_hook.classify_prompt(
+            "Generate 2,400 local JSONL records with a fixed schema, validate them, then deploy the release to production.",
+            "gpt-5.6-terra",
+            "medium",
+        )
+        self.assertNotEqual("gpt56_luna_worker", decision["route"])
+        self.assertNotIn("safe_mechanical", decision["task_profile"]["signals"])
+
+    def test_staged_owner_reconciles_delayed_sibling_before_order_check(self) -> None:
+        session = "delayed-siblings"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "t1",
+            "model": "gpt-5.6-terra",
+            "prompt": "Research three independent APIs in parallel and recommend an architecture.",
+        })
+        transcript = self._write_agent_transcript(session, [
+            ("gpt56_terra_worker", "worker-a", "Evidence: a\nVerification: checked\nUncertainty: none"),
+            ("gpt56_terra_worker", "worker-b", "Evidence: b\nVerification: checked\nUncertainty: none"),
+        ])
+        result = router_hook.handle({
+            "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "t1",
+            "agent_type": "gpt56_sol_owner", "agent_id": "owner", "model": "gpt-5.6-sol",
+            "transcript_path": str(transcript),
+        })
+        ledger = json.loads((Path(self.temp.name) / f"{session}--t1.json").read_text())
+        self.assertFalse(any(item.startswith("ordering_violation:") for item in ledger["violations"]))
+        context = result["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("hook lifecycle-attests", context)
+        self.assertIn("do not re-read the router skill from a versioned cache locator", context)
+
     def test_repeated_stop_records_unmet_gates_failed_open_without_reinjection(self) -> None:
         router_hook.handle({
             "hook_event_name": "UserPromptSubmit", "session_id": "hard", "turn_id": "t1",
@@ -1409,6 +1579,72 @@ class RouterTests(unittest.TestCase):
         self.assertNotIn("worker_cap_exceeded:1", ledger["violations"])
         self.assertEqual("COMPLETE", ledger["status"])
 
+    def test_route_up_rejects_metadata_or_identity_confusion(self) -> None:
+        session = "route-up-metadata"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "t1",
+            "model": "gpt-5.6-terra", "prompt": "Diagnose why this flaky test fails intermittently.",
+        })
+        router_hook.handle({
+            "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "t1",
+            "agent_type": "gpt56_terra_deep", "agent_id": "deep-one",
+        })
+        result = router_hook.handle({
+            "hook_event_name": "SubagentStop", "session_id": session, "turn_id": "t1",
+            "agent_type": "gpt56_terra_deep", "agent_id": "deep-one", "stop_hook_active": False,
+            "last_assistant_message": (
+                "ROUTE_UP\nEvidence: metadata is hidden and the versioned skill locator is missing\n"
+                "Verification: cannot attest identity\nUncertainty: stale cache"
+            ),
+        })
+        ledger = json.loads((Path(self.temp.name) / f"{session}--t1.json").read_text())
+        self.assertIn("ROUTE_UP was ignored", result["systemMessage"])
+        self.assertEqual([], ledger["escalations"])
+        self.assertEqual("gpt56_terra_deep", ledger["decision"]["route"])
+        self.assertIn("unsupported_route_up:gpt56_terra_deep", ledger["violations"])
+
+    def test_transcript_fallback_settles_observable_nested_verification(self) -> None:
+        session = "nested-verification"
+        turn = "t1"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+            "model": "gpt-5.6-terra", "model_reasoning_effort": "medium",
+            "prompt": "Fix a typo in README and run targeted tests.",
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+            "tool_name": "apply_patch", "tool_input": {}, "tool_response": {},
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+            "tool_name": "functions.exec",
+            "tool_input": {"source": "const r = await tools.exec_command({cmd: 'python -m unittest'}); text(r.output)"},
+            "tool_response": "tests passed",
+        })
+        metadata = {"turn_id": turn}
+        transcript = Path(self.temp.name) / "nested-verification.jsonl"
+        transcript.write_text("\n".join(json.dumps(item) for item in [
+            {"payload": {
+                "type": "function_call", "name": "functions.exec", "call_id": "verify-1",
+                "arguments": json.dumps({"source": "const r = await tools.exec_command({cmd: 'python -m unittest'}); text(r.output)"}),
+                "internal_chat_message_metadata_passthrough": metadata,
+            }},
+            {"payload": {
+                "type": "function_call_output", "call_id": "verify-1",
+                "output": json.dumps({"exit_code": 0, "output": "OK"}),
+                "internal_chat_message_metadata_passthrough": metadata,
+            }},
+        ]), encoding="utf-8")
+        result = router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
+            "stop_hook_active": False, "transcript_path": str(transcript),
+        })
+        ledger = json.loads((Path(self.temp.name) / f"{session}--{turn}.json").read_text())
+        self.assertEqual({"continue": True}, result)
+        self.assertEqual("COMPLETE", ledger["status"])
+        self.assertEqual("transcript_exit_status", ledger["verification_observability"])
+        self.assertEqual(["verify-1"], ledger["reconciled_verification_call_ids"])
+
     def test_structured_subagent_return_passes(self) -> None:
         start = {
             "hook_event_name": "UserPromptSubmit", "session_id": "s4", "turn_id": "t4",
@@ -1466,6 +1702,65 @@ class RouterTests(unittest.TestCase):
         self.assertTrue(ledger["reconciled_from_transcript"])
         self.assertTrue(ledger["agent_attestations"]["agent-123"]["matched"])
 
+    def test_stop_reconciles_current_collaboration_transcript_shape(self) -> None:
+        session = "collaboration-shape"
+        turn = "t1"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+            "model": "gpt-5.6-terra",
+            "prompt": "Research three independent APIs in parallel and recommend an architecture.",
+        })
+        transcript = Path(self.temp.name) / "collaboration-parent.jsonl"
+        records = []
+        roles = ["gpt56_terra_worker", "gpt56_terra_worker", "gpt56_sol_owner"]
+        for index, role in enumerate(roles):
+            call_id = f"call-{index}"
+            agent_id = f"019f-child-{index}"
+            agent_path = f"/root/worker-{index}"
+            metadata = {"turn_id": turn}
+            records.extend([
+                {"payload": {
+                    "type": "function_call", "name": "spawn_agent", "namespace": "collaboration",
+                    "call_id": call_id,
+                    "arguments": json.dumps({
+                        "agent_type": role, "fork_turns": "none", "task_name": f"worker-{index}",
+                        "message": "Self-contained bounded task with acceptance checks.",
+                    }),
+                    "internal_chat_message_metadata_passthrough": metadata,
+                }},
+                {"payload": {
+                    "type": "sub_agent_activity", "event_id": call_id, "kind": "started",
+                    "agent_thread_id": agent_id, "agent_path": agent_path,
+                    "internal_chat_message_metadata_passthrough": metadata,
+                }},
+                {"payload": {
+                    "type": "agent_message", "author": agent_path,
+                    "content": [{"type": "input_text", "text": (
+                        "Evidence: bounded result\nVerification: objective check passed\nUncertainty: none"
+                    )}],
+                    "internal_chat_message_metadata_passthrough": metadata,
+                }},
+            ])
+            spec = router_hook.ROUTES[role]
+            (Path(self.temp.name) / f"rollout-{agent_id}.jsonl").write_text(json.dumps({
+                "type": "turn_context", "payload": {"model": spec["model"], "effort": spec["effort"]}
+            }), encoding="utf-8")
+        transcript.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
+
+        result = router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
+            "stop_hook_active": False, "transcript_path": str(transcript),
+        })
+        ledger = json.loads((Path(self.temp.name) / f"{session}--{turn}.json").read_text())
+        self.assertEqual({"continue": True}, result)
+        self.assertEqual("COMPLETE", ledger["status"])
+        self.assertEqual(3, len(ledger["agent_ids"]))
+        self.assertEqual(3, len(ledger["agent_attestations"]))
+        self.assertEqual(2, sum(
+            item["type"] == "gpt56_terra_worker" and item["status"] == "completed"
+            for item in ledger["agents"].values()
+        ))
+
     def test_wrong_child_model_fails_attestation(self) -> None:
         router_hook.handle({
             "hook_event_name": "UserPromptSubmit", "session_id": "attest", "turn_id": "t1",
@@ -1517,6 +1812,8 @@ class RouterTests(unittest.TestCase):
         self.assertIn("without a service-tier override", context)
         self.assertIn("never delegate recursively", context)
         self.assertIn("advisory-only", context)
+        self.assertIn("nonempty and self-contained", context)
+        self.assertIn("text(JSON.stringify({exit_code:r.exit_code,output:r.output}))", context)
         ledger = json.loads((Path(self.temp.name) / "stable-attest--t1.json").read_text())
         attestation = ledger["agent_attestations"]["stable-child"]
         self.assertTrue(attestation["matched"])

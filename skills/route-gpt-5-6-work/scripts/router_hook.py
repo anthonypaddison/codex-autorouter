@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import heapq
+import html
 import itertools
 import json
 import os
@@ -102,7 +103,7 @@ DESTRUCTIVE_OR_EXTERNAL = re.compile(
 )
 DANGEROUS_TARGET = re.compile(r"\b(production|prod\b|database|data|records?|customers?|fleet|cluster|payments?|billing|certificate|tls|dns)\b", re.I)
 LOW_STAKES_SURFACE = re.compile(r"\b(readme|documentation|docs?|button|label|copy|wording|typo|comment|css|pricing page|landing page)\b", re.I)
-PRIVACY_REGULATORY = re.compile(r"\b(privacy|gdpr|hipaa|pci|regulat|policy|law|laws|legal|compliance)\b", re.I)
+PRIVACY_REGULATORY = re.compile(r"\b(privacy(?: policy)?|gdpr|hipaa|pci|regulat|law|laws|legal|compliance)\b", re.I)
 DEPLOYMENT = re.compile(r"\b(deploy|release|infrastructure|terraform|kubernetes|cluster|fleet|certificate|tls|dns|provision)\b", re.I)
 DEPENDENCY_CHANGE = re.compile(r"\b(upgrade|update|bump|migrate)\b.*\b(dependenc|package|library|framework|react|node|python|sdk|api)\b", re.I)
 PERFORMANCE = re.compile(r"\b(performance|latency|throughput|memory|cpu|gpu|profile|profiling|benchmark|optimi[sz])\b", re.I)
@@ -173,8 +174,22 @@ READ_HEAVY = re.compile(
     re.I,
 )
 BATCH = re.compile(
-    r"\b(batch|bulk|every file|all files|each file|hundreds?|thousands?|\d{2,}(?:\s+\w+){0,2}\s+(?:files?|"
+    r"\b(batch|bulk|every file|all files|each file|hundreds?|thousands?|(?:\d{2,}|\d{1,3}(?:,\d{3})+)(?:\s+[\w-]+){0,2}\s+(?:files?|"
     r"rows?|records?|documents?|reports?|images?|assets?|entries|items|events?|strings?|keys?|modules?|packages?|tests?|(?:test\s+)?cases?)|repeated|mechanical)\b",
+    re.I,
+)
+BATCH_COUNT = re.compile(
+    r"\b(?:\d{2,}|\d{1,3}(?:,\d{3})+)[-\s]+(?:files?|rows?|records?|documents?|reports?|images?|assets?|entries|items|events?|"
+    r"strings?|keys?|modules?|packages?|tests?|(?:test\s+)?cases?|shards?)\b",
+    re.I,
+)
+LOCAL_MECHANICAL_ARTIFACT = re.compile(
+    r"\b(local|synthetic|fixtures?|fixture corpus|test data|sample data|generated data|temporary workspace|jsonl|csv)\b",
+    re.I,
+)
+POSITIVE_LIVE_TARGET = re.compile(
+    r"\b(?:deploy|publish|release|merge|push|send|email|message|charge|bill|delete|drop|truncate|migrate)\b"
+    r"[^.;]{0,80}\b(?:production|prod|live|customers?|customer data|real data|external systems?|remote|main branch)\b",
     re.I,
 )
 CHEAP_VERIFY = re.compile(
@@ -223,6 +238,26 @@ ROUTER_CONTINUATION = re.compile(
     r"(?:\s*</hook_prompt>)?\s*$",
     re.I | re.S,
 )
+CODEX_DELEGATION = re.compile(
+    r"\A\s*<codex_delegation>\s*"
+    r"<source_thread_id>[^<]*</source_thread_id>\s*"
+    r"<input>(.*?)</input>\s*"
+    r"</codex_delegation>\s*\Z",
+    re.I | re.S,
+)
+
+
+def _classification_text(prompt: str) -> str:
+    """Return only the user-owned payload from Codex delegation wrappers.
+
+    Desktop-created background tasks carry a source thread UUID next to the
+    actual prompt.  Treating that transport metadata as task text can turn the
+    UUID's numeric groups into a bogus batch size and poison keyword routing.
+    The wrapper is unwrapped only when its complete, known shape matches.
+    """
+    raw = str(prompt or "")
+    match = CODEX_DELEGATION.fullmatch(raw)
+    return html.unescape(match.group(1)) if match else raw
 
 
 def _route(route: str, confidence: float, reason: str, verification: str, parallel: bool = False) -> dict[str, Any]:
@@ -414,7 +449,10 @@ def _force_advisory_current(decision: dict[str, Any]) -> dict[str, Any]:
 
 
 def _unit_count(text: str) -> int:
-    values = [int(value) for value in re.findall(r"\b(\d{2,})\b", text)]
+    values = [
+        int(value.replace(",", ""))
+        for value in re.findall(r"\b(\d{1,3}(?:,\d{3})+|\d{2,})\b", text)
+    ]
     if values:
         return max(values)
     if re.search(r"\bthousands?\b", text, re.I):
@@ -512,12 +550,28 @@ def _attach_plan(decision: dict[str, Any], profile: dict[str, Any]) -> dict[str,
 
 def _classify_balanced(prompt: str, active_model: str = "", active_effort: str = "medium") -> dict[str, Any]:
     """Classify only trusted user-prompt text; never inspect repo/tool content."""
-    text = " ".join((prompt or "").split())
+    text = " ".join(_classification_text(prompt).split())
     words = len(text.split())
     semantic_text = re.sub(
         r"\b(?:no|without)\s+(?:any\s+)?(?:security|auth(?:entication|orization)?|privacy)\s+changes?\b",
         "",
         text,
+        flags=re.I,
+    )
+    semantic_text = re.sub(
+        r"\b(?:not|no|without|never|do\s+not|don'?t)\s+(?:modify|touch|change|use)\s+"
+        r"[^.;]{0,80}\b(?:database|runtime)\s+schema\b",
+        "",
+        semantic_text,
+        flags=re.I,
+    )
+    semantic_text = re.sub(
+        r"\b(?:not|no|without|never|do\s+not|don'?t)\s+"
+        r"(?:modify\s+|touch\s+|use\s+|contain\s+|include\s+|operate\s+on\s+)?"
+        r"(?:any\s+|real\s+)?(?:customer\s+data|production\s+data|production|payments?|billing|"
+        r"database\s+schema|runtime\s+schema|external\s+systems?)\b",
+        "",
+        semantic_text,
         flags=re.I,
     )
     security_subject = bool(SECURITY.search(semantic_text))
@@ -530,13 +584,18 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
     dependency_change = bool(DEPENDENCY_CHANGE.search(text))
     performance = bool(PERFORMANCE.search(text))
     debugging = bool(DEBUGGING.search(text))
-    consequence = (bool(HIGH_CONSEQUENCE.search(text)) and not low_stakes_surface) or (
+    # Payments are handled below through action-oriented payment patterns.
+    # Bare fixture values such as `billing-reliability` must not turn an
+    # otherwise mechanical corpus job into a critical financial operation.
+    nonpayment_consequence_text = re.sub(r"\b(?:payments?|billing)\b", "", semantic_text, flags=re.I)
+    consequence = (bool(HIGH_CONSEQUENCE.search(nonpayment_consequence_text)) and not low_stakes_surface) or (
         destructive_external and bool(DANGEROUS_TARGET.search(text))
     ) or regulatory
     owner_text = re.sub(r"\b(?:no|without)\s+(?:a\s+|an\s+|any\s+)?(?:planned\s+)?(?:migration|rewrite|redesign|refactor)\b", "", text, flags=re.I)
     owner = bool(OWNER_WORK.search(owner_text))
     ambiguity = bool(AMBIGUOUS.search(text))
-    batch = bool(BATCH.search(text))
+    unit_count = _unit_count(text)
+    batch = bool(BATCH.search(text) or BATCH_COUNT.search(text))
     verify_text = re.sub(
         r"\b(?:no|without|lacking)\s+(?:a\s+|an\s+|any\s+|an\s+existing\s+|existing\s+)?"
         r"(?:validator|schema|tests?|lint|typecheck|checksum|diff)\b",
@@ -545,6 +604,26 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
         flags=re.I,
     )
     cheap_verify = bool(CHEAP_VERIFY.search(verify_text))
+    live_target_text = re.sub(
+        r"\b(?:do\s+not|don'?t|never|without)\b[^.;]{0,180}(?=[.;]|$)",
+        "",
+        semantic_text,
+        flags=re.I,
+    )
+    safe_mechanical = (
+        batch
+        and cheap_verify
+        and bool(LOCAL_MECHANICAL_ARTIFACT.search(text))
+        and not bool(POSITIVE_LIVE_TARGET.search(live_target_text))
+    )
+    if safe_mechanical:
+        # Domain nouns inside bounded local fixture records are data, not an
+        # instruction to operate on live systems. Positive live targets remain
+        # protected by POSITIVE_LIVE_TARGET above.
+        destructive_external = False
+        regulatory = False
+        deployment = False
+        consequence = False
     open_ended = bool(OPEN_ENDED.search(text))
     read_heavy = bool(READ_HEAVY.search(text))
     parallel = bool(PARALLEL.search(text))
@@ -553,10 +632,37 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
     security = security_subject and (
         bool(SECURITY_ACTION.search(text)) or mutation or consequence
     ) and not (bool(EXPLANATORY.search(text)) and not mutation and not review and not consequence)
-    unit_count = _unit_count(text)
     product = _product_profile(semantic_text)
     explicit_uncertainty = bool(ROUTING_UNCERTAINTY.search(text))
-    payment_critical = bool(PAYMENT_CRITICAL.search(text)) and "payments_billing" in product["areas"]
+    payment_text = re.sub(r"\b(?:routing|router|verification|audit)\s+ledger\b", "", text, flags=re.I)
+    payment_critical = (
+        bool(PAYMENT_CRITICAL.search(payment_text))
+        and bool(PAYMENT_BEHAVIOR.search(payment_text))
+        and "payments_billing" in product["areas"]
+    )
+
+    if batch and cheap_verify and not open_ended and not payment_critical and not consequence:
+        # For fixed-schema corpora, example values are data, not the product
+        # surface being modified. Keep QA/content signals that describe the
+        # work itself and discard incidental domain words from fixture rows.
+        fixture_corpus = bool(re.search(r"\b(?:synthetic|fixtures?|corpus)\b", text, re.I))
+        incidental_fixture_areas = {"payments_billing"}
+        if fixture_corpus:
+            incidental_fixture_areas.update({"database", "reliability_observability"})
+        task_areas = [area for area in product["areas"] if area not in incidental_fixture_areas]
+        task_primary = product["primary_area"]
+        if task_primary in incidental_fixture_areas:
+            task_primary = next((area for area in (
+                "security_privacy", "accessibility", "ux_ui", "reliability_observability", "devops_release",
+                "maintenance_dependencies", "testing_qa", "analytics_experiments", "growth_seo", "localization",
+                "mobile", "ai_ml", "integrations", "product_strategy", "user_research", "requirements",
+                "frontend", "backend_api", "database", "content_docs", "performance",
+            ) if area in task_areas), "general_product")
+        product = {
+            **product,
+            "areas": task_areas,
+            "primary_area": task_primary,
+        }
 
     if security:
         task_type = "security_review" if review else "security_change"
@@ -647,7 +753,7 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
             ("performance", performance), ("debugging", debugging), ("batch", batch), ("cheap_verify", cheap_verify),
             ("open_ended", open_ended), ("read_heavy", read_heavy), ("review", review), ("dependent", dependent),
             ("routing_uncertainty", explicit_uncertainty), ("broad_product", broad_vague_product),
-            ("payment_critical", payment_critical),
+            ("payment_critical", payment_critical), ("safe_mechanical", safe_mechanical),
         ) if present],
     }
 
@@ -1177,7 +1283,8 @@ def _context(decision: dict[str, Any]) -> str:
         "MANDATORY SPAWN ARGUMENT CONTRACT: do not call `spawn_agent` until you self-check that all four keys "
         "`agent_type`, `fork_turns`, `task_name`, and `message` are present. Copy these exact call shapes and replace only angle-bracket values: "
         + ("; ".join(required_call_shapes) if required_call_shapes else "no spawn is permitted for this direct route")
-        + ". The visible tool schema may omit `agent_type`, but the native launcher accepts it; never simplify the call from memory."
+        + ". Every `message` must be nonempty and self-contained because `fork_turns: \"none\"` intentionally supplies no parent prompt or history; include the bounded contract, inputs, ownership, and acceptance checks the child needs. "
+        "The visible tool schema may omit `agent_type`, but the native launcher accepts it; never simplify the call from memory."
     )
     if mode == "direct":
         execution = "Keep this turn in the current agent; do not delegate merely for routing."
@@ -1222,6 +1329,7 @@ def _context(decision: dict[str, Any]) -> str:
         f"{envelope}\nROUTING PROFILE: {decision['routing_profile_label']}\nVISIBLE ROUTE: {decision['visible_route']}\n{spawn_contract} {execution} "
         "PROACTIVE GOVERNANCE CONTRACT: satisfy the exact required-agent multiset before final synthesis; every child must lifecycle-attest the selected role's model and effort; "
         "run the stated verification gate after the final mutation; omit service-tier overrides so children inherit the parent UI Fast state; and prohibit recursive delegation. "
+        "When verification runs through a nested `exec_command`, assign its result to `r` and emit exactly `text(JSON.stringify({exit_code:r.exit_code,output:r.output}))`; plain output or `text(`exit_code=${r.exit_code}`)` cannot settle the ledger. "
         "Stop and SubagentStop are advisory-only safety nets: their ledger records violations but they must never hard-block or inject a replayable user message. "
         "For every spawn, `agent_type` is the custom-agent selector, `fork_turns` must be exactly `\"none\"`, and `task_name` is only a unique orchestration label. "
         "Never omit `agent_type`, never use the custom role only as `task_name`, and never use the default or `\"all\"` full-history fork with a custom agent. "
@@ -1332,7 +1440,7 @@ def _is_mutation(tool: str, command: str) -> bool:
         return True
     mutation = re.compile(
         r"(?:^|[;&|\n]\s*|\\n\s*)(?:rm|mv|cp|mkdir|touch|install|rsync)\b|\bsed\s+-i\b|"
-        r"\bgit\s+(?:commit|push|merge)\b|(?:^|\s)>{1,2}\s*\S",
+        r"\bgit\s+(?:commit|push|merge)\b|(?:^|\s)>{1,2}(?!=)\s*\S",
         re.I,
     )
     return any(mutation.search(candidate) for candidate in _command_candidates(command))
@@ -1375,6 +1483,22 @@ def _structured_return(message: str) -> bool:
         if not match or not match.group(1).strip():
             return False
     return True
+
+
+def _supported_route_up(message: str) -> bool:
+    """Accept route-up only for a task capability limit backed by evidence."""
+    lowered = message.lower()
+    if re.search(
+        r"\b(metadata (?:is|was) (?:hidden|missing|unavailable)|cannot (?:see|verify|attest)|"
+        r"identity mismatch|wrong model|stale|missing).{0,50}\b(?:cache|skill|locator|metadata|identity|model)\b",
+        lowered,
+    ):
+        return False
+    return bool(re.search(
+        r"\b(capability (?:limit|ceiling)|insufficient capability|unresolved (?:ambiguity|root cause)|"
+        r"competing causes|deeper reasoning|evidence exhausted|cannot resolve (?:the )?(?:ambiguity|root cause))\b",
+        lowered,
+    ))
 
 
 def _route_recommendation(message: str, candidates: list[str]) -> str | None:
@@ -1435,10 +1559,134 @@ def _attest_child(parent_transcript: Path, agent_id: str, expected: dict[str, An
     return attestation
 
 
+def _transcript_turn_matches(payload: dict[str, Any], state: dict[str, Any]) -> bool:
+    metadata = payload.get("internal_chat_message_metadata_passthrough")
+    if not isinstance(metadata, dict) or not metadata.get("turn_id"):
+        return True  # Legacy fixtures and older transcripts do not carry it.
+    return str(metadata.get("turn_id")) == str(state.get("turn_id"))
+
+
+def _collaboration_spawn(payload: dict[str, Any]) -> tuple[str, str, bool] | None:
+    if payload.get("type") != "function_call" or payload.get("name") != "spawn_agent":
+        return None
+    if payload.get("namespace") not in {None, "collaboration"}:
+        return None
+    arguments = payload.get("arguments")
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(arguments, dict):
+        return None
+    role = str(arguments.get("agent_type") or "")
+    call_id = str(payload.get("call_id") or "")
+    if not role or not call_id:
+        return None
+    return role, call_id, "service_tier" in arguments
+
+
+def _transcript_tool_call(payload: dict[str, Any]) -> tuple[str, str, str] | None:
+    if payload.get("type") not in {"custom_tool_call", "function_call"}:
+        return None
+    call_id = str(payload.get("call_id") or "")
+    tool = str(payload.get("name") or "")
+    raw = payload.get("input") if payload.get("type") == "custom_tool_call" else payload.get("arguments")
+    if isinstance(raw, str):
+        try:
+            decoded = json.loads(raw)
+        except json.JSONDecodeError:
+            command = raw
+        else:
+            command = _command_from({"tool_input": decoded}) if isinstance(decoded, dict) else raw
+    elif isinstance(raw, dict):
+        command = _command_from({"tool_input": raw})
+    else:
+        command = ""
+    return call_id, tool, command
+
+
+def _reconcile_verification_transcript(data: dict[str, Any], state: dict[str, Any]) -> None:
+    """Recover observable command results omitted from PostToolUse events.
+
+    Only machine-readable exit status is accepted. Human completion prose and
+    bare command output never settle the gate.
+    """
+    path_value = data.get("transcript_path")
+    if not isinstance(path_value, str):
+        return
+    path = Path(path_value)
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 8 * 1024 * 1024:
+            return
+        records = [json.loads(line) for line in path.read_text(encoding="utf-8", errors="replace").splitlines()]
+    except (json.JSONDecodeError, OSError):
+        return
+
+    calls: dict[str, tuple[int, str, str]] = {}
+    outputs: dict[str, tuple[int, Any]] = {}
+    for sequence, record in enumerate(records):
+        payload = record.get("payload", {})
+        if not isinstance(payload, dict) or not _transcript_turn_matches(payload, state):
+            continue
+        call = _transcript_tool_call(payload)
+        if call is not None and call[0]:
+            calls[call[0]] = (sequence, call[1], call[2])
+        if payload.get("type") in {"custom_tool_call_output", "function_call_output"}:
+            call_id = str(payload.get("call_id") or "")
+            if call_id:
+                outputs[call_id] = (sequence, payload.get("output"))
+
+    last_mutation_sequence = -1
+    successful_verification_sequence = -1
+    recovered_attempts = 0
+    recovered_failures = 0
+    successful_call_ids: list[str] = []
+    for call_sequence, tool, command in calls.values():
+        if _is_mutation(tool, command):
+            last_mutation_sequence = max(last_mutation_sequence, call_sequence)
+    for call_id, (call_sequence, _tool, command) in calls.items():
+        if not _is_verification(command) or call_id not in outputs:
+            continue
+        output_sequence, output = outputs[call_id]
+        status = _response_status(output)
+        if status is not None:
+            recovered_attempts += 1
+        if status is False:
+            recovered_failures += 1
+        if status is True and call_sequence > last_mutation_sequence and output_sequence > call_sequence:
+            successful_verification_sequence = max(successful_verification_sequence, output_sequence)
+            successful_call_ids.append(call_id)
+
+    if successful_verification_sequence >= 0:
+        state["verified_generation"] = state.get("mutation_generation", 0)
+        state["verification_successes"] = max(state.get("verification_successes", 0), 1)
+        state["verification_observability"] = "transcript_exit_status"
+        state["reconciled_verification_from_transcript"] = True
+        state["reconciled_verification_call_ids"] = sorted(set(
+            state.get("reconciled_verification_call_ids", []) + successful_call_ids
+        ))
+    if recovered_attempts:
+        state["verification_attempts"] = max(state.get("verification_attempts", 0), recovered_attempts)
+    if recovered_failures:
+        state["verification_failures"] = max(state.get("verification_failures", 0), recovered_failures)
+
+
 def _reconcile_subagent_transcript(data: dict[str, Any], state: dict[str, Any]) -> None:
     """Compatibility fallback for releases that skip SubagentStart/Stop hooks."""
     plan = state["decision"]["orchestration"]
-    allowed = set(plan["allowed_agents"])
+    historical_plans = [
+        item.get("orchestration", {})
+        for item in state.get("orchestration_history", [])
+        if isinstance(item, dict)
+    ]
+    valid_plans = [candidate for candidate in historical_plans + [plan] if isinstance(candidate, dict)]
+    allowed = {
+        role
+        for candidate in valid_plans
+        for role in candidate.get("allowed_agents", [])
+    }
+    lifetime_worker_cap = sum(max(0, int(candidate.get("max_workers", 0))) for candidate in valid_plans)
     if not allowed:
         return
     path_value = data.get("transcript_path")
@@ -1456,6 +1704,8 @@ def _reconcile_subagent_transcript(data: dict[str, Any], state: dict[str, Any]) 
     inheriting_spawns = 0
     pending_types: list[str] = []
     agent_types: dict[str, str] = {}
+    spawn_calls: dict[str, str] = {}
+    agent_paths: dict[str, str] = {}
     completed_ids: set[str] = set()
     structured_ids: set[str] = set()
     spawn_pattern = re.compile(r"agent_type\s*:\s*[\\\"']*([A-Za-z0-9_-]+)")
@@ -1467,6 +1717,39 @@ def _reconcile_subagent_transcript(data: dict[str, Any], state: dict[str, Any]) 
         except json.JSONDecodeError:
             continue
         payload = record.get("payload", {})
+        if not isinstance(payload, dict) or not _transcript_turn_matches(payload, state):
+            continue
+        collaboration_spawn = _collaboration_spawn(payload)
+        if collaboration_spawn is not None:
+            role, call_id, tier_overridden = collaboration_spawn
+            completed_role_counts: dict[str, int] = {}
+            for completed_id in completed_ids:
+                completed_role = agent_types.get(completed_id, "")
+                completed_role_counts[completed_role] = completed_role_counts.get(completed_role, 0) + 1
+            spawn_calls[call_id] = role
+            spawn_count += 1
+            if not tier_overridden:
+                inheriting_spawns += 1
+            if role not in state["subagents_started"]:
+                state["subagents_started"].append(role)
+            if role not in allowed:
+                state["violations"].append(f"unexpected_agent:{role}")
+            if spawn_count > lifetime_worker_cap:
+                state["violations"].append(f"worker_cap_exceeded:{lifetime_worker_cap}")
+            staged_plan = next((candidate for candidate in valid_plans if candidate.get("mode") == "evidence_then_owner" and role == candidate.get("synthesis_role")), None)
+            if staged_plan and completed_role_counts.get("gpt56_terra_worker", 0) < 2:
+                state["violations"].append(f"ordering_violation:{staged_plan['mode']}:{role}")
+            continue
+        if payload.get("type") == "sub_agent_activity":
+            call_id = str(payload.get("event_id") or "")
+            agent_id = str(payload.get("agent_thread_id") or "")
+            role = spawn_calls.get(call_id)
+            if role and agent_id:
+                agent_types[agent_id] = role
+                path_name = str(payload.get("agent_path") or "")
+                if path_name:
+                    agent_paths[path_name] = agent_id
+            continue
         texts = list(_text_values(payload))
         joined = "\n".join(texts)
         spawn_match = spawn_pattern.search(joined)
@@ -1476,11 +1759,8 @@ def _reconcile_subagent_transcript(data: dict[str, Any], state: dict[str, Any]) 
             for completed_id in completed_ids:
                 completed_role = agent_types.get(completed_id, "")
                 completed_role_counts[completed_role] = completed_role_counts.get(completed_role, 0) + 1
-            ordering_violation = (
-                plan["mode"] == "evidence_then_owner"
-                and role == plan.get("synthesis_role")
-                and completed_role_counts.get("gpt56_terra_worker", 0) < 2
-            )
+            staged_plan = next((candidate for candidate in valid_plans if candidate.get("mode") == "evidence_then_owner" and role == candidate.get("synthesis_role")), None)
+            ordering_violation = bool(staged_plan and completed_role_counts.get("gpt56_terra_worker", 0) < 2)
             pending_types.append(role)
             spawn_count += 1
             if not re.search(r"\bservice_tier\s*:", joined):
@@ -1489,11 +1769,17 @@ def _reconcile_subagent_transcript(data: dict[str, Any], state: dict[str, Any]) 
                 state["subagents_started"].append(role)
             if role not in allowed:
                 state["violations"].append(f"unexpected_agent:{role}")
-            if spawn_count > int(plan["max_workers"]):
-                state["violations"].append(f"worker_cap_exceeded:{plan['max_workers']}")
+            if spawn_count > lifetime_worker_cap:
+                state["violations"].append(f"worker_cap_exceeded:{lifetime_worker_cap}")
             if ordering_violation:
-                state["violations"].append(f"ordering_violation:{plan['mode']}:{role}")
+                state["violations"].append(f"ordering_violation:{staged_plan['mode']}:{role}")
             continue
+        author = str(payload.get("author") or "")
+        if payload.get("type") == "agent_message" and author in agent_paths:
+            agent_id = agent_paths[author]
+            completed_ids.add(agent_id)
+            if _structured_return(joined):
+                structured_ids.add(agent_id)
         for match in id_pattern.finditer(joined):
             agent_id = match.group(1)
             if pending_types and agent_id not in agent_types:
@@ -1537,7 +1823,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
     event = data.get("hook_event_name")
     if event == "UserPromptSubmit":
         _cleanup_state()
-        prompt = str(data.get("prompt") or "")
+        prompt = _classification_text(str(data.get("prompt") or ""))
         if ROUTER_CONTINUATION.match(prompt):
             previous = _read_state(data) or _latest_session_state(data.get("session_id"), data.get("turn_id"))
             if previous is None or previous.get("status") in {"COMPLETE", "FAILED_OPEN"}:
@@ -1630,6 +1916,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             "continuations": 0,
             "violations": [],
             "escalations": [],
+            "orchestration_history": [],
             "routing_recommendations": {},
             "consensus_selection": None,
         }
@@ -1644,6 +1931,10 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
 
     decision = state["decision"]
     if event == "SubagentStart":
+        # Some Codex builds deliver a child's start before sibling Stop hooks.
+        # Reconcile the parent transcript first so staged owners see completed
+        # evidence workers instead of falsely reporting an ordering violation.
+        _reconcile_subagent_transcript(data, state)
         agent_type = str(data.get("agent_type") or "")
         agent_id = str(data.get("agent_id") or f"anonymous-{len(state.setdefault('agents', {})) + 1}")
         state["status"] = "RUNNING"
@@ -1697,7 +1988,13 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         _write_existing_state(data, state)
         message = (
             f"Router proactive governance contract: allowed roles {sorted(allowed)}; verification after the final mutation: {decision['verification']}. "
-            "This child must lifecycle-attest the selected role's model and effort, inherit the parent UI Fast state without a service-tier override, and never delegate recursively. "
+            "The spawn message must be nonempty and self-contained because no parent history is inherited. "
+            f"The hook lifecycle-attests this child as `{agent_type}` with expected model `{ROUTES.get(agent_type, {}).get('model', 'unknown')}` "
+            f"and effort `{ROUTES.get(agent_type, {}).get('effort', 'unknown')}`; recorded match is "
+            f"`{state.get('agent_attestations', {}).get(agent_id, {}).get('matched', False)}`. "
+            "Treat this lifecycle context as authoritative: do not re-read the router skill from a versioned cache locator and do not self-reject because runtime metadata is hidden. "
+            "Inherit the parent UI Fast state without a service-tier override, and never delegate recursively. "
+            "For nested command verification, assign its result to `r` and emit exactly `text(JSON.stringify({exit_code:r.exit_code,output:r.output}))`; plain output or `text(`exit_code=${r.exit_code}`)` is unobservable. "
             "Return sections `Evidence:`, `Verification:`, and `Uncertainty:`; each heading must have substantive content either on the same line or directly below it. "
             "Terminal hooks are advisory-only; the ledger records contract violations without hard-blocking the session."
         )
@@ -1708,8 +2005,10 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             )
         elif council and phase == "execution":
             message += " This is the selected execution slot; use distilled advisor evidence without repeating routing analysis."
-        if mismatch or over_cap or ordering_violation:
+        if mismatch:
             message += " This agent does not match the selected route; avoid substantive work and return ROUTE_UP."
+        elif over_cap or ordering_violation:
+            message += " This spawn violates the worker cap or staged ordering; do not mutate, report the contract failure, and do not return ROUTE_UP."
         return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": message}}
 
     if event == "PostToolUse":
@@ -1800,11 +2099,18 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
                         "Pass only distilled advisor evidence and preserve the verification contract."
                     ),
                 }
-        route_up = required and not council_advice and bool(re.search(r"\bROUTE_UP\b", message))
+        route_up_requested = required and not council_advice and bool(re.search(r"\bROUTE_UP\b", message))
+        route_up = route_up_requested and _supported_route_up(message)
+        if route_up_requested and not route_up:
+            state["violations"].append(f"unsupported_route_up:{agent_type}")
         if route_up and len(state.setdefault("escalations", [])) < int(decision.get("max_escalations", 1)):
             next_role = ROUTE_UP.get(agent_type)
             if next_role:
                 prior_role = decision["route"]
+                state.setdefault("orchestration_history", []).append({
+                    "route": prior_role,
+                    "orchestration": json.loads(json.dumps(decision["orchestration"])),
+                })
                 decision.update({
                     "route": next_role,
                     "model": ROUTES[next_role]["model"],
@@ -1836,6 +2142,14 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
                     ),
                 }
         _write_existing_state(data, state)
+        if route_up_requested and not route_up:
+            return {
+                "continue": True,
+                "systemMessage": (
+                    "Router advisory: ROUTE_UP was ignored because it did not describe a task capability limit. "
+                    "Lifecycle metadata and cache visibility are hook-owned and are not escalation reasons."
+                ),
+            }
         if not required and not data.get("stop_hook_active"):
             # Advisory instead of a hard block. Codex turns a SubagentStop `block` reason into a
             # replayed user message stamped with a client UUIDv7 id, which the Responses API
@@ -1852,6 +2166,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             return {"continue": True}
         state["status"] = "VERIFYING"
         _reconcile_subagent_transcript(data, state)
+        _reconcile_verification_transcript(data, state)
         problems: list[str] = []
         plan = decision["orchestration"]
         completed_counts: dict[str, int] = {}
