@@ -6,6 +6,7 @@
 - Replaced the orbit-heavy app icon with a simpler three-input, one-output routing mark and aligned the README hero branding with it.
 - Simplified every README infographic with plain-language headings, placed the current Autorouter mark on each graphic, corrected parallel leaves to use matching worker roles, and added three rendered plugin-listing screenshots.
 - Added a repo-backed `codex-autorouter` marketplace and exact GitHub beta installation commands while keeping the public-directory submission path distinct.
+- Reworked the README into a first-user setup guide and clarified that Codex Desktop Fast/Standard must be changed from the UI, not by typing slash commands into a task.
 - Added persistent Token Saver, Balanced, and Max Quality routing profiles with safety floors, bounded quality escalation, CLI/status visibility, and upgrade-stable storage independent of Fast/Standard.
 
 - Added deterministic task, risk, ambiguity, verification, volume, and product-area profiling.

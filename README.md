@@ -131,15 +131,9 @@ Fast/Standard is a Codex speed preference. It is separate from Token Saver, Bala
 - **Standard:** choose it when saving credits matters more than response time.
 - **Autorouter never switches this setting for you.** Every selected model and subagent inherits your current choice.
 
-In Codex Desktop, use the visible Fast control. In Codex CLI, use:
+In Codex Desktop, change Fast/Standard from the visible UI control. Typing `/fast on` or `/fast off` into a task does not change the Desktop setting; Autorouter cannot toggle it from a prompt.
 
-```text
-/fast on
-/fast off
-/fast status
-```
-
-If you turn Fast on, a route can appear as `Terra High Fast`. Turn it off and new work will use Standard, such as `Terra High Standard`. If your current Codex model or account does not offer Fast, Codex simply keeps Standard available.
+If you turn Fast on in the UI, the next routed request can appear as `Terra High Fast`. Turn it off in the UI and the route will use Standard, such as `Terra High Standard`. If your current Codex model or account does not offer Fast, Codex simply keeps Standard available.
 
 **A useful default:** keep Balanced + Standard for normal background work. Turn Fast on for interactive building sessions. Use Max Quality when the outcome matters more than speed or token use.
 
