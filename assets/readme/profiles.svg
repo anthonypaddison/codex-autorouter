@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1500" height="720" viewBox="0 0 1500 720" role="img" aria-labelledby="title desc">
-  <title id="title">Autorouter profiles</title>
-  <desc id="desc">Comparison of Token Saver, Balanced, and Max Quality routing profiles.</desc>
+  <title id="title">How Autorouter spends tokens</title>
+  <desc id="desc">Token Saver minimizes routing overhead, Balanced optimizes cost to a verified result, and Max Quality buys more capability when useful.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#0A0D14"/>
@@ -10,8 +10,13 @@
   <rect width="1500" height="720" rx="32" fill="url(#bg)"/>
 
   <g font-family="Inter, ui-sans-serif, system-ui, sans-serif">
-    <text x="750" y="72" text-anchor="middle" fill="#F8FAFC" font-size="38" font-weight="750">Choose your optimization bias</text>
-    <text x="750" y="110" text-anchor="middle" fill="#8F9CAF" font-size="19">One persistent preference. The same safety floor.</text>
+    <g transform="translate(42 38)" aria-label="Autorouter logo">
+      <rect width="50" height="50" rx="14" fill="#0B1018" stroke="#334052"/>
+      <g transform="translate(3 1) scale(0.52)"><path d="M18 25L48 46M18 46H48M18 67L48 46M45 46H76M67 38L76 46L67 54" fill="none" stroke="#F8FAFC" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><circle cx="18" cy="25" r="4.5" fill="#F8FAFC"/><circle cx="18" cy="46" r="4.5" fill="#F8FAFC"/><circle cx="18" cy="67" r="4.5" fill="#F8FAFC"/></g>
+      <text x="64" y="31" fill="#F8FAFC" font-size="16" font-weight="760" letter-spacing="1">AUTOROUTER</text>
+    </g>
+    <text x="750" y="72" text-anchor="middle" fill="#F8FAFC" font-size="38" font-weight="750">Pick how Autorouter spends tokens</text>
+    <text x="750" y="110" text-anchor="middle" fill="#8F9CAF" font-size="19">Use less, balance cost and quality, or buy maximum capability.</text>
 
     <g transform="translate(70 160)">
       <rect width="420" height="440" rx="28" fill="#151421" stroke="#A78BFA" stroke-opacity="0.6"/>
@@ -38,8 +43,8 @@
       <path d="M36 142H384" stroke="#FFFFFF" stroke-opacity="0.08"/>
       <text x="36" y="188" fill="#F5F7FA" font-size="20" font-weight="650">How it behaves</text>
       <text x="36" y="230" fill="#B8C9CC" font-size="17">• Uses the least sufficient route</text>
-      <text x="36" y="266" fill="#B8C9CC" font-size="17">• Parallelizes only independent work</text>
-      <text x="36" y="302" fill="#B8C9CC" font-size="17">• Read-only advisors only if uncertain</text>
+      <text x="36" y="266" fill="#B8C9CC" font-size="17">• Splits only independent work</text>
+      <text x="36" y="302" fill="#B8C9CC" font-size="17">• Verifies the final changed state</text>
       <rect x="36" y="344" width="348" height="62" rx="16" fill="#0B1518"/>
       <text x="58" y="371" fill="#7FA1A6" font-size="14" font-weight="650">EXAMPLE</text>
       <text x="58" y="394" fill="#E8F9FB" font-size="16">Terra Medium / High as needed</text>

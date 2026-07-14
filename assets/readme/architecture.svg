@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="820" viewBox="0 0 1600 820" role="img" aria-labelledby="title desc">
-  <title id="title">Autorouter architecture</title>
-  <desc id="desc">Flow from a Codex task through profiling, route selection, bounded agents, verification, and final answer.</desc>
+  <title id="title">What Autorouter decides for each task</title>
+  <desc id="desc">A Codex task is profiled, assigned a model and effort, executed directly or with bounded agents, and verified after changes.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#090C12"/>
@@ -12,8 +12,13 @@
   </defs>
   <rect width="1600" height="820" rx="32" fill="url(#bg)"/>
   <g font-family="Inter, ui-sans-serif, system-ui, sans-serif">
-    <text x="80" y="72" fill="#F8FAFC" font-size="38" font-weight="750">How a task gets routed</text>
-    <text x="80" y="108" fill="#8F9CAF" font-size="19">Deterministic policy underneath. Natural Codex workflow on top.</text>
+    <g transform="translate(1300 40)" aria-label="Autorouter logo">
+      <rect width="50" height="50" rx="14" fill="#0B1018" stroke="#334052"/>
+      <g transform="translate(3 1) scale(0.52)"><path d="M18 25L48 46M18 46H48M18 67L48 46M45 46H76M67 38L76 46L67 54" fill="none" stroke="#F8FAFC" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><circle cx="18" cy="25" r="4.5" fill="#F8FAFC"/><circle cx="18" cy="46" r="4.5" fill="#F8FAFC"/><circle cx="18" cy="67" r="4.5" fill="#F8FAFC"/></g>
+      <text x="64" y="31" fill="#F8FAFC" font-size="16" font-weight="760" letter-spacing="1">AUTOROUTER</text>
+    </g>
+    <text x="80" y="72" fill="#F8FAFC" font-size="38" font-weight="750">What Autorouter decides for every task</text>
+    <text x="80" y="108" fill="#8F9CAF" font-size="19">Profile → choose model and effort → execute → verify the result.</text>
 
     <g fill="none" stroke="#526075" stroke-width="3" marker-end="url(#arrow)">
       <path d="M286 300H375"/>

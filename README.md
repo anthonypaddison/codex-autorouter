@@ -16,6 +16,17 @@
 
 ---
 
+## Install the private beta from GitHub
+
+The repository is currently private, so this route requires GitHub access. Once the repository is public, the same commands work for anyone:
+
+```bash
+codex plugin marketplace add vibeforge1111/Codex-Autorouter --ref main
+codex plugin add gpt-5-6-router@codex-autorouter
+```
+
+Restart Codex after installation, review the five hooks, then follow the readiness steps below. After OpenAI approves the public submission, users will also be able to install **Autorouter** directly from the universal plugin directory.
+
 ## What Autorouter does
 
 Autorouter profiles each task, chooses the least expensive GPT-5.6 route likely to finish it correctly, and requires proportionate evidence before completion. It can keep work in the current agent or delegate bounded units to Luna, Terra, or Sol with an appropriate configured reasoning effort.
@@ -29,7 +40,7 @@ Public labels stay factual: `Terra High Standard`, `Sol Extra High Fast`, or `Lu
 ## Which model gets used
 
 <p align="center">
-  <img src="assets/readme/routing-map.svg" alt="When Autorouter uses Luna, Terra, and Sol at different reasoning efforts" width="100%">
+  <img src="assets/readme/routing-map.svg" alt="Luna repeats checked work, Terra builds and investigates, and Sol owns the hardest outcomes" width="100%">
 </p>
 
 Luna is not the scouting model. It is reserved for narrow, explicit, low-consequence work with cheap objective checks. Terra handles most exploration, implementation, processing, and ambiguous debugging. Sol owns architecture, migrations, demanding synthesis, difficult security, and other consequential work. Extra High is a narrow Max Quality route—not a blanket default.
@@ -39,7 +50,7 @@ The router understands strategy, requirements, UX, frontend, backend, databases,
 ## Three optimization profiles
 
 <p align="center">
-  <img src="assets/readme/profiles.svg" alt="Token Saver, Balanced, and Max Quality Autorouter profiles" width="100%">
+  <img src="assets/readme/profiles.svg" alt="Token Saver, Balanced, and Max Quality control how Autorouter spends tokens" width="100%">
 </p>
 
 Set the persistent preference from the installed plugin directory:
@@ -61,7 +72,7 @@ The preference survives plugin upgrades and applies to the next new task. Fast/S
 ## Subagents without sprawl
 
 <p align="center">
-  <img src="assets/readme/orchestration.svg" alt="Autorouter direct, parallel-leaf, and evidence-then-owner subagent patterns" width="100%">
+  <img src="assets/readme/orchestration.svg" alt="Autorouter stays direct, splits matching parallel workers, or gathers Terra evidence before one Sol owner" width="100%">
 </p>
 
 Small work stays direct. Independent units can fan out to bounded Luna or Terra leaves. Consequential work can gather evidence with Terra before one Sol agent owns the outcome. Advisors are read-only and do not form a separate judge layer; the root agent verifies coverage, resolves conflicts, and accepts or rejects the result.
@@ -71,7 +82,7 @@ Hard limits remain simple: depth 1, at most three agents, and at most one eviden
 ## How routing works
 
 <p align="center">
-  <img src="assets/readme/architecture.svg" alt="Autorouter task profiling, route selection, execution, and verification flow" width="100%">
+  <img src="assets/readme/architecture.svg" alt="Autorouter profiles a task, chooses model and effort, executes a bounded plan, and verifies the result" width="100%">
 </p>
 
 1. **Profile** trusted user intent and current task state.
@@ -83,15 +94,16 @@ Hard limits remain simple: depth 1, at most three agents, and at most one eviden
 ## Install and prove readiness
 
 <p align="center">
-  <img src="assets/readme/readiness.svg" alt="Five-step Autorouter installation and readiness proof" width="100%">
+  <img src="assets/readme/readiness.svg" alt="Install, trust, activate, check, and prove one real routed task" width="100%">
 </p>
 
 ### Marketplace plugin — full routing and hooks
 
-The public plugin is **Autorouter**. Its technical package ID remains `gpt-5-6-router` so existing private-beta installs, preferences, and upgrade paths are not stranded.
+The plugin is **Autorouter**. Its technical package ID remains `gpt-5-6-router` so existing private-beta installs, preferences, and upgrade paths are not stranded.
 
 ```bash
-codex plugin add gpt-5-6-router@<marketplace>
+codex plugin marketplace add vibeforge1111/Codex-Autorouter --ref main
+codex plugin add gpt-5-6-router@codex-autorouter
 
 python3 skills/route-gpt-5-6-work/scripts/routerctl.py status
 python3 skills/route-gpt-5-6-work/scripts/routerctl.py activate
@@ -119,6 +131,7 @@ Standalone mode deliberately does not claim plugin-hook enforcement. See [standa
 - **Protected floors:** Token Saver never discounts security, payments, privacy, production, destructive actions, or other high-risk work.
 - **No silent speed changes:** Fast/Standard is inherited, not selected by Autorouter.
 - **Post-mutation verification:** the root agent remains responsible for checking the final mutated state; verification debt is recorded without interrupting Stop.
+- **Observable custom checks:** explicitly named Python validators count only with a machine-readable successful exit; when Desktop omits `transcript_path`, bounded same-session recovery can reconcile the paired result.
 - **Lifecycle-safe escalation:** delayed sibling completion is reconciled before staged execution, and route-up is limited to real task-capability ceilings—not hidden metadata or obsolete cache paths.
 - **Session-safe completion:** Stop and SubagentStop are advisory-only, record unmet gates as `FAILED_OPEN`, and never emit a replayable hard-block message; duplicate terminal events are idempotent.
 - **Upgrade-resilient hooks:** open tasks can locate the newest installed cache after their original immutable cache is replaced.

@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">Autorouter for Codex</title>
+  <desc id="desc">The Autorouter logo beside three GPT-5.6 routes merging into one verified outcome.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#080B10"/><stop offset="0.6" stop-color="#101622"/><stop offset="1" stop-color="#15120F"/>
+    </linearGradient>
+    <linearGradient id="route" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#A78BFA"/><stop offset="0.5" stop-color="#48D7E8"/><stop offset="1" stop-color="#FDBA4A"/>
+    </linearGradient>
+  </defs>
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <path d="M64 72H1216M64 560H1216" stroke="#FFFFFF" stroke-opacity="0.06"/>
+  <g font-family="Inter, ui-sans-serif, system-ui, sans-serif">
+    <g transform="translate(76 92)" aria-label="Autorouter logo">
+      <rect width="76" height="76" rx="22" fill="#0B1018" stroke="#334052" stroke-width="2"/>
+      <g transform="translate(9 6) scale(0.72)"><path d="M18 25L48 46M18 46H48M18 67L48 46M45 46H76M67 38L76 46L67 54" fill="none" stroke="#F8FAFC" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/><circle cx="18" cy="25" r="4.5" fill="#F8FAFC"/><circle cx="18" cy="46" r="4.5" fill="#F8FAFC"/><circle cx="18" cy="67" r="4.5" fill="#F8FAFC"/></g>
+      <text x="98" y="34" fill="#F8FAFC" font-size="27" font-weight="780" letter-spacing="1">AUTOROUTER</text>
+      <text x="98" y="62" fill="#8F9CAF" font-size="15" font-weight="600" letter-spacing="2.5">FOR CODEX</text>
+    </g>
+    <text x="78" y="272" fill="#F8FAFC" font-size="62" font-weight="780" letter-spacing="-2">The right model.</text>
+    <text x="78" y="344" fill="#F8FAFC" font-size="62" font-weight="780" letter-spacing="-2">The right effort.</text>
+    <text x="80" y="400" fill="#98A5B8" font-size="22">Automatic GPT-5.6 routing for verified outcomes.</text>
+
+    <g transform="translate(746 126)">
+      <path d="M70 62C190 62 180 194 316 194M70 194H316M70 326C190 326 180 194 316 194M316 194H438" fill="none" stroke="#344154" stroke-width="14" stroke-linecap="round"/>
+      <path d="M70 62C190 62 180 194 316 194M70 194H316M70 326C190 326 180 194 316 194M316 194H438" fill="none" stroke="url(#route)" stroke-width="5" stroke-linecap="round"/>
+      <circle cx="70" cy="62" r="16" fill="#A78BFA"/><circle cx="70" cy="194" r="16" fill="#48D7E8"/><circle cx="70" cy="326" r="16" fill="#FDBA4A"/>
+      <text x="104" y="70" fill="#D9CEFF" font-size="22" font-weight="700">Luna</text>
+      <text x="104" y="202" fill="#C8F8FC" font-size="22" font-weight="700">Terra</text>
+      <text x="104" y="334" fill="#FFE0A5" font-size="22" font-weight="700">Sol</text>
+      <path d="M418 174L438 194L418 214" fill="none" stroke="#F8FAFC" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+      <rect x="344" y="246" width="154" height="52" rx="18" fill="#14231D" stroke="#65D7A2" stroke-opacity="0.7"/>
+      <text x="421" y="279" text-anchor="middle" fill="#92E9BB" font-size="16" font-weight="740">VERIFIED</text>
+    </g>
+
+    <g transform="translate(78 486)" font-size="15" font-weight="700">
+      <rect width="142" height="42" rx="18" fill="#141A24" stroke="#303B4B"/><text x="71" y="27" text-anchor="middle" fill="#C4CEDA">TOKEN AWARE</text>
+      <rect x="154" width="162" height="42" rx="18" fill="#141A24" stroke="#303B4B"/><text x="235" y="27" text-anchor="middle" fill="#C4CEDA">BOUNDED AGENTS</text>
+      <rect x="328" width="158" height="42" rx="18" fill="#141A24" stroke="#303B4B"/><text x="407" y="27" text-anchor="middle" fill="#C4CEDA">FINAL CHECKS</text>
+    </g>
+  </g>
+</svg>
