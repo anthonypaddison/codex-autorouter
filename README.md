@@ -167,7 +167,7 @@ cd ..
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v benchmarks.test_autorouter_bench
 ```
 
-The current suite covers 199 routing, lifecycle, and benchmark-harness tests plus 5,000 deterministic fuzz cases per CI job, including all three profiles, Extra High selection, delegated-input isolation, repeated-role collaboration reconciliation, stale-cache migration, terminal-hook poison prevention and offline repair, nested-tool verification, unobservable-result fail-open behavior, wrapped Stop-feedback idempotency, lifecycle ownership, concurrency, crash recovery, hook readiness, clean-room standalone installation, frozen capability-fixture validation, profile restoration, and end-to-end blind-panel claim boundaries.
+The current suite covers 200 routing, lifecycle, and benchmark-harness tests plus 5,000 deterministic fuzz cases per CI job, including all three profiles, Extra High selection, delegated-input isolation, repeated-role collaboration reconciliation, stale-cache migration, terminal-hook poison prevention and offline repair, standard and custom-script verification, unobservable-result fail-open behavior, wrapped Stop-feedback idempotency, lifecycle ownership, concurrency, crash recovery, hook readiness, clean-room standalone installation, frozen capability-fixture validation, profile restoration, and end-to-end blind-panel claim boundaries.
 
 ### Capability and efficiency benchmark
 
