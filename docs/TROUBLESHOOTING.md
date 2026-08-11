@@ -8,9 +8,9 @@ From the exact installed plugin root, run:
 python3 scripts/check_hooks.py
 ```
 
-- `READY` means the latest actual turn observed a Luna root and a current capability receipt proves a genuine successful Terra or Sol escalation.
+- `READY` means the latest actual parent turn observed a Luna root and a current capability receipt proves a genuine successful Terra or Sol escalation, with all observable host identity matching.
 - `DEGRADED` means Autorouter can still operate but the active root is not Luna, the runtime/build changed, or current escalation capability has not yet been proven. A non-Luna root substantially reduces credit-saving behaviour.
-- `ADVISORY` means the supported hook or direct child-routing path cannot enforce the full contract.
+- `UNAVAILABLE` means the supported hook or direct child-routing path cannot operate.
 
 `UserPromptSubmit.model` is the authoritative active root for every actual turn. App Server and config evidence may explain the report, but cannot override the hook's active-model evidence.
 
@@ -25,11 +25,13 @@ Autorouter never makes this change itself and never claims to have configured Lu
 
 ## A Codex update changed `READY` to `DEGRADED`
 
-This is expected when the observable Codex runtime/build no longer matches the capability receipt. A receipt binds, where observable, plugin version, Codex runtime/build, Desktop or CLI host type, platform, observed child model, effort intent, capability/schema signature, and timestamp.
+This is expected when observable Codex runtime/build/host identity no longer matches the capability receipt. A receipt is created only after an expected direct child is observed on the requested Terra or Sol model and the same `agent_id` returns a successful structured completion. It binds, where observable, plugin version, Codex runtime/build, Desktop or CLI host type, platform, observed child model, effort intent, capability/schema signature, and timestamp.
 
-Continue normal work. A genuine successful Terra or Sol escalation will create a fresh receipt for the current runtime. The status and health commands never launch an automatic paid probe.
+If Codex does not expose optional runtime/build/host fields, the report says `runtime identity: unavailable from current Codex hook surface`. That limitation alone does not prevent `READY`; platform and all other available evidence still have to match. A receipt proves the observed routing capability, not permanent compatibility across future Codex updates.
 
-## Status says `ADVISORY`
+Continue normal work. A genuine successful Terra or Sol escalation will create a fresh receipt for the current observable environment. The status and health commands never launch an automatic paid probe.
+
+## Status says `UNAVAILABLE`
 
 Confirm that the plugin and its hooks are enabled and trusted, and that Codex's supported direct child-routing capability is available. Organization-managed policy can prevent a user-installed hook from becoming active.
 

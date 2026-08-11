@@ -12,14 +12,14 @@ For every row in `RELEASE_CHECKLIST.md`, record:
 - exact plugin version, tag commit, and archive SHA256 where applicable;
 - clean or pre-existing `CODEX_HOME` state;
 - hook discovery, trust, and exact-root command result;
-- `UserPromptSubmit.model` for each actual turn;
+- `UserPromptSubmit.model` for each actual parent and child turn, kept as separate observations;
 - public route label and final acceptance result;
 - requested child model, effort intent, observed child model, adapter schema/signature, and fallback result;
-- capability receipt timestamp and its plugin/runtime/build/host/platform binding;
+- exact `agent_id` start/stop correlation and capability receipt timestamp with its plugin and observable runtime/build/host/platform binding;
 - ledger status, continuation count, verification evidence, and violations;
 - any warning, retry, manual intervention, or environmental limitation.
 
-A passing delegated route requires the expected model/effort intent, no unplanned children, satisfied verification, no unresolved violation, and a receipt created only after genuine successful Terra or Sol work. A successful-looking final answer is insufficient.
+A passing delegated route requires the expected model/effort intent, no unplanned children, satisfied verification, no unresolved violation, and a receipt created only after the same `agent_id` starts, is observed on the compatible model, and completes genuine Terra or Sol work. A successful-looking final answer or an accepted spawn request is insufficient.
 
 ## Cheap-root setup and health boundary
 
@@ -51,8 +51,8 @@ For each run:
 1. Start a fresh Luna task and confirm the hook's actual active model.
 2. Confirm the router constructs the direct child request through the single compatibility adapter, with `fork_turns: "none"`, the requested Terra or Sol model, bounded task name/message, and effort intent supported by the runtime.
 3. Confirm no obsolete custom `agent_type` is required and no legacy TOML is installed as a prerequisite.
-4. Require the observed child model and returned evidence to match the contract. Exercise the adapter's unsupported-schema fallback separately without launching a paid child.
-5. After a genuine successful escalation, run `python3 scripts/check_hooks.py` again. Require `READY` only when the receipt matches the plugin and observable Codex runtime/build and records host type, platform, child model, effort intent, capability/schema signature, and timestamp.
+4. Require the child's `UserPromptSubmit.model` to be recorded under the exact started `agent_id` without replacing the parent/root observation. Require the same `agent_id` to stop with returned evidence matching the contract. Exercise the adapter's unsupported-schema fallback separately without launching a paid child.
+5. After a genuine successful escalation, run `python3 scripts/check_hooks.py` again. Require `READY` only when the receipt matches the plugin and all observable Codex identity, and records platform, child model, effort intent, capability/schema signature, and timestamp. If optional runtime/build/host fields are unavailable, require the explicit `runtime identity: unavailable from current Codex hook surface` report; absence alone is not a failure.
 6. Change or simulate the observable runtime/build identity without launching another child. Require `DEGRADED`; a later health invocation must not auto-probe. A subsequent genuine successful escalation on that runtime may create a fresh receipt.
 
 On native Windows use `py -3` where `python3` is unavailable. Exercise native lock, atomic replacement, rollback, reparse-point, and hardlink cases through the automated suite before accepting the host.

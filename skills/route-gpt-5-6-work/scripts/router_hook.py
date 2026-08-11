@@ -227,6 +227,19 @@ MUTATION_INTENT = re.compile(
     r"refactor|remove|rename|replace|transform|update|write)\b",
     re.I,
 )
+NEGATED_MUTATION_INTENT = re.compile(
+    r"\b(?:do\s+not|don['’]?t|never|must\s+not|should\s+not|without)\s+"
+    r"(?:directly\s+|anything\s+by\s+)?"
+    r"(?:add(?:ing)?|build(?:ing)?|chang(?:e|ing)|convert(?:ing)?|creat(?:e|ing)|delet(?:e|ing)|"
+    r"edit(?:ing)?|fix(?:ing)?|format(?:ting)?|generat(?:e|ing)|implement(?:ing)?|install(?:ing)?|"
+    r"migrat(?:e|ing)|modify(?:ing)?|patch(?:ing)?|refactor(?:ing)?|remov(?:e|ing)|renam(?:e|ing)|"
+    r"replac(?:e|ing)|transform(?:ing)?|updat(?:e|ing)|writ(?:e|ing))\b",
+    re.I,
+)
+NEGATED_MUTATION_NOUN = re.compile(
+    r"\bno\s+(?:repository\s+|file\s+|code\s+)?(?:edits?|changes?|modifications?|writes?)\b",
+    re.I,
+)
 TRIVIAL = re.compile(
     r"\b(typo|one[- ]line|single line|rename this (?:local )?variable|format this|explain this error|"
     r"short answer|quick question|what does this mean)\b",
@@ -269,6 +282,12 @@ def _classification_text(prompt: str) -> str:
     raw = str(prompt or "")
     match = CODEX_DELEGATION.fullmatch(raw)
     return html.unescape(match.group(1)) if match else raw
+
+
+def _mutation_intent_text(text: str) -> str:
+    """Remove explicit local prohibitions without hiding other requested work."""
+    without_negated_verbs = NEGATED_MUTATION_INTENT.sub(" ", text)
+    return NEGATED_MUTATION_NOUN.sub(" ", without_negated_verbs)
 
 
 def _route(route: str, confidence: float, reason: str, verification: str, parallel: bool = False) -> dict[str, Any]:
@@ -363,11 +382,18 @@ def _runtime_identity(data: dict[str, Any]) -> dict[str, str | None]:
     host_type = str(host) if str(host or "").lower() in {"desktop", "cli"} else None
     if host_type:
         host_type = "Desktop" if host_type.lower() == "desktop" else "CLI"
+    runtime_version = str(data.get("runtime_version") or data.get("codex_version") or "") or None
+    runtime_build = str(data.get("runtime_build") or data.get("build_version") or data.get("app_build") or "") or None
     return {
-        "runtime_version": str(data.get("runtime_version") or data.get("codex_version") or "") or None,
-        "runtime_build": str(data.get("runtime_build") or data.get("build_version") or data.get("app_build") or "") or None,
+        "runtime_version": runtime_version,
+        "runtime_build": runtime_build,
         "host_type": host_type,
         "platform": platform.system() or sys.platform,
+        "runtime_identity_source": (
+            "hook_payload"
+            if any((runtime_version, runtime_build, host_type))
+            else "unavailable_from_current_codex_hook_surface"
+        ),
     }
 
 
@@ -420,9 +446,23 @@ def _record_root_observation(data: dict[str, Any]) -> dict[str, Any]:
     return observation
 
 
-def _record_capability(state: dict[str, Any], role: str, observed_model: str) -> None:
-    if role not in ROUTES or observed_model not in spawn_compat.SUPPORTED_EFFORTS:
-        return
+def _record_capability(state: dict[str, Any], agent_id: str) -> bool:
+    agent = state.get("agents", {}).get(agent_id, {})
+    role = str(agent.get("type") or "")
+    requested_model = str(agent.get("requested_model") or "")
+    observed_model = str(agent.get("observed_model") or "")
+    if (
+        role not in ROUTES
+        or agent.get("correlation_mode") != "direct_agent_id"
+        or not agent.get("expected_by_parent")
+        or agent.get("status") != "completed"
+        or not agent.get("completion_structured")
+        or requested_model not in spawn_compat.SUPPORTED_EFFORTS
+        or observed_model != requested_model
+        or not state.get("agent_attestations", {}).get(agent_id, {}).get("matched")
+        or agent.get("receipt_recorded")
+    ):
+        return False
     identity = state.get("runtime_identity") if isinstance(state.get("runtime_identity"), dict) else {}
     receipt = {
         "schema_version": 1,
@@ -432,11 +472,20 @@ def _record_capability(state: dict[str, Any], role: str, observed_model: str) ->
         "runtime_build": identity.get("runtime_build"),
         "host_type": identity.get("host_type"),
         "platform": identity.get("platform") or platform.system() or sys.platform,
+        "runtime_identity_source": identity.get("runtime_identity_source") or "unavailable_from_current_codex_hook_surface",
+        "agent_id": agent_id,
+        "parent_session_id": state.get("session_id"),
+        "parent_turn_id": state.get("turn_id"),
+        "requested_child_model": requested_model,
         "observed_child_model": observed_model,
-        "effort_intent": ROUTES[role]["effort"],
+        "effort_intent": agent.get("requested_effort") or ROUTES[role]["effort"],
+        "observed_effort": agent.get("observed_effort"),
+        "route_purpose": agent.get("purpose"),
         "timestamp": int(time.time()),
     }
     _write_health_record(CAPABILITY_PATH, receipt)
+    agent["receipt_recorded"] = True
+    return True
 
 
 def _agent_config_attestation(role: str, observed_model: str = "", effort_intent: str = "") -> dict[str, Any]:
@@ -676,7 +725,7 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
     read_heavy = bool(READ_HEAVY.search(text))
     parallel = bool(PARALLEL.search(text))
     dependent = bool(DEPENDENT_WORK.search(text))
-    mutation = bool(MUTATION_INTENT.search(text))
+    mutation = bool(MUTATION_INTENT.search(_mutation_intent_text(text)))
     security = security_subject and (
         bool(SECURITY_ACTION.search(text)) or mutation or consequence
     ) and not (bool(EXPLANATORY.search(text)) and not mutation and not review and not consequence)
@@ -1294,6 +1343,83 @@ def _latest_session_state(session_id: Any, exclude_turn: Any = None) -> dict[str
         if state is not None:
             return state
     return None
+
+
+def _session_states(session_id: Any) -> list[dict[str, Any]]:
+    """Return a bounded newest-first view of valid ledgers for one session."""
+    if not STATE_ROOT.exists():
+        return []
+    eligible = (
+        path for path in STATE_ROOT.glob(f"{_safe(session_id)}--*.json")
+        if not path.is_symlink()
+    )
+    try:
+        paths = heapq.nlargest(100, itertools.islice(eligible, 2000), key=lambda item: item.stat().st_mtime_ns)
+    except OSError:
+        return []
+    return [state for path in paths if (state := _load_state_path(path)) is not None]
+
+
+def _state_for_agent(session_id: Any, agent_id: str) -> dict[str, Any] | None:
+    if not agent_id:
+        return None
+    return next(
+        (state for state in _session_states(session_id) if agent_id in state.get("agents", {})),
+        None,
+    )
+
+
+def _active_child_for_prompt(data: dict[str, Any]) -> tuple[dict[str, Any], str] | None:
+    """Correlate a child prompt to an already-started direct child.
+
+    Desktop supplies a different turn id for the child prompt, but the same
+    session as its parent. The immediately preceding SubagentStart is the
+    lifecycle relationship; model/effort narrow concurrent candidates.
+    """
+    event_turn = str(data.get("turn_id") or "")
+    model = str(data.get("model") or "")
+    effort = str(data.get("model_reasoning_effort") or data.get("reasoning_effort") or "")
+    candidates: list[tuple[dict[str, Any], str, dict[str, Any]]] = []
+    for state in _session_states(data.get("session_id")):
+        if event_turn and event_turn == str(state.get("turn_id") or ""):
+            continue
+        for agent_id, agent in state.get("agents", {}).items():
+            if (
+                agent.get("status") == "started"
+                and agent.get("correlation_mode") == "direct_agent_id"
+                and not agent.get("child_turn_id")
+            ):
+                candidates.append((state, str(agent_id), agent))
+    if not candidates:
+        return None
+    exact = [item for item in candidates if item[2].get("requested_model") == model]
+    if effort:
+        exact_effort = [item for item in exact if item[2].get("requested_effort") == effort]
+        if exact_effort:
+            exact = exact_effort
+    selected = max(exact or candidates, key=lambda item: int(item[2].get("start_order") or 0))
+    return selected[0], selected[1]
+
+
+def _record_child_prompt(data: dict[str, Any]) -> bool:
+    target = _active_child_for_prompt(data)
+    if target is None:
+        return False
+    state, agent_id = target
+    agent = state["agents"][agent_id]
+    observed_model = str(data.get("model") or "") or None
+    observed_effort = str(data.get("model_reasoning_effort") or data.get("reasoning_effort") or "") or None
+    agent.update({
+        "observed_model": observed_model,
+        "observed_effort": observed_effort,
+        "child_turn_id": str(data.get("turn_id") or "") or None,
+        "observed_at": int(time.time()),
+        "model_match": observed_model == agent.get("requested_model"),
+    })
+    if not agent["model_match"]:
+        state.setdefault("violations", []).append(f"child_model_mismatch:{agent_id}")
+    _write_existing_state(data, state)
+    return True
 
 
 def _read_state(data: dict[str, Any]) -> dict[str, Any] | None:
@@ -1987,12 +2113,8 @@ def _reconcile_subagent_transcript(data: dict[str, Any], state: dict[str, Any]) 
             and agent_id in structured_ids
             and state.get("agent_attestations", {}).get(agent_id, {}).get("matched")
         ):
-            _record_capability(
-                state,
-                role,
-                str(state["agent_attestations"][agent_id].get("model") or ""),
-            )
-            state.setdefault("telemetry", {})["child_completion_attested"] = True
+            if _record_capability(state, agent_id):
+                state.setdefault("telemetry", {})["child_completion_attested"] = True
     if completed_ids and structured_ids:
         state.setdefault("reconciled_from_transcript", True)
 
@@ -2000,6 +2122,8 @@ def _reconcile_subagent_transcript(data: dict[str, Any], state: dict[str, Any]) 
 def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
     event = data.get("hook_event_name")
     if event == "UserPromptSubmit":
+        if _record_child_prompt(data):
+            return None
         _cleanup_state()
         root_observation_error = None
         try:
@@ -2130,7 +2254,9 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         _write_existing_state(data, state)
         return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": _context(decision)}}
 
-    state = _read_state(data)
+    agent_id = str(data.get("agent_id") or "")
+    state = _state_for_agent(data.get("session_id"), agent_id) if agent_id else None
+    state = state or _read_state(data)
     if state is None:
         return {"continue": True} if event in {"Stop", "SubagentStop"} else None
     if _migrate_state_identity(state):
@@ -2143,7 +2269,8 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         # evidence workers instead of falsely reporting an ordering violation.
         _reconcile_subagent_transcript(data, state)
         role = _event_role(data, state)
-        agent_id = str(data.get("agent_id") or f"anonymous-{len(state.setdefault('agents', {})) + 1}")
+        supplied_agent_id = str(data.get("agent_id") or "")
+        agent_id = supplied_agent_id or f"anonymous-{len(state.setdefault('agents', {})) + 1}"
         state["status"] = "RUNNING"
         if role not in state["subagents_started"]:
             state["subagents_started"].append(role)
@@ -2151,6 +2278,13 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             state["agent_ids"].append(agent_id)
         plan = decision["orchestration"]
         allowed = set(plan["allowed_agents"])
+        direct_model = str(data.get("model") or "")
+        direct_effort = str(data.get("reasoning_effort") or data.get("model_reasoning_effort") or "")
+        direct_lifecycle = bool(
+            supplied_agent_id
+            and not data.get("agent_type")
+            and direct_model in spawn_compat.SUPPORTED_EFFORTS
+        )
         council = plan["mode"] == "routing_council"
         council_phase = str(plan.get("phase") or "")
         existing_roles = [str(agent.get("type") or "") for agent in state.setdefault("agents", {}).values()]
@@ -2177,7 +2311,32 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             and sum(1 for agent in state["agents"].values() if agent.get("phase") == "advisory" and agent.get("status") == "completed") < 2
         )
         phase = "advisory" if council and council_phase == "advisory" else "execution"
-        state["agents"][agent_id] = {"type": role, "status": "started", "phase": phase}
+        expected_role = role if role in allowed else (
+            str(decision.get("route") or "") if decision.get("route") in allowed else next(iter(sorted(allowed)), "")
+        )
+        expected_spec = ROUTES.get(expected_role, {})
+        state["agents"][agent_id] = {
+            "type": role,
+            "status": "started",
+            "phase": phase,
+            "correlation_mode": "direct_agent_id" if direct_lifecycle else "legacy_agent_type",
+            "parent_session_id": state.get("session_id"),
+            "parent_turn_id": state.get("turn_id"),
+            "requested_model": expected_spec.get("model") if direct_lifecycle else ROUTES.get(role, {}).get("model"),
+            "start_observed_model": direct_model or None,
+            "requested_effort": expected_spec.get("effort") if direct_lifecycle else ROUTES.get(role, {}).get("effort"),
+            "start_observed_effort": direct_effort or None,
+            "observed_model": None,
+            "observed_effort": None,
+            "purpose": str(decision.get("reason") or "")[:500],
+            "expected_by_parent": role in allowed,
+            "start_order": len(state["agents"]) + 1,
+            "started_at": int(time.time()),
+            "stop_events": 0,
+            "duplicate_stops": 0,
+            "completion_structured": False,
+            "receipt_recorded": False,
+        }
         state.setdefault("telemetry", {})["child_count"] = len(state["agents"])
         if role in ROUTES:
             state.setdefault("agent_attestations", {})[agent_id] = _agent_config_attestation(
@@ -2250,17 +2409,37 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         message = str(data.get("last_assistant_message") or "")
         required = _structured_return(message)
         agents = state.setdefault("agents", {})
-        target_id = agent_id if agent_id in agents else next(
-            (key for key, value in agents.items() if value.get("type") == role and value.get("status") == "started"),
-            agent_id or f"anonymous-stop-{len(agents) + 1}",
+        if agent_id and agent_id not in agents:
+            state.setdefault("violations", []).append(f"unknown_agent_stop:{agent_id}")
+            _write_existing_state(data, state)
+            return {"continue": True}
+        target_id = agent_id or next(
+            (
+                key for key, value in agents.items()
+                if value.get("correlation_mode") == "legacy_agent_type"
+                and value.get("type") == role
+                and value.get("status") == "started"
+            ),
+            f"anonymous-stop-{len(agents) + 1}",
         )
+        target = agents.setdefault(target_id, {"type": role, "correlation_mode": "legacy_agent_type"})
+        if target.get("status") == "completed":
+            target["duplicate_stops"] = int(target.get("duplicate_stops") or 0) + 1
+            _write_existing_state(data, state)
+            return {"continue": True}
+        target["stop_events"] = 1
+        target["stopped_at"] = int(time.time())
+        target["stop_observed_model"] = str(data.get("model") or "") or None
+        target["stop_observed_effort"] = str(
+            data.get("reasoning_effort") or data.get("model_reasoning_effort") or ""
+        ) or None
+        target["completion_structured"] = required
         if required:
             if role not in state["subagents_completed"]:
                 state["subagents_completed"].append(role)
-            agents.setdefault(target_id, {"type": role})["status"] = "completed"
+            target["status"] = "completed"
             attestation = state.get("agent_attestations", {}).get(target_id, {})
-            if attestation.get("matched"):
-                _record_capability(state, role, str(attestation.get("model") or ""))
+            if attestation.get("matched") and _record_capability(state, target_id):
                 state.setdefault("telemetry", {})["child_completion_attested"] = True
         else:
             state["violations"].append(f"incomplete_return:{role}")
@@ -2403,8 +2582,13 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
                     problems.append("complete exactly one selected routing-council executor")
                 elif execution_agent.get("type") != selection["selected"]:
                     problems.append("execute with the exact routing-council selected role")
-        if any(item.startswith(("unexpected_agent:", "worker_cap_exceeded:", "ordering_violation:", "advisor_mutation:")) for item in state["violations"]):
-            problems.append("resolve unexpected-agent, worker-cap, orchestration-order, or advisor-mutation violations")
+        if any(item.startswith((
+            "unexpected_agent:", "worker_cap_exceeded:", "ordering_violation:", "advisor_mutation:",
+            "child_model_mismatch:",
+        )) for item in state["violations"]):
+            problems.append(
+                "resolve unexpected-agent, child-model, worker-cap, orchestration-order, or advisor-mutation violations"
+            )
         verification_problem = None
         if state.get("mutation_generation", 0) > 0 and state.get("mutation_generation", 0) > state.get("verified_generation", -1):
             verification_problem = f"run the required verification gate after the final mutation: {_effective_verification(state)}"

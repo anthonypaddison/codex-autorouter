@@ -167,25 +167,42 @@ def _routing_health(effective: dict[str, Any], plugin_version: str, data_root: P
                 reasons.append("Capability receipt lacks effort intent or timestamp evidence.")
 
         if observation is not None and receipt is not None:
-            current_runtime = observation.get("runtime_version")
-            current_build = observation.get("runtime_build")
-            receipt_runtime = receipt.get("runtime_version")
-            receipt_build = receipt.get("runtime_build")
-            if not all(isinstance(value, str) and value for value in (current_runtime, current_build, receipt_runtime, receipt_build)):
-                reasons.append("Codex runtime or build identity is unknown, so the capability receipt cannot establish READY.")
-            elif current_runtime != receipt_runtime or current_build != receipt_build:
-                reasons.append("Codex runtime or build changed after the last successful escalation receipt.")
+            for field, label in (
+                ("runtime_version", "Codex runtime version"),
+                ("runtime_build", "Codex runtime build"),
+                ("host_type", "Codex host type"),
+            ):
+                current_value = observation.get(field)
+                receipt_value = receipt.get(field)
+                current_observable = isinstance(current_value, str) and bool(current_value)
+                receipt_observable = isinstance(receipt_value, str) and bool(receipt_value)
+                if current_observable and not receipt_observable:
+                    reasons.append(f"{label} is currently observable but was not bound by the capability receipt.")
+                elif current_observable and receipt_observable and current_value != receipt_value:
+                    reasons.append(f"{label} changed after the last successful escalation receipt.")
             current_platform = observation.get("platform")
             receipt_platform = receipt.get("platform")
-            if current_platform and receipt_platform and current_platform != receipt_platform:
+            if current_platform and not receipt_platform:
+                reasons.append("Current platform was not bound by the capability receipt.")
+            elif current_platform and receipt_platform and current_platform != receipt_platform:
                 reasons.append("Capability receipt platform does not match the current hook observation.")
-            current_host = observation.get("host_type")
-            receipt_host = receipt.get("host_type")
-            if current_host and receipt_host and current_host != receipt_host:
-                reasons.append("Capability receipt host type does not match the current hook observation.")
 
         if not reasons:
             status = "READY"
+
+    identity_values = (
+        observation.get("runtime_version") if observation else None,
+        observation.get("runtime_build") if observation else None,
+        observation.get("host_type") if observation else None,
+    )
+    observable_identity_count = sum(isinstance(value, str) and bool(value) for value in identity_values)
+    runtime_identity = (
+        "unavailable from current Codex hook surface"
+        if observable_identity_count == 0
+        else "partially observable from current Codex hook surface"
+        if observable_identity_count < len(identity_values)
+        else "observable from current Codex hook surface"
+    )
 
     return {
         "status": status,
@@ -196,6 +213,7 @@ def _routing_health(effective: dict[str, Any], plugin_version: str, data_root: P
         "reasons": reasons,
         "observation_present": observation is not None,
         "capability_receipt_present": receipt is not None,
+        "runtime_identity": runtime_identity,
         "automatic_paid_probe_performed": False,
         "data_root": str(data_root),
     }
@@ -269,7 +287,7 @@ def inspect(cwd: Path, plugin_prefix: str) -> dict[str, Any]:
         "root_model": health["root_model"],
         "root_model_source": health["root_model_source"],
         "reasons": health["reasons"],
-        "readiness_scope": "OBSERVED_ROOT_AND_RUNTIME_BOUND_CAPABILITY",
+        "readiness_scope": "OBSERVED_ROOT_AND_OBSERVABLE_IDENTITY_CAPABILITY",
         "live_delegation_required": health["status"] != "READY",
         "hooks": [
             {

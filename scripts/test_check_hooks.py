@@ -30,7 +30,16 @@ def _effective(*, model: str = "gpt-5.6-luna", agents_enabled: bool = True) -> d
     )
 
 
-def _write_evidence(root: Path, *, root_model: str = "gpt-5.6-luna", runtime_version: str | None = "0.88.0", runtime_build: str | None = "desktop-88", receipt_version: str | None = None, receipt_build: str | None = None) -> None:
+def _write_evidence(
+    root: Path,
+    *,
+    root_model: str = "gpt-5.6-luna",
+    runtime_version: str | None = "0.88.0",
+    runtime_build: str | None = "desktop-88",
+    host_type: str | None = "Desktop",
+    receipt_version: str | None = None,
+    receipt_build: str | None = None,
+) -> None:
     root.mkdir(parents=True, exist_ok=True)
     observation = {
         "schema_version": 1,
@@ -38,7 +47,8 @@ def _write_evidence(root: Path, *, root_model: str = "gpt-5.6-luna", runtime_ver
         "root_model": root_model,
         "runtime_version": runtime_version,
         "runtime_build": runtime_build,
-        "host_type": "Desktop",
+        "host_type": host_type,
+        "runtime_identity_source": "hook_payload" if any((runtime_version, runtime_build, host_type)) else "unavailable_from_current_codex_hook_surface",
         "platform": "darwin",
         "timestamp": "2026-08-11T12:00:00Z",
     }
@@ -48,7 +58,8 @@ def _write_evidence(root: Path, *, root_model: str = "gpt-5.6-luna", runtime_ver
         "plugin_version": PLUGIN_VERSION,
         "runtime_version": runtime_version if receipt_version is None else receipt_version,
         "runtime_build": runtime_build if receipt_build is None else receipt_build,
-        "host_type": "Desktop",
+        "host_type": host_type,
+        "runtime_identity_source": "hook_payload" if any((runtime_version, runtime_build, host_type)) else "unavailable_from_current_codex_hook_surface",
         "platform": "darwin",
         "observed_child_model": "gpt-5.6-terra",
         "effort_intent": "medium",
@@ -169,13 +180,36 @@ class RoutingHealthTests(unittest.TestCase):
         self.assertEqual("DEGRADED", health["status"])
         self.assertIn("runtime", " ".join(health["reasons"]))
 
-    def test_unknown_runtime_or_build_is_degraded(self) -> None:
+    def test_missing_optional_runtime_identity_does_not_make_ready_impossible(self) -> None:
         for version, build in ((None, "desktop-88"), ("0.88.0", None)):
             with self.subTest(version=version, build=build), tempfile.TemporaryDirectory() as raw:
                 data = Path(raw)
                 _write_evidence(data, runtime_version=version, runtime_build=build)
                 health = check_hooks._routing_health(_effective(), PLUGIN_VERSION, data)
-                self.assertEqual("DEGRADED", health["status"])
+                self.assertEqual("READY", health["status"])
+
+    def test_fully_unavailable_runtime_identity_is_explicit_but_can_be_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            data = Path(raw)
+            _write_evidence(data, runtime_version=None, runtime_build=None, host_type=None)
+            health = check_hooks._routing_health(_effective(), PLUGIN_VERSION, data)
+        self.assertEqual("READY", health["status"])
+        self.assertEqual(
+            "unavailable from current Codex hook surface",
+            health["runtime_identity"],
+        )
+
+    def test_current_observable_runtime_missing_from_receipt_is_degraded(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            data = Path(raw)
+            _write_evidence(data)
+            receipt_path = data / "capability-v1.json"
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            receipt["runtime_version"] = None
+            receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
+            health = check_hooks._routing_health(_effective(), PLUGIN_VERSION, data)
+        self.assertEqual("DEGRADED", health["status"])
+        self.assertIn("not bound", " ".join(health["reasons"]))
 
     def test_unavailable_precedes_receipt_and_root_health(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

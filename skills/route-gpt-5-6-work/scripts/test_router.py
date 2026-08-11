@@ -189,6 +189,292 @@ class RouterTests(unittest.TestCase):
                 actual = router_hook.classify_prompt(prompt, "gpt-5.6-luna", "low")
                 self.assertEqual(expected, actual["route"])
 
+    def test_real_desktop_test_a_prompt_is_read_only_and_stays_on_luna(self) -> None:
+        fixture = json.loads(
+            (Path(__file__).parent / "fixtures" / "desktop_test_a.json").read_text(encoding="utf-8")
+        )["classifier_regression"]
+        decision = router_hook.classify_prompt(fixture["prompt"], "gpt-5.6-luna", "low")
+        self.assertEqual(fixture["expected_mutation"], decision["task_profile"]["mutation"])
+        self.assertEqual(fixture["expected_route"], decision["route"])
+
+    def test_negated_mutation_phrases_do_not_create_mutation_intent(self) -> None:
+        prompts = (
+            "Read README and report the supported Python versions. Do not modify anything.",
+            "Inspect the configuration, but don't edit it.",
+            "Review these files with no edits.",
+            "Analyse the parser read-only and without changing any files.",
+            "Inspect only; do not write to the repository.",
+            "Do not modify the authentication validation logic; explain why it is unsafe.",
+        )
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                decision = router_hook.classify_prompt(prompt, "gpt-5.6-luna", "low")
+                self.assertFalse(decision["task_profile"]["mutation"])
+
+    def test_negation_does_not_hide_a_separate_positive_mutation(self) -> None:
+        decision = router_hook.classify_prompt(
+            "Do not modify README; update the CI configuration and add a focused test.",
+            "gpt-5.6-luna",
+            "low",
+        )
+        self.assertTrue(decision["task_profile"]["mutation"])
+
+    def test_read_only_complexity_can_still_require_sol(self) -> None:
+        decision = router_hook.classify_prompt(
+            "Threat-model the production authentication architecture. Do not modify anything.",
+            "gpt-5.6-luna",
+            "low",
+        )
+        self.assertFalse(decision["task_profile"]["mutation"])
+        self.assertEqual("gpt56_sol_deep", decision["route"])
+
+    def test_sanitized_desktop_test_a_lifecycle_keeps_root_and_completes_child(self) -> None:
+        fixture = json.loads(
+            (Path(__file__).parent / "fixtures" / "desktop_test_a.json").read_text(encoding="utf-8")
+        )
+        for event in fixture["lifecycle_events"]:
+            router_hook.handle(event)
+
+        observation = json.loads(router_hook.ROOT_OBSERVATION_PATH.read_text(encoding="utf-8"))
+        self.assertEqual("gpt-5.6-luna", observation["root_model"])
+        self.assertEqual(
+            "unavailable_from_current_codex_hook_surface",
+            observation["runtime_identity_source"],
+        )
+        ledger = json.loads(
+            (Path(self.temp.name) / "desktop-test-a-session--desktop-test-a-parent-turn.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        child = ledger["agents"]["desktop-test-a-terra-child"]
+        self.assertEqual("gpt-5.6-terra", child["observed_model"])
+        self.assertEqual("completed", child["status"])
+        self.assertEqual("COMPLETE", ledger["status"])
+        receipt = json.loads(router_hook.CAPABILITY_PATH.read_text(encoding="utf-8"))
+        self.assertEqual("desktop-test-a-terra-child", receipt["agent_id"])
+        self.assertEqual("gpt-5.6-terra", receipt["observed_child_model"])
+        self.assertEqual(
+            "unavailable_from_current_codex_hook_surface",
+            receipt["runtime_identity_source"],
+        )
+
+    def test_direct_receipt_requires_an_observed_child_prompt(self) -> None:
+        base = {"session_id": "receipt-needs-observation", "turn_id": "parent"}
+        router_hook.handle({
+            **base,
+            "hook_event_name": "UserPromptSubmit",
+            "model": "gpt-5.6-luna",
+            "prompt": "Add pagination to this endpoint and include targeted tests for the changed behavior.",
+        })
+        router_hook.handle({
+            **base,
+            "hook_event_name": "SubagentStart",
+            "agent_id": "terra-child",
+            "model": "gpt-5.6-terra",
+            "reasoning_effort": "medium",
+        })
+        router_hook.handle({
+            **base,
+            "hook_event_name": "SubagentStop",
+            "agent_id": "terra-child",
+            "model": "gpt-5.6-terra",
+            "reasoning_effort": "medium",
+            "last_assistant_message": "Evidence: done\nVerification: tests passed\nUncertainty: none",
+        })
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+
+    def test_unknown_agent_stop_cannot_complete_the_expected_child(self) -> None:
+        root = {
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "unknown-stop",
+            "turn_id": "parent",
+            "model": "gpt-5.6-luna",
+            "prompt": "Add pagination to this endpoint and include targeted tests for the changed behavior.",
+        }
+        router_hook.handle(root)
+        router_hook.handle({
+            "hook_event_name": "SubagentStart", "session_id": "unknown-stop", "turn_id": "parent",
+            "agent_id": "expected", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+        })
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "unknown-stop", "turn_id": "child",
+            "model": "gpt-5.6-terra", "model_reasoning_effort": "medium", "prompt": "Do the bounded child task.",
+        })
+        router_hook.handle({
+            "hook_event_name": "SubagentStop", "session_id": "unknown-stop", "turn_id": "child",
+            "agent_id": "unknown", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+            "last_assistant_message": "Evidence: done\nVerification: passed\nUncertainty: none",
+        })
+        ledger = json.loads((Path(self.temp.name) / "unknown-stop--parent.json").read_text(encoding="utf-8"))
+        self.assertEqual("started", ledger["agents"]["expected"]["status"])
+        self.assertIn("unknown_agent_stop:unknown", ledger["violations"])
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+
+    def test_duplicate_stop_is_idempotent_for_a_correlated_child(self) -> None:
+        events = (
+            {
+                "hook_event_name": "UserPromptSubmit", "session_id": "duplicate-stop", "turn_id": "parent",
+                "model": "gpt-5.6-luna",
+                "prompt": "Add pagination to this endpoint and include targeted tests for the changed behavior.",
+            },
+            {
+                "hook_event_name": "SubagentStart", "session_id": "duplicate-stop", "turn_id": "parent",
+                "agent_id": "terra", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+            },
+            {
+                "hook_event_name": "UserPromptSubmit", "session_id": "duplicate-stop", "turn_id": "child",
+                "model": "gpt-5.6-terra", "model_reasoning_effort": "medium", "prompt": "Do the child task.",
+            },
+        )
+        for event in events:
+            router_hook.handle(event)
+        stop = {
+            "hook_event_name": "SubagentStop", "session_id": "duplicate-stop", "turn_id": "child",
+            "agent_id": "terra", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+            "last_assistant_message": "Evidence: done\nVerification: passed\nUncertainty: none",
+        }
+        router_hook.handle(stop)
+        router_hook.handle(stop)
+        ledger = json.loads((Path(self.temp.name) / "duplicate-stop--parent.json").read_text(encoding="utf-8"))
+        self.assertEqual(1, ledger["agents"]["terra"]["stop_events"])
+        self.assertEqual(1, ledger["agents"]["terra"]["duplicate_stops"])
+
+    def test_sequential_children_remain_scoped_to_the_same_luna_parent(self) -> None:
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "sequential", "turn_id": "parent",
+            "model": "gpt-5.6-luna",
+            "prompt": "Add pagination to this endpoint and include targeted tests for the changed behavior.",
+        })
+        for index in (1, 2):
+            agent_id = f"terra-{index}"
+            router_hook.handle({
+                "hook_event_name": "SubagentStart", "session_id": "sequential", "turn_id": "parent",
+                "agent_id": agent_id, "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+            })
+            router_hook.handle({
+                "hook_event_name": "UserPromptSubmit", "session_id": "sequential", "turn_id": f"child-{index}",
+                "model": "gpt-5.6-terra", "model_reasoning_effort": "medium", "prompt": f"Do child task {index}.",
+            })
+            router_hook.handle({
+                "hook_event_name": "SubagentStop", "session_id": "sequential", "turn_id": f"child-{index}",
+                "agent_id": agent_id, "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+                "last_assistant_message": "Evidence: done\nVerification: passed\nUncertainty: none",
+            })
+        observation = json.loads(router_hook.ROOT_OBSERVATION_PATH.read_text(encoding="utf-8"))
+        ledger = json.loads((Path(self.temp.name) / "sequential--parent.json").read_text(encoding="utf-8"))
+        self.assertEqual("gpt-5.6-luna", observation["root_model"])
+        self.assertEqual({"completed"}, {agent["status"] for agent in ledger["agents"].values()})
+
+    def test_started_direct_child_that_never_stops_cannot_complete_or_write_a_receipt(self) -> None:
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "never-stops", "turn_id": "parent",
+            "model": "gpt-5.6-luna",
+            "prompt": "Add pagination to this endpoint and include targeted tests for the changed behavior.",
+        })
+        router_hook.handle({
+            "hook_event_name": "SubagentStart", "session_id": "never-stops", "turn_id": "parent",
+            "agent_id": "terra", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+        })
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "never-stops", "turn_id": "child",
+            "model": "gpt-5.6-terra", "model_reasoning_effort": "medium", "prompt": "Do the child task.",
+        })
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": "never-stops", "turn_id": "parent",
+            "stop_hook_active": False,
+        })
+        ledger = json.loads((Path(self.temp.name) / "never-stops--parent.json").read_text(encoding="utf-8"))
+        self.assertEqual("FAILED_OPEN", ledger["status"])
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+
+    def test_supported_concurrent_children_correlate_each_stop_by_agent_id(self) -> None:
+        session = "concurrent-direct"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "parent",
+            "model": "gpt-5.6-luna",
+            "prompt": "In parallel, extract version numbers from three independent manifests.",
+        })
+        for agent_id in ("terra-a", "terra-b"):
+            router_hook.handle({
+                "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "parent",
+                "agent_id": agent_id, "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+            })
+        for turn_id in ("child-a", "child-b"):
+            router_hook.handle({
+                "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn_id,
+                "model": "gpt-5.6-terra", "model_reasoning_effort": "medium", "prompt": "Extract one bounded manifest.",
+            })
+        for agent_id in ("terra-a", "terra-b"):
+            router_hook.handle({
+                "hook_event_name": "SubagentStop", "session_id": session, "turn_id": f"stop-{agent_id}",
+                "agent_id": agent_id, "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+                "last_assistant_message": "Evidence: version extracted\nVerification: manifest checked\nUncertainty: none",
+            })
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": "parent", "stop_hook_active": False,
+        })
+        ledger = json.loads((Path(self.temp.name) / f"{session}--parent.json").read_text(encoding="utf-8"))
+        self.assertEqual("COMPLETE", ledger["status"])
+        self.assertEqual({"terra-a", "terra-b"}, set(ledger["agents"]))
+        self.assertEqual({"child-a", "child-b"}, {agent["child_turn_id"] for agent in ledger["agents"].values()})
+        self.assertEqual({"completed"}, {agent["status"] for agent in ledger["agents"].values()})
+
+    def test_subsequent_parent_turn_can_update_the_root_after_child_completion(self) -> None:
+        fixture = json.loads(
+            (Path(__file__).parent / "fixtures" / "desktop_test_a.json").read_text(encoding="utf-8")
+        )
+        for event in fixture["lifecycle_events"][:-1]:
+            router_hook.handle(event)
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "desktop-test-a-session", "turn_id": "next-parent",
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Explain this helper.",
+        })
+        observation = json.loads(router_hook.ROOT_OBSERVATION_PATH.read_text(encoding="utf-8"))
+        self.assertEqual("gpt-5.6-sol", observation["root_model"])
+
+    def test_sol_parent_observation_is_not_overwritten_by_an_active_child(self) -> None:
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "sol-parent", "turn_id": "parent",
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Review the architecture.",
+        })
+        router_hook.handle({
+            "hook_event_name": "SubagentStart", "session_id": "sol-parent", "turn_id": "parent",
+            "agent_id": "parallel-terra", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+        })
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "sol-parent", "turn_id": "child",
+            "model": "gpt-5.6-terra", "model_reasoning_effort": "medium", "prompt": "Run independent evidence gathering.",
+        })
+        observation = json.loads(router_hook.ROOT_OBSERVATION_PATH.read_text(encoding="utf-8"))
+        self.assertEqual("gpt-5.6-sol", observation["root_model"])
+
+    def test_unexpected_direct_child_model_never_creates_a_receipt(self) -> None:
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "model-mismatch", "turn_id": "parent",
+            "model": "gpt-5.6-luna",
+            "prompt": "Add pagination to this endpoint and include targeted tests for the changed behavior.",
+        })
+        router_hook.handle({
+            "hook_event_name": "SubagentStart", "session_id": "model-mismatch", "turn_id": "parent",
+            "agent_id": "wrong-model", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+        })
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "model-mismatch", "turn_id": "child",
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "medium", "prompt": "Do the child task.",
+        })
+        router_hook.handle({
+            "hook_event_name": "SubagentStop", "session_id": "model-mismatch", "turn_id": "child",
+            "agent_id": "wrong-model", "model": "gpt-5.6-sol", "reasoning_effort": "medium",
+            "last_assistant_message": "Evidence: done\nVerification: passed\nUncertainty: none",
+        })
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": "model-mismatch", "turn_id": "parent",
+            "stop_hook_active": False,
+        })
+        ledger = json.loads((Path(self.temp.name) / "model-mismatch--parent.json").read_text(encoding="utf-8"))
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+        self.assertEqual("FAILED_OPEN", ledger["status"])
+
     def test_actual_root_model_matrix_prevents_downward_delegation(self) -> None:
         normal = "Implement a feature with multiple states, error handling, and targeted tests."
         hard = "Review production authorization checks for privilege escalation vulnerabilities."
@@ -313,7 +599,16 @@ class RouterTests(unittest.TestCase):
         })
         router_hook.handle({
             **base,
+            "hook_event_name": "UserPromptSubmit",
+            "turn_id": "child-turn",
+            "model": "gpt-5.6-sol",
+            "model_reasoning_effort": "high",
+            "prompt": "Perform the bounded security review and return structured evidence.",
+        })
+        router_hook.handle({
+            **base,
             "hook_event_name": "SubagentStop",
+            "turn_id": "child-turn",
             "agent_id": "sol-child",
             "model": "gpt-5.6-sol",
             "reasoning_effort": "high",
@@ -354,7 +649,16 @@ class RouterTests(unittest.TestCase):
         })
         router_hook.handle({
             **base,
+            "hook_event_name": "UserPromptSubmit",
+            "turn_id": "child-turn",
+            "model": "gpt-5.6-sol",
+            "model_reasoning_effort": "high",
+            "prompt": "Perform the bounded security review and return structured evidence.",
+        })
+        router_hook.handle({
+            **base,
             "hook_event_name": "SubagentStop",
+            "turn_id": "child-turn",
             "agent_id": "telemetry-child",
             "model": "gpt-5.6-sol",
             "reasoning_effort": "high",

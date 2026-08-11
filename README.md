@@ -75,13 +75,13 @@ python3 scripts/check_hooks.py
 
 The command returns one of three top-level health states:
 
-- `READY`: Luna is the observed root for the latest actual turn and a receipt proves a successful Terra or Sol escalation on the same plugin and Codex runtime/build.
+- `READY`: Luna is the observed root for the latest actual turn and a receipt proves a successful Terra or Sol escalation through the same plugin build, with all currently observable host identity matching.
 - `DEGRADED`: Autorouter remains usable, but the active root was not Luna or current escalation capability is not proven. When the root is not Luna, credit-saving behaviour will be substantially reduced.
-- `ADVISORY`: the supported hooks or direct child-routing capability are not active enough to enforce routing.
+- `UNAVAILABLE`: the supported hooks or direct child-routing path cannot operate.
 
 The hook's `UserPromptSubmit.model` is authoritative for every actual turn. Desktop, app-server, and config evidence can explain health, but cannot override that active-model evidence. Follow the [troubleshooting guide](docs/TROUBLESHOOTING.md) for any state other than `READY`.
 
-Readiness receipts are earned only by a genuine successful Terra or Sol escalation. They bind, where observable, the plugin version, Codex runtime/build, Desktop or CLI host type, platform, observed child model, effort intent, capability/schema signature, and timestamp. A runtime/build change invalidates `READY` until normal work produces a fresh successful receipt; the health check never launches an automatic paid probe.
+Readiness receipts are earned only after an expected child is observed on the requested Terra or Sol model and the same `agent_id` completes successfully. Child `UserPromptSubmit` observations remain separate from the authoritative parent/root observation. Receipts bind, where observable, the plugin version, Codex runtime/build, Desktop or CLI host type, platform, observed child model, effort intent, capability/schema signature, and timestamp. If optional runtime/build/host identity is absent from the current Codex hook surface, health reports that limitation explicitly without fabricating evidence or making `READY` permanently impossible. An observable identity change invalidates `READY` until normal work produces a fresh successful receipt; the health check never launches an automatic paid probe. A receipt proves observed capability at that time, not permanent compatibility with future Codex updates.
 
 ## Your first task
 
