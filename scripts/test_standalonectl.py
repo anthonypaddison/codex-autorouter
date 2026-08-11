@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -12,6 +13,7 @@ import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT = Path(__file__).with_name("standalonectl.py")
@@ -379,6 +381,23 @@ class StandaloneCtlTests(unittest.TestCase):
             "\n".join(result.stdout + result.stderr for result in results),
         )
         self.assertTrue(self.payload(self.run_ctl("status"))["active"])
+
+    def test_windows_lock_open_retries_transient_permission_denial(self) -> None:
+        spec = importlib.util.spec_from_file_location("standalonectl_lock_test", SCRIPT)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        with (
+            mock.patch.object(module.os, "name", "nt"),
+            mock.patch.object(module.os, "open", side_effect=[PermissionError(13, "denied"), 91]) as opened,
+            mock.patch.object(module.time, "sleep") as slept,
+        ):
+            self.assertEqual(91, module._open_lock_file(os.O_RDWR | os.O_CREAT))
+
+        self.assertEqual(2, opened.call_count)
+        slept.assert_called_once_with(0.05)
 
     def test_concurrent_reader_waits_for_an_incomplete_exclusive_state_claim(self) -> None:
         self.data.mkdir(parents=True)
