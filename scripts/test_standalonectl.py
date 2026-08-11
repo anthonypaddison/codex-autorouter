@@ -382,22 +382,23 @@ class StandaloneCtlTests(unittest.TestCase):
         )
         self.assertTrue(self.payload(self.run_ctl("status"))["active"])
 
-    def test_windows_lock_open_retries_transient_permission_denial(self) -> None:
+    def test_windows_canonical_check_retries_transient_resolution_instability(self) -> None:
         spec = importlib.util.spec_from_file_location("standalonectl_lock_test", SCRIPT)
         self.assertIsNotNone(spec)
         self.assertIsNotNone(spec.loader)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+        path = mock.Mock()
+        path.resolve.side_effect = [PermissionError(13, "denied"), Path("different"), path]
 
         with (
             mock.patch.object(module.os, "name", "nt"),
-            mock.patch.object(module.os, "open", side_effect=[PermissionError(13, "denied"), 91]) as opened,
             mock.patch.object(module.time, "sleep") as slept,
         ):
-            self.assertEqual(91, module._open_lock_file(os.O_RDWR | os.O_CREAT))
+            module._canonical(path)
 
-        self.assertEqual(2, opened.call_count)
-        slept.assert_called_once_with(0.05)
+        self.assertEqual(3, path.resolve.call_count)
+        self.assertEqual([mock.call(0.01), mock.call(0.02)], slept.call_args_list)
 
     def test_concurrent_reader_waits_for_an_incomplete_exclusive_state_claim(self) -> None:
         self.data.mkdir(parents=True)

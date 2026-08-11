@@ -81,8 +81,18 @@ def _is_linklike(path: Path) -> bool:
 
 
 def _canonical(path: Path) -> None:
-    if path.resolve(strict=False) != path:
-        raise StandaloneError(f"refusing a path with symlink, junction, or reparse ancestors: {path}")
+    for attempt in range(4):
+        try:
+            matches = path.resolve(strict=False) == path
+        except PermissionError:
+            if os.name != "nt" or attempt == 3:
+                raise
+        else:
+            if matches:
+                return
+            if os.name != "nt" or attempt == 3:
+                raise StandaloneError(f"refusing a path with symlink, junction, or reparse ancestors: {path}")
+        time.sleep(0.01 * (2**attempt))
 
 
 def _ensure_dir(path: Path, *, private: bool = False, tighten_existing: bool = False) -> None:
@@ -484,17 +494,6 @@ def _failpoint(name: str) -> None:
         raise StandaloneError(f"injected failure at {name}")
 
 
-def _open_lock_file(flags: int) -> int:
-    for attempt in range(6):
-        try:
-            return os.open(LOCK, flags, 0o600)
-        except PermissionError:
-            if os.name != "nt" or attempt == 5:
-                raise
-            time.sleep(0.05 * (2**attempt))
-    raise AssertionError("unreachable lock-open retry state")
-
-
 @contextmanager
 def _lock():
     _ensure_dir(DATA, private=True, tighten_existing=True)
@@ -503,7 +502,7 @@ def _lock():
     flags = os.O_RDWR | os.O_CREAT
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
-    descriptor = _open_lock_file(flags)
+    descriptor = os.open(LOCK, flags, 0o600)
     with os.fdopen(descriptor, "a+b", buffering=0) as stream:
         if fcntl is not None:
             fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
