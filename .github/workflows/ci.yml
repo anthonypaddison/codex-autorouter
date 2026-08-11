@@ -27,10 +27,10 @@ jobs:
         run: python scripts/validate_release.py
       - name: Run router and lifecycle tests
         working-directory: skills/route-gpt-5-6-work/scripts
-        run: python -m unittest -v test_router test_routerctl
+        run: python -m unittest -v test_spawn_compat test_router test_routerctl
       - name: Run effective-config checker tests
         working-directory: scripts
-        run: python -m unittest -v test_check_hooks test_standalonectl
+        run: python -m unittest -v test_check_hooks test_standalonectl test_validate_release
       - name: Run capability benchmark harness tests
         run: python -m unittest -v benchmarks.test_autorouter_bench
       - name: Run deterministic routing fuzz

@@ -162,6 +162,29 @@ def _validate_roots() -> Path:
     return agents
 
 
+def _inspect_roots() -> Path:
+    """Validate lifecycle roots without creating or changing anything."""
+    _require_canonical_path(CODEX_HOME)
+    _require_canonical_path(DATA_ROOT)
+    for root in (CODEX_HOME, DATA_ROOT, ACTIVATION_ROOT):
+        if _is_linklike(root):
+            raise RouterCtlError(f"refusing symlink, junction, or reparse root: {root}")
+        if root.exists() and not root.is_dir():
+            raise RouterCtlError(f"expected directory: {root}")
+    if _is_linklike(AGENT_SOURCE) or not AGENT_SOURCE.is_dir():
+        raise RouterCtlError(f"invalid bundled agent source: {AGENT_SOURCE}")
+    for name in AGENT_NAMES:
+        source = AGENT_SOURCE / name
+        if _is_linklike(source) or not source.is_file():
+            raise RouterCtlError(f"invalid bundled agent source: {source}")
+    agents = CODEX_HOME / "agents"
+    if _is_linklike(agents):
+        raise RouterCtlError(f"refusing symlink, junction, or reparse agents directory: {agents}")
+    if agents.exists() and not agents.is_dir():
+        raise RouterCtlError(f"expected directory: {agents}")
+    return agents
+
+
 def _fsync_dir(path: Path) -> None:
     if os.name == "nt":
         return
@@ -676,6 +699,34 @@ def _recover(agents: Path) -> list[str]:
     return recovered
 
 
+def _transactions_requiring_recovery() -> list[str]:
+    """Inspect transaction journals without pruning or rolling them back."""
+    if not TRANSACTIONS.exists() and not _is_linklike(TRANSACTIONS):
+        return []
+    if _is_linklike(TRANSACTIONS) or not TRANSACTIONS.is_dir():
+        raise RouterCtlError(f"invalid transactions directory: {TRANSACTIONS}")
+    pending: list[str] = []
+    for transaction in sorted(TRANSACTIONS.iterdir()):
+        if _is_linklike(transaction):
+            raise RouterCtlError(f"refusing linked transaction: {transaction}")
+        if not transaction.is_dir():
+            continue
+        journal_path = transaction / "journal.json"
+        if not journal_path.exists() and not _is_linklike(journal_path):
+            pending.append(transaction.name)
+            continue
+        journal = _read_json(journal_path, required=True)
+        _validate_journal(transaction, journal)
+        if journal.get("state") in {"PREPARED", "COMMITTING", "COMMITTED", "ROLLED_BACK"}:
+            if journal.get("state") in {"PREPARED", "COMMITTING"}:
+                before = transaction / "before"
+                _require_canonical_path(before)
+                if _is_linklike(before) or not before.is_dir():
+                    raise RouterCtlError(f"transaction has an invalid backup directory: {transaction}")
+            pending.append(transaction.name)
+    return pending
+
+
 def _load_active() -> dict[str, Any] | None:
     value = _read_json(ACTIVE_PATH)
     if value is None:
@@ -738,7 +789,14 @@ def _validate_original_backups(active: dict[str, Any] | None) -> list[str]:
     return conflicts
 
 
-def activate(*, replace_conflicts: bool = False) -> dict[str, Any]:
+def activate(*, replace_conflicts: bool = False, legacy_agents: bool = False) -> dict[str, Any]:
+    if not legacy_agents:
+        return {
+            "status": "supported-routing",
+            "changed": False,
+            "legacy_agents_optional": True,
+            "message": "supported direct-child routing requires no legacy custom-agent installation",
+        }
     agents = _validate_roots()
     with _lock():
         recovered = _recover(agents)
@@ -921,23 +979,20 @@ def _toml_value(path: Path, section: str, key: str) -> str | None:
 
 
 def status() -> dict[str, Any]:
-    agents = _validate_roots()
-    with _lock():
-        recovered = _recover(agents)
-        active = _load_active()
-        conflicts = _validate_owned_files(agents, active) if active else []
-        original_backup_conflicts = _validate_original_backups(active)
-        update_required, bundled_drift = _activation_drift(active)
+    agents = _inspect_roots()
+    active = _load_active()
+    conflicts = _validate_owned_files(agents, active) if active else []
+    original_backup_conflicts = _validate_original_backups(active)
+    update_required, bundled_drift = _activation_drift(active)
+    recovery_required = _transactions_requiring_recovery()
     config = CODEX_HOME / "config.toml"
     requirements = CODEX_HOME / "requirements.toml"
     managed_blocked = _toml_value(requirements, "", "allow_managed_hooks_only") == "true"
     hooks_disabled = _toml_value(config, "features", "hooks") == "false"
-    agents_disabled = _toml_value(config, "features", "multi_agent") == "false"
+    agents_disabled = _toml_value(config, "agents", "enabled") == "false"
     depth_zero = _toml_value(config, "agents", "max_depth") == "0"
     surface = _runtime_surface()
-    local_agent_ready = bool(active) and not any((
-        conflicts, original_backup_conflicts, update_required, agents_disabled, depth_zero,
-    ))
+    local_agent_ready = not any((agents_disabled, depth_zero))
     mode = "MANAGED_BLOCKED" if managed_blocked else "ADVISORY"
     profile = _profile_status()
     return {
@@ -945,6 +1000,8 @@ def status() -> dict[str, Any]:
         "runtime_surface": surface,
         "diagnostic_scope": "LOCAL_FILES_ONLY",
         "local_agent_ready": local_agent_ready,
+        "legacy_agents_optional": True,
+        "legacy_agents_active": bool(active),
         "static_readiness_authority": "scripts/check_hooks.py",
         "agents_active": bool(active),
         "agent_conflicts": conflicts,
@@ -957,7 +1014,8 @@ def status() -> dict[str, Any]:
         "managed_hooks_only_in_local_requirements": managed_blocked,
         "hook_trust": "UNVERIFIED",
         "fast_state": "REPORTED_CONFIG_ONLY",
-        "recovered_transactions": recovered,
+        "recovered_transactions": [],
+        "recovery_required": recovery_required,
         "plugin_version": _plugin_version(),
         "routing_profile": profile["profile"],
         "routing_profile_label": profile["label"],
@@ -974,6 +1032,11 @@ def main() -> int:
     subparsers = parser.add_subparsers(dest="command", required=True)
     activate_parser = subparsers.add_parser("activate")
     activate_parser.add_argument("--replace-conflicts", action="store_true")
+    activate_parser.add_argument(
+        "--legacy-agents",
+        action="store_true",
+        help="explicitly install the obsolete custom-agent compatibility set",
+    )
     deactivate_parser = subparsers.add_parser("deactivate")
     deactivate_parser.add_argument("--keep-modified", action="store_true")
     subparsers.add_parser("repair")
@@ -990,7 +1053,10 @@ def main() -> int:
     args = parser.parse_args()
     try:
         if args.command == "activate":
-            result = activate(replace_conflicts=args.replace_conflicts)
+            result = activate(
+                replace_conflicts=args.replace_conflicts,
+                legacy_agents=args.legacy_agents,
+            )
         elif args.command == "deactivate":
             result = deactivate(keep_modified=args.keep_modified)
         elif args.command == "repair":

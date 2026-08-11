@@ -1,6 +1,6 @@
 {
   "name": "gpt-5-6-router",
-  "version": "0.1.0+codex.20260714135012",
+  "version": "0.2.0",
   "description": "Autorouter automatically selects the right GPT-5.6 model, effort, and bounded agent plan for each Codex task.",
   "author": {
     "name": "Alchemist"
@@ -21,8 +21,8 @@
     "longDescription": "Profiles each task, chooses an appropriate GPT-5.6 model and reasoning effort, orchestrates bounded subagents when useful, preserves Fast or Standard, and requires proportionate verification before completion.",
     "developerName": "Alchemist",
     "category": "Developer Tools",
-    "websiteURL": "https://github.com/vibeforge1111/Codex-Autorouter",
-    "privacyPolicyURL": "https://github.com/vibeforge1111/Codex-Autorouter/blob/main/docs/PRIVACY.md",
+    "websiteURL": "https://github.com/anthonypaddison/Codex-Autorouter",
+    "privacyPolicyURL": "https://github.com/anthonypaddison/Codex-Autorouter/blob/v0.2.0/docs/PRIVACY.md",
     "capabilities": [
       "Interactive",
       "Write"

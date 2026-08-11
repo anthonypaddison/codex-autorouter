@@ -24,6 +24,9 @@ AGENTS = {
     "gpt56_sol_deep.toml",
     "gpt56_sol_xhigh.toml",
 }
+RELEASE_VERSION = "0.2.0"
+RELEASE_REF = f"v{RELEASE_VERSION}"
+REPOSITORY_URL = "https://github.com/anthonypaddison/Codex-Autorouter"
 
 
 def require(condition: bool, message: str) -> None:
@@ -46,6 +49,14 @@ def main() -> int:
         "source folder must use the package or public repository name",
     )
     require(bool(re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", str(manifest.get("version")))), "invalid semver")
+    require(manifest.get("version") == RELEASE_VERSION, "manifest version does not match the planned immutable release")
+    require(manifest.get("author", {}).get("name") == "Alchemist", "original plugin attribution changed")
+    interface = manifest.get("interface", {})
+    require(interface.get("websiteURL") == REPOSITORY_URL, "manifest website does not identify the fork")
+    require(
+        interface.get("privacyPolicyURL") == f"{REPOSITORY_URL}/blob/{RELEASE_REF}/docs/PRIVACY.md",
+        "privacy policy URL is not bound to the immutable release",
+    )
     require(manifest.get("skills") == "./skills/", "skills path must be plugin-relative")
     require((ROOT / manifest["interface"]["logo"]).is_file(), "logo is missing")
     screenshots = manifest["interface"].get("screenshots")
@@ -67,11 +78,14 @@ def main() -> int:
         infographic_text = infographic.read_text(encoding="utf-8")
         require("Autorouter logo" in infographic_text or "Autorouter mark" in infographic_text, f"current logo missing from {infographic.name}")
     require((ROOT / "scripts" / "check_hooks.py").is_file(), "hook trust checker is missing")
+    require((ROOT / "scripts" / "hook_launcher.py").is_file(), "immutable hook launcher is missing")
     require((ROOT / "scripts" / "standalonectl.py").is_file(), "standalone lifecycle helper is missing")
     require((ROOT / "docs" / "PRIVACY.md").is_file(), "privacy documentation is missing")
     require((ROOT / "scripts" / "fuzz_router.py").is_file(), "routing fuzz runner is missing")
     require((ROOT / "benchmarks" / "autorouter_bench.py").is_file(), "capability benchmark is missing")
     require((ROOT / "benchmarks" / "README.md").is_file(), "capability benchmark guide is missing")
+    require((ROOT / "docs" / "RELEASING.md").is_file(), "release procedure is missing")
+    require((SKILL / "scripts" / "spawn_compat.py").is_file(), "direct-spawn compatibility adapter is missing")
 
     marketplace = json.loads(MARKETPLACE.read_text(encoding="utf-8"))
     require(marketplace.get("name") == "codex-autorouter", "unexpected repo marketplace name")
@@ -80,11 +94,13 @@ def main() -> int:
     entry = entries[0]
     require(entry.get("name") == "gpt-5-6-router", "repo marketplace package mismatch")
     require(entry.get("category") == "Developer Tools", "repo marketplace category mismatch")
-    require(entry.get("source") == {
+    source = entry.get("source")
+    require(source == {
         "source": "url",
-        "url": "https://github.com/vibeforge1111/Codex-Autorouter.git",
-        "ref": "main",
+        "url": f"{REPOSITORY_URL}.git",
+        "ref": RELEASE_REF,
     }, "repo marketplace source mismatch")
+    require(str(source.get("ref", "")).lower() not in {"main", "master", "head"}, "marketplace ref must be immutable")
 
     hooks = json.loads(HOOKS.read_text(encoding="utf-8")).get("hooks")
     require(isinstance(hooks, dict) and set(hooks) == EVENTS, "unexpected hook event set")
@@ -96,7 +112,7 @@ def main() -> int:
                 require("%PLUGIN_ROOT%" in hook.get("commandWindows", ""), "Windows hook is not relocatable")
 
     actual_agents = {path.name for path in (SKILL / "assets" / "agents").glob("*.toml")}
-    require(actual_agents == AGENTS, "custom-agent template set changed unexpectedly")
+    require(actual_agents <= AGENTS, "unknown legacy custom-agent template")
     for name in actual_agents:
         require(re.fullmatch(r"[a-z0-9_]+\.toml", name) is not None, f"custom-agent name is not spawn-compatible: {name}")
         require(f'name = "{Path(name).stem}"' in (SKILL / "assets" / "agents" / name).read_text(encoding="utf-8"), f"custom-agent file/name mismatch: {name}")

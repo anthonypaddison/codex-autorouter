@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -111,7 +112,7 @@ class RouterCtlTests(unittest.TestCase):
             check=False,
         )
 
-    def test_cached_hook_command_migrates_from_a_missing_old_plugin_version(self) -> None:
+    def test_cached_hook_command_never_migrates_to_a_sibling_plugin_version(self) -> None:
         cache = self.root / "cache" / "gpt-5-6-router"
         old_root = cache / "0.1.0+codex.retired"
         current_root = cache / "0.1.0+codex.current"
@@ -121,7 +122,8 @@ class RouterCtlTests(unittest.TestCase):
         manifest = current_root / ".codex-plugin" / "plugin.json"
         manifest.parent.mkdir(parents=True)
         manifest.write_text(json.dumps({"name": "gpt-5-6-router", "version": "0.1.0+codex.current"}), encoding="utf-8")
-        self.assertFalse(old_root.exists())
+        (old_root / "scripts").mkdir(parents=True)
+        shutil.copy2(PLUGIN_ROOT / "scripts" / "hook_launcher.py", old_root / "scripts" / "hook_launcher.py")
         hooks = json.loads(HOOKS.read_text(encoding="utf-8"))["hooks"]
         hook = hooks["UserPromptSubmit"][0]["hooks"][0]
         command = hook["commandWindows" if os.name == "nt" else "command"]
@@ -134,11 +136,14 @@ class RouterCtlTests(unittest.TestCase):
         result = self._run_hook_command(command, env)
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         payload = json.loads(result.stdout)
-        self.assertEqual("UserPromptSubmit", payload["hookSpecificOutput"]["hookEventName"])
-        self.assertTrue((self.data / "router-state-v2" / "stale-cache--t1.json").is_file())
+        self.assertIn("systemMessage", payload)
+        self.assertIn("selected plugin root", payload["systemMessage"])
+        self.assertFalse((self.data / "router-state-v2" / "stale-cache--t1.json").exists())
 
     def test_cached_hook_command_fails_open_with_only_one_missing_cache_diagnostic(self) -> None:
         old_root = self.root / "empty-cache" / "gpt-5-6-router" / "0.1.0+codex.retired"
+        (old_root / "scripts").mkdir(parents=True)
+        shutil.copy2(PLUGIN_ROOT / "scripts" / "hook_launcher.py", old_root / "scripts" / "hook_launcher.py")
         hooks = json.loads(HOOKS.read_text(encoding="utf-8"))["hooks"]
         hook = hooks["UserPromptSubmit"][0]["hooks"][0]
         command = hook["commandWindows" if os.name == "nt" else "command"]
@@ -180,6 +185,77 @@ class RouterCtlTests(unittest.TestCase):
         self.assertEqual("Token Saver", status["routing_profile_label"])
         self.assertTrue(status["routing_profile_valid"])
 
+    def test_status_on_absent_roots_is_strictly_non_mutating(self) -> None:
+        self.assertFalse(self.home.exists())
+        self.assertFalse(self.data.exists())
+        status = self.payload(self.run_ctl("status"))
+        self.assertFalse(status["legacy_agents_active"])
+        self.assertTrue(status["legacy_agents_optional"])
+        self.assertEqual([], status["recovery_required"])
+        self.assertFalse(self.home.exists())
+        self.assertFalse(self.data.exists())
+
+    def test_normal_activate_does_not_install_legacy_agents(self) -> None:
+        result = self.payload(self.run_ctl("activate"))
+        self.assertEqual("supported-routing", result["status"])
+        self.assertFalse(result["changed"])
+        self.assertFalse(self.home.exists())
+        self.assertFalse(self.data.exists())
+
+    def test_status_reports_interrupted_legacy_transaction_without_recovery(self) -> None:
+        crashed = self.run_ctl(
+            "activate",
+            "--legacy-agents",
+            env={**self.env, "GPT56_ROUTER_CRASH_AT": "committing"},
+        )
+        self.assertEqual(97, crashed.returncode)
+        before = {
+            path.relative_to(self.root).as_posix(): (
+                "directory" if path.is_dir() else path.read_bytes()
+            )
+            for path in sorted(self.root.rglob("*"))
+        }
+        status = self.payload(self.run_ctl("status"))
+        self.assertEqual(1, len(status["recovery_required"]))
+        self.assertEqual([], status["recovered_transactions"])
+        after = {
+            path.relative_to(self.root).as_posix(): (
+                "directory" if path.is_dir() else path.read_bytes()
+            )
+            for path in sorted(self.root.rglob("*"))
+        }
+        self.assertEqual(before, after)
+        recovered = self.payload(self.run_ctl("activate", "--legacy-agents"))
+        self.assertEqual(1, len(recovered["recovered"]))
+
+    def test_status_on_active_legacy_state_is_strictly_non_mutating(self) -> None:
+        self.assertEqual(0, self.run_ctl("activate", "--legacy-agents").returncode)
+        before = {
+            path.relative_to(self.root).as_posix(): (
+                "directory" if path.is_dir() else path.read_bytes()
+            )
+            for path in sorted(self.root.rglob("*"))
+        }
+        self.assertEqual(0, self.run_ctl("status").returncode)
+        after = {
+            path.relative_to(self.root).as_posix(): (
+                "directory" if path.is_dir() else path.read_bytes()
+            )
+            for path in sorted(self.root.rglob("*"))
+        }
+        self.assertEqual(before, after)
+
+    def test_status_on_corrupt_legacy_state_fails_without_mutation(self) -> None:
+        activation = self.data / "activation"
+        activation.mkdir(parents=True)
+        active = activation / "active.json"
+        active.write_text('{"schema_version":999,"files":{}}', encoding="utf-8")
+        before = active.read_bytes()
+        result = self.run_ctl("status")
+        self.assertEqual(2, result.returncode)
+        self.assertEqual(before, active.read_bytes())
+        self.assertFalse((activation / "activation.lock").exists())
+
     def test_invalid_profile_value_is_rejected_by_cli(self) -> None:
         result = self.run_ctl("profile", "unlimited")
         self.assertEqual(2, result.returncode)
@@ -214,7 +290,7 @@ class RouterCtlTests(unittest.TestCase):
         self.assertEqual("ADVISORY", initial["mode"])
         self.assertEqual("UNVERIFIED", initial["hook_trust"])
         self.assertEqual("REPORTED_CONFIG_ONLY", initial["fast_state"])
-        activated = self.run_ctl("activate")
+        activated = self.run_ctl("activate", "--legacy-agents")
         self.assertEqual(0, activated.returncode, activated.stdout + activated.stderr)
         active = self.payload(self.run_ctl("status"))
         self.assertEqual("ADVISORY", active["mode"])
@@ -237,7 +313,7 @@ class RouterCtlTests(unittest.TestCase):
         self.write_legacy_activation()
         stale = self.payload(self.run_ctl("status"))
         self.assertTrue(stale["activation_update_required"])
-        migrated = self.payload(self.run_ctl("activate"))
+        migrated = self.payload(self.run_ctl("activate", "--legacy-agents"))
         self.assertEqual("active", migrated["status"])
         self.assertFalse((self.home / "agents" / "gpt56_sol_judge.toml").exists())
         self.assertEqual(set(routerctl.AGENT_NAMES), set(path.name for path in (self.home / "agents").glob("gpt56_*.toml")))
@@ -247,7 +323,7 @@ class RouterCtlTests(unittest.TestCase):
 
     def test_legacy_migration_restores_a_preexisting_old_role_file(self) -> None:
         self.write_legacy_activation(b"user-owned-before-legacy-activation\n")
-        self.assertEqual(0, self.run_ctl("activate").returncode)
+        self.assertEqual(0, self.run_ctl("activate", "--legacy-agents").returncode)
         old_role = self.home / "agents" / "gpt56_sol_judge.toml"
         self.assertEqual(b"user-owned-before-legacy-activation\n", old_role.read_bytes())
         self.assertEqual(0, self.run_ctl("deactivate").returncode)
@@ -258,11 +334,11 @@ class RouterCtlTests(unittest.TestCase):
         agents.mkdir(parents=True)
         target = agents / "gpt56_luna_worker.toml"
         target.write_text("user-owned\n", encoding="utf-8")
-        refused = self.run_ctl("activate")
+        refused = self.run_ctl("activate", "--legacy-agents")
         self.assertEqual(2, refused.returncode)
         self.assertIn("--replace-conflicts", refused.stdout)
         self.assertEqual("user-owned\n", target.read_text(encoding="utf-8"))
-        self.assertEqual(0, self.run_ctl("activate", "--replace-conflicts").returncode)
+        self.assertEqual(0, self.run_ctl("activate", "--legacy-agents", "--replace-conflicts").returncode)
         self.assertEqual(0, self.run_ctl("deactivate").returncode)
         self.assertEqual("user-owned\n", target.read_text(encoding="utf-8"))
 
@@ -272,7 +348,7 @@ class RouterCtlTests(unittest.TestCase):
         original = agents / "gpt56_luna_worker.toml"
         original.write_bytes(b"original-bytes\n")
         env = {**self.env, "GPT56_ROUTER_FAIL_AT": "agent-3"}
-        result = self.run_ctl("activate", "--replace-conflicts", env=env)
+        result = self.run_ctl("activate", "--legacy-agents", "--replace-conflicts", env=env)
         self.assertEqual(2, result.returncode)
         self.assertEqual(b"original-bytes\n", original.read_bytes())
         self.assertEqual([original], list(agents.glob("gpt56_*.toml")))
@@ -284,10 +360,12 @@ class RouterCtlTests(unittest.TestCase):
         original = agents / "gpt56_sol_owner.toml"
         original.write_bytes(b"pre-crash\n")
         env = {**self.env, "GPT56_ROUTER_CRASH_AT": "agent-4"}
-        crashed = self.run_ctl("activate", "--replace-conflicts", env=env)
+        crashed = self.run_ctl("activate", "--legacy-agents", "--replace-conflicts", env=env)
         self.assertEqual(97, crashed.returncode)
         status = self.payload(self.run_ctl("status"))
-        self.assertTrue(status["recovered_transactions"])
+        self.assertTrue(status["recovery_required"])
+        recovered = self.payload(self.run_ctl("deactivate"))
+        self.assertTrue(recovered["recovered"])
         self.assertEqual("ADVISORY", status["mode"])
         self.assertEqual(b"pre-crash\n", original.read_bytes())
         self.assertEqual([original], list(agents.glob("gpt56_*.toml")))
@@ -302,9 +380,9 @@ class RouterCtlTests(unittest.TestCase):
                 original = agents / "gpt56_luna_worker.toml"
                 original.write_bytes((point + "\n").encode())
                 env = {**os.environ, "CODEX_HOME": str(home), "PLUGIN_DATA": str(data), "GPT56_ROUTER_CRASH_AT": point}
-                crashed = self.run_ctl("activate", "--replace-conflicts", env=env)
+                crashed = self.run_ctl("activate", "--legacy-agents", "--replace-conflicts", env=env)
                 self.assertEqual(97, crashed.returncode)
-                recovered = self.run_ctl("status", env={key: value for key, value in env.items() if key != "GPT56_ROUTER_CRASH_AT"})
+                recovered = self.run_ctl("deactivate", env={key: value for key, value in env.items() if key != "GPT56_ROUTER_CRASH_AT"})
                 self.assertEqual(0, recovered.returncode, recovered.stdout + recovered.stderr)
                 self.assertEqual((point + "\n").encode(), original.read_bytes())
                 self.assertEqual([original], list(agents.glob("gpt56_*.toml")))
@@ -315,19 +393,20 @@ class RouterCtlTests(unittest.TestCase):
             with self.subTest(point=point):
                 case = self.root / point
                 env = {**os.environ, "CODEX_HOME": str(case / "home"), "PLUGIN_DATA": str(case / "data")}
-                self.assertEqual(0, self.run_ctl("activate", env=env).returncode)
+                self.assertEqual(0, self.run_ctl("activate", "--legacy-agents", env=env).returncode)
                 agents = case / "home" / "agents"
                 before = {path.name: path.read_bytes() for path in agents.glob("gpt56_*.toml")}
                 crashed = self.run_ctl("deactivate", env={**env, "GPT56_ROUTER_CRASH_AT": point})
                 self.assertEqual(97, crashed.returncode)
-                recovered = self.payload(self.run_ctl("status", env=env))
-                self.assertTrue(recovered["recovered_transactions"])
-                self.assertTrue(recovered["agents_active"])
+                observed = self.payload(self.run_ctl("status", env=env))
+                self.assertTrue(observed["recovery_required"])
+                recovered = self.payload(self.run_ctl("activate", "--legacy-agents", env=env))
+                self.assertTrue(recovered["recovered"])
                 self.assertEqual(before, {path.name: path.read_bytes() for path in agents.glob("gpt56_*.toml")})
                 self.assertEqual(0, self.run_ctl("deactivate", env=env).returncode)
 
     def test_modified_managed_file_is_preserved_only_with_explicit_flag(self) -> None:
-        self.assertEqual(0, self.run_ctl("activate").returncode)
+        self.assertEqual(0, self.run_ctl("activate", "--legacy-agents").returncode)
         target = self.home / "agents" / "gpt56_terra_worker.toml"
         target.write_text(target.read_text(encoding="utf-8") + "# user edit\n", encoding="utf-8")
         refused = self.run_ctl("deactivate")
@@ -338,7 +417,7 @@ class RouterCtlTests(unittest.TestCase):
         self.assertIn("# user edit", target.read_text(encoding="utf-8"))
 
     def test_repair_recreates_missing_but_refuses_modified(self) -> None:
-        self.assertEqual(0, self.run_ctl("activate").returncode)
+        self.assertEqual(0, self.run_ctl("activate", "--legacy-agents").returncode)
         missing = self.home / "agents" / "gpt56_terra_deep.toml"
         missing.unlink()
         repaired = self.payload(self.run_ctl("repair"))
@@ -350,11 +429,12 @@ class RouterCtlTests(unittest.TestCase):
     def test_managed_and_disabled_config_modes_are_explicit(self) -> None:
         self.home.mkdir(parents=True)
         (self.home / "config.toml").write_text(
-            "[features]\nhooks = false\nmulti_agent = false\n[agents]\nmax_depth = 0\n",
+            "[features]\nhooks = false\n[agents]\nenabled = false\nmax_depth = 0\n",
             encoding="utf-8",
         )
         advisory = self.payload(self.run_ctl("status"))
         self.assertEqual("ADVISORY", advisory["mode"])
+        self.assertFalse(advisory["multi_agent_enabled_by_local_config"])
         (self.home / "requirements.toml").write_text("allow_managed_hooks_only = true\n", encoding="utf-8")
         blocked = self.payload(self.run_ctl("status"))
         self.assertEqual("MANAGED_BLOCKED", blocked["mode"])
@@ -365,7 +445,7 @@ class RouterCtlTests(unittest.TestCase):
         external.mkdir()
         linked = self.root / "linked-home"
         linked.symlink_to(external, target_is_directory=True)
-        result = self.run_ctl("activate", env={**self.env, "CODEX_HOME": str(linked)})
+        result = self.run_ctl("activate", "--legacy-agents", env={**self.env, "CODEX_HOME": str(linked)})
         self.assertEqual(2, result.returncode)
         self.assertIn("symlink", result.stdout)
         self.assertEqual([], list(external.iterdir()))
@@ -377,7 +457,7 @@ class RouterCtlTests(unittest.TestCase):
         external = self.root / "external-file"
         external.write_text("untouched\n", encoding="utf-8")
         (agents / "gpt56_sol_owner.toml").symlink_to(external)
-        result = self.run_ctl("activate")
+        result = self.run_ctl("activate", "--legacy-agents")
         self.assertEqual(2, result.returncode)
         self.assertEqual("untouched\n", external.read_text(encoding="utf-8"))
 
@@ -395,7 +475,7 @@ class RouterCtlTests(unittest.TestCase):
         external.mkdir()
         linked = self.root / "ancestor-link"
         linked.symlink_to(external, target_is_directory=True)
-        result = self.run_ctl("activate", env={**self.env, "CODEX_HOME": str(linked / "home")})
+        result = self.run_ctl("activate", "--legacy-agents", env={**self.env, "CODEX_HOME": str(linked / "home")})
         self.assertEqual(2, result.returncode)
         self.assertIn("ancestors", result.stdout)
         self.assertEqual([], list(external.iterdir()))
@@ -405,7 +485,10 @@ class RouterCtlTests(unittest.TestCase):
         (orphan / "before").mkdir(parents=True)
         (orphan / "before" / "gpt56_sol_owner.toml").write_text("staged-only\n", encoding="utf-8")
         result = self.payload(self.run_ctl("status"))
-        self.assertIn("orphan", result["recovered_transactions"])
+        self.assertIn("orphan", result["recovery_required"])
+        self.assertTrue(orphan.exists())
+        repaired = self.payload(self.run_ctl("repair"))
+        self.assertIn("orphan", repaired["recovered"])
         self.assertFalse(orphan.exists())
 
     def test_status_does_not_chmod_existing_codex_or_agents_directories(self) -> None:
@@ -431,7 +514,7 @@ class RouterCtlTests(unittest.TestCase):
         self.assertEqual(2, self.run_ctl("status").returncode)
 
     def test_nested_corrupt_state_returns_json_without_traceback(self) -> None:
-        self.assertEqual(0, self.run_ctl("activate").returncode)
+        self.assertEqual(0, self.run_ctl("activate", "--legacy-agents").returncode)
         active_path = self.data / "activation" / "active.json"
         active = json.loads(active_path.read_text(encoding="utf-8"))
         active["files"]["gpt56_sol_owner.toml"] = "not-an-object"
@@ -461,7 +544,7 @@ class RouterCtlTests(unittest.TestCase):
         self.assertNotIn("Traceback", result.stderr)
 
     def test_activation_drift_requires_reactivation(self) -> None:
-        self.assertEqual(0, self.run_ctl("activate").returncode)
+        self.assertEqual(0, self.run_ctl("activate", "--legacy-agents").returncode)
         active_path = self.data / "activation" / "active.json"
         active = json.loads(active_path.read_text(encoding="utf-8"))
         active["plugin_version"] = "0.0.0"
@@ -469,14 +552,14 @@ class RouterCtlTests(unittest.TestCase):
         stale = self.payload(self.run_ctl("status"))
         self.assertEqual("ADVISORY", stale["mode"])
         self.assertTrue(stale["activation_update_required"])
-        self.assertEqual(0, self.run_ctl("activate").returncode)
+        self.assertEqual(0, self.run_ctl("activate", "--legacy-agents").returncode)
         current = self.payload(self.run_ctl("status"))
         self.assertEqual("ADVISORY", current["mode"])
         self.assertTrue(current["local_agent_ready"])
         self.assertFalse(current["activation_update_required"])
 
     def test_bundled_agent_drift_cannot_report_ready(self) -> None:
-        self.assertEqual(0, self.run_ctl("activate").returncode)
+        self.assertEqual(0, self.run_ctl("activate", "--legacy-agents").returncode)
         target = self.home / "agents" / "gpt56_sol_owner.toml"
         target.write_text("validly-owned-but-not-current-bundle\n", encoding="utf-8")
         active_path = self.data / "activation" / "active.json"
@@ -493,13 +576,13 @@ class RouterCtlTests(unittest.TestCase):
         agents.mkdir(parents=True)
         original = agents / "gpt56_sol_owner.toml"
         original.write_text("user-owned\n", encoding="utf-8")
-        self.assertEqual(0, self.run_ctl("activate", "--replace-conflicts").returncode)
+        self.assertEqual(0, self.run_ctl("activate", "--legacy-agents", "--replace-conflicts").returncode)
         backup = self.data / "activation" / "originals" / original.name
         backup.unlink()
         status = self.payload(self.run_ctl("status"))
         self.assertEqual("ADVISORY", status["mode"])
         self.assertEqual([original.name], status["original_backup_conflicts"])
-        for command in (("activate",), ("repair",), ("deactivate",)):
+        for command in (("activate", "--legacy-agents"), ("repair",), ("deactivate",)):
             with self.subTest(command=command):
                 result = self.run_ctl(*command)
                 self.assertEqual(2, result.returncode)
@@ -510,7 +593,7 @@ class RouterCtlTests(unittest.TestCase):
         agents.mkdir(parents=True)
         original = agents / "gpt56_terra_worker.toml"
         original.write_text("user-owned\n", encoding="utf-8")
-        self.assertEqual(0, self.run_ctl("activate", "--replace-conflicts").returncode)
+        self.assertEqual(0, self.run_ctl("activate", "--legacy-agents", "--replace-conflicts").returncode)
         backup = self.data / "activation" / "originals" / original.name
         backup.write_text("corrupt\n", encoding="utf-8")
         status = self.payload(self.run_ctl("status"))
@@ -523,7 +606,7 @@ class RouterCtlTests(unittest.TestCase):
         agents.mkdir(parents=True)
         original = agents / "gpt56_luna_worker.toml"
         original.write_text("user-owned\n", encoding="utf-8")
-        self.assertEqual(0, self.run_ctl("activate", "--replace-conflicts").returncode)
+        self.assertEqual(0, self.run_ctl("activate", "--legacy-agents", "--replace-conflicts").returncode)
         backup = self.data / "activation" / "originals" / original.name
         external = self.root / "external-original"
         external.write_text("user-owned\n", encoding="utf-8")
@@ -563,7 +646,7 @@ class RouterCtlTests(unittest.TestCase):
     def test_paths_with_spaces_and_unicode(self) -> None:
         base = self.root / "space and Δ"
         env = {**os.environ, "CODEX_HOME": str(base / "codex home"), "PLUGIN_DATA": str(base / "plugin data")}
-        self.assertEqual(0, self.run_ctl("activate", env=env).returncode)
+        self.assertEqual(0, self.run_ctl("activate", "--legacy-agents", env=env).returncode)
         self.assertEqual("ADVISORY", self.payload(self.run_ctl("status", env=env))["mode"])
         self.assertEqual(0, self.run_ctl("deactivate", env=env).returncode)
 
@@ -593,7 +676,7 @@ class RouterCtlTests(unittest.TestCase):
 
     def test_concurrent_activation_is_serialized_and_idempotent(self) -> None:
         def invoke(_: int) -> subprocess.CompletedProcess[str]:
-            return self.run_ctl("activate")
+            return self.run_ctl("activate", "--legacy-agents")
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(invoke, range(2)))

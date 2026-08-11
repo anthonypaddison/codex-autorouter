@@ -1,52 +1,59 @@
 # Release checklist
 
-Record candidate-specific proof in `RELEASE_EVIDENCE.md`; never infer a checked gate from a source-only test.
+Record candidate-specific proof in `RELEASE_EVIDENCE.md`; never infer a checked gate from a source-only test or an older release. The planned `v0.2.0` marketplace ref is not a release until the reviewed tag exists and every required gate below is evidenced.
 
 ## Automated gates
 
-- [x] Plugin manifest and skill validation pass.
-- [x] Router and activator tests pass on Python 3.10, 3.11, 3.12, 3.13, and the current runtime.
-- [x] The current six-role routing implementation passes the hosted macOS, Ubuntu, and native Windows Python 3.10–3.14 matrix in [run 29233219101](https://github.com/vibeforge1111/Codex-Autorouter/actions/runs/29233219101); the Autorouter branding/visual candidate repeats the full gate locally.
-- [x] Clean install, identical reinstall, conflict refusal, reviewed replacement, upgrade, repair, deactivation, and modified-file preservation pass.
-- [x] Exception and hard-crash failure injection at every declared failpoint restore the exact pre-operation agent tree.
-- [x] Concurrent lifecycle commands serialize without lost ownership state.
-- [x] Standalone install, exact-owned update, uninstall, durable-controller recovery, and purge pass without overwriting foreign or drifted skill trees.
-- [x] Every declared standalone install/update/uninstall crash boundary rolls back or commits deterministically, and post-crash edits are preserved.
-- [x] Plugin cache contains no source-machine absolute paths, secrets, symlinks, bytecode, or transient state.
-- [x] Installed-cache hooks use only plugin-relative commands and plugin data.
-- [x] Missing retired cache paths migrate to the newest installed hook, emit at most one no-cache diagnostic, and duplicate terminal Stop delivery is idempotent.
-- [x] Nested Codex commands and JSON-wrapped results preserve successful verification evidence; XML-wrapped Stop feedback cannot create a recursive routing turn, and post-route mutations cannot retain an `answer check` gate.
-- [x] Stop and SubagentStop never emit a block decision across satisfied, unmet, duplicate, active-stop, malformed-child, and routing-council states; the release validator rejects any reintroduction.
-- [x] Offline session repair covers top-level and compacted poison, mixed legitimate content, byte-exact backup, atomic replacement, malformed JSON fail-closed behavior, links, hard links, idempotency, and privacy-safe reporting.
-- [x] `scripts/check_hooks.py` observes exactly five trusted, enabled, error-free plugin hooks and six active current agent definitions after explicit review on candidate `0.1.0+codex.20260714074631`.
-- [x] All README SVGs parse, render at 1,600 pixels wide, retain accessible titles/descriptions, and pass visual clipping/legibility review; all local README links resolve.
-- [x] Routing golden cases, product taxonomy, adversarial prompts, continuations, Fast reporting, and 5,000-case fuzzing pass.
-- [x] `ADVISORY`, local-agent-ready, authoritative full-ready, and `MANAGED_BLOCKED` diagnostics are covered.
+- [ ] Plugin manifest, immutable-ref, attribution, documentation, skill, and source-integrity validation pass.
+- [ ] Router, compatibility-adapter, lifecycle, health, standalone, benchmark, and release-contract tests pass on the supported Python/OS matrix.
+- [ ] Deterministic routing fuzzing passes without weakening high-consequence or verification gates.
+- [ ] `UserPromptSubmit.model` is authoritative in Luna, Terra, and Sol root-policy tests; config/App Server evidence never overrides it.
+- [ ] Luna stays Luna for routine work, may use Terra for normal work, and may use Sol for hard work.
+- [ ] Terra stays Terra for routine/normal work and may use Sol only for hard work.
+- [ ] Sol never delegates downward merely to satisfy the classifier; separately justified parallel work remains bounded.
+- [ ] User-intent ambiguity asks one concise clarification without escalation; technical uncertainty in an otherwise clear task can escalate.
+- [ ] All direct Terra/Sol spawn construction, schema detection, capability handling, and fallback live behind the tested compatibility adapter.
+- [ ] Capability receipts bind plugin version, observable Codex runtime/build, Desktop or CLI host, platform, observed child model, effort intent, schema/signature, and timestamp.
+- [ ] Runtime/build mismatch changes `READY` to `DEGRADED` and no health/status path launches an automatic paid probe.
+- [ ] Missing legacy custom-agent TOMLs do not reduce health; normal installation/activation does not install them.
+- [ ] Explicit `activate --legacy-agents`, conflict refusal, repair, deactivation, and modified-file preservation remain isolated compatibility tests.
+- [ ] `routerctl status`, standalone status, and health checks are read-only when their state/config directories do not exist.
+- [ ] Installed-cache hooks execute only their exact plugin-root router, fail open with one diagnostic when unavailable, and never discover sibling caches.
+- [ ] Stop and SubagentStop remain fail-open and idempotent; successful verification evidence cannot be fabricated from prose or an unobservable result.
+- [ ] Standalone install/update/uninstall/durable-controller recovery/purge preserve foreign or drifted content and remain `ADVISORY`.
+- [ ] Release archive contains no source-machine paths, secrets, symlinks, bytecode, or transient state.
 
 ## Real-host acceptance
 
-Complete every row with the released archive or marketplace snapshot, not the source directory. Follow `HOST_ACCEPTANCE.md` and retain its evidence fields for each row.
+Complete every row with the exact immutable marketplace snapshot or release archive. Follow `HOST_ACCEPTANCE.md` and retain the stated receipt/runtime evidence.
 
-| OS | Surface | Install/cache relocation | Hook trust | Route smoke | Activate/deactivate | Result |
-|---|---|---:|---:|---:|---:|---|
-| macOS | Desktop | required | required | required | required | pending |
-| macOS | CLI | pass | pass | precursor pass | pass | exact candidate delegation replay pending after hook-adapter change; precursor `0.1.0+codex.20260713113358` passed |
-| Linux | CLI | required | required | required | required | pending |
-| Windows | Desktop | required | required | required | required | pending |
-| Windows | CLI | required | required | required | required | pending |
+| OS | Surface | Exact install/cache | Hook trust | Luna root | Direct Terra/Sol | Receipt health | Result |
+|---|---|---:|---:|---:|---:|---:|---|
+| macOS | Desktop | required | required | required | required | required | pending |
+| macOS | CLI | required | required | required | required | required | pending |
+| Linux | CLI | required | required | required | required | required | pending |
+| Windows | Desktop | required | required | required | required | required | pending |
+| Windows | CLI | required | required | required | required | required | pending |
 
-IDE extensions are excluded from the full-plugin matrix because Codex plugins are not currently supported there. The standalone advisory skill still requires an IDE discovery, routing, custom-agent, update, and uninstall smoke on each supported host.
+IDE extensions are excluded from full-plugin `READY` acceptance when they do not load plugin hooks. The standalone advisory skill still requires discovery, direct-adapter fallback, update, and uninstall smoke tests. Legacy TOMLs are exercised only in a separately labeled optional compatibility row.
 
 ## Policy and degraded modes
 
-- [x] Untrusted hooks are skipped and status does not claim full activation.
-- [x] Changed hook definitions require renewed trust.
-- [x] Hooks-disabled and multi-agent-disabled configurations remain advisory.
-- [x] `allow_managed_hooks_only` reports managed blocked and never attempts bypass.
-- [x] Missing custom agents remain advisory without breaking normal Codex work.
-- [x] Fast and effort labels never claim unavailable runtime attestation.
-- [ ] The public repository or marketplace exposes a tested private vulnerability-reporting channel (GitHub makes repository private reporting available only after public visibility).
+- [ ] Untrusted or disabled hooks never claim `READY`.
+- [ ] Managed-hooks-only policy reports the supported unavailable/advisory state and never attempts bypass.
+- [ ] A non-Luna `UserPromptSubmit.model` reports `DEGRADED` for that turn and explains that credit-saving behaviour is substantially reduced.
+- [ ] Missing/stale receipt or changed runtime/build reports `DEGRADED` without auto-probing.
+- [ ] Fast and effort labels never claim unavailable runtime attestation.
+- [ ] Luna Low versus Luna Medium controlled acceptance is recorded if Low is unreliable; Low is not treated as an immutable architecture requirement.
+- [ ] The public repository exposes a tested private vulnerability-reporting channel before broad publication.
+
+## Distribution gate
+
+- [ ] The reviewed commit exactly matches annotated tag `v0.2.0`.
+- [ ] The archive is produced from that tag, passes clean-room validation, and has a recorded verified SHA256.
+- [ ] Marketplace and privacy links resolve to the immutable tag.
+- [ ] No install, activation, tag, release, publish, or merge occurred as a side effect of validation.
 
 ## Public-release decision
 
-Do not mark stable or publish broadly until every automated gate passes and every real-host row has evidence. A private marketplace beta may proceed with explicitly documented pending rows.
+Do not mark stable, push the tag, or publish broadly until every required automated and real-host row has exact-candidate evidence. Any later code change requires a new version and a new review; never move an existing release tag.

@@ -8,7 +8,6 @@ import json
 import os
 import queue
 import subprocess
-import sys
 import threading
 import time
 from pathlib import Path
@@ -17,6 +16,10 @@ from typing import Any
 
 EXPECTED_EVENTS = {"postToolUse", "userPromptSubmit", "subagentStart", "subagentStop", "stop"}
 CHECKER_ROOT = Path(__file__).resolve().parents[1]
+CAPABILITY_SCHEMA_VERSION = 1
+CAPABILITY_SIGNATURE = "direct-model-spawn-v1"
+ROOT_OBSERVATION_FILE = "root-observation-v1.json"
+CAPABILITY_FILE = "capability-v1.json"
 
 
 def _send(process: subprocess.Popen[str], message: dict[str, Any]) -> None:
@@ -64,15 +67,13 @@ def _effective_readiness(config_response: dict[str, Any], requirements_response:
     )
     managed_only = bool((requirements or {}).get("allowManagedHooksOnly"))
     hooks_enabled = features.get("hooks") is not False
-    multi_agent_enabled = features.get("multi_agent") is not False
-    child_depth_enabled = agents.get("max_depth") != 0
+    agents_enabled = agents.get("enabled") is not False
     plugin_enabled = bool(plugin_entry and plugin_entry.get("enabled") is True)
     return {
-        "ready": plugin_enabled and hooks_enabled and multi_agent_enabled and child_depth_enabled and not managed_only,
+        "available": plugin_enabled and hooks_enabled and agents_enabled and not managed_only,
         "plugin_enabled": plugin_enabled,
         "hooks_enabled": hooks_enabled,
-        "multi_agent_enabled": multi_agent_enabled,
-        "child_depth_enabled": child_depth_enabled,
+        "agents_enabled": agents_enabled,
         "managed_hooks_only": managed_only,
         "model": config.get("model"),
         "model_reasoning_effort": config.get("model_reasoning_effort"),
@@ -103,37 +104,100 @@ def _skill_binding(skill_entries: list[Any], plugin_prefix: str, checker_root: P
     }
 
 
-def _local_agent_readiness(checker_root: Path = CHECKER_ROOT) -> tuple[bool, dict[str, Any]]:
-    controller = checker_root / "skills" / "route-gpt-5-6-work" / "scripts" / "routerctl.py"
+def _read_json_object(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     try:
-        result = subprocess.run(
-            [sys.executable, str(controller), "status"],
-            env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
-            text=True,
-            capture_output=True,
-            check=False,
-            timeout=15,
-        )
-        payload = json.loads(result.stdout) if result.stdout else {}
-    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
-        return False, {"ready": False, "error": type(exc).__name__}
-    ready = (
-        result.returncode == 0
-        and payload.get("mode") == "ADVISORY"
-        and payload.get("runtime_surface") == "PLUGIN_LAYOUT_UNATTESTED"
-        and payload.get("local_agent_ready") is True
-        and payload.get("agents_active") is True
-        and payload.get("activation_update_required") is False
-        and not payload.get("agent_conflicts")
-        and not payload.get("original_backup_conflicts")
-    )
-    return ready, {
-        "ready": ready,
-        "agents_active": payload.get("agents_active") is True,
-        "local_agent_ready": payload.get("local_agent_ready") is True,
-        "activation_update_required": payload.get("activation_update_required"),
-        "runtime_surface": payload.get("runtime_surface"),
-        "diagnostic_scope": payload.get("diagnostic_scope"),
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None, None
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        return None, type(exc).__name__
+    if not isinstance(value, dict):
+        return None, "invalid_shape"
+    return value, None
+
+
+def _routing_health(effective: dict[str, Any], plugin_version: str, data_root: Path) -> dict[str, Any]:
+    """Evaluate saved hook evidence without creating files or paid child work."""
+    observation, observation_error = _read_json_object(data_root / ROOT_OBSERVATION_FILE)
+    receipt, receipt_error = _read_json_object(data_root / CAPABILITY_FILE)
+    config_model = effective.get("model")
+    observed_model = observation.get("root_model") if observation else None
+    root_model = observed_model if isinstance(observed_model, str) and observed_model else config_model
+    root_source = "hook_observation" if isinstance(observed_model, str) and observed_model else "effective_config"
+    reasons: list[str] = []
+
+    if not effective.get("available"):
+        status = "UNAVAILABLE"
+        reasons.append("The supported plugin hook and direct-child routing path is not available in effective configuration.")
+    else:
+        status = "DEGRADED"
+        if observation_error:
+            reasons.append(f"Authoritative root observation is unreadable ({observation_error}).")
+        if observation is None:
+            reasons.append("No authoritative UserPromptSubmit.model observation is available for an actual turn.")
+        else:
+            if observation.get("schema_version") != CAPABILITY_SCHEMA_VERSION:
+                reasons.append("Root observation schema does not match this health checker.")
+            if observation.get("plugin_version") != plugin_version:
+                reasons.append("Root observation belongs to a different plugin version.")
+            if not observation.get("timestamp"):
+                reasons.append("Root observation has no timestamp.")
+
+        if not isinstance(root_model, str) or not root_model:
+            reasons.append("The effective root model is unknown.")
+        elif not root_model.lower().endswith("luna"):
+            reasons.append(
+                f"Active root is {root_model}, not Luna; credit-saving behaviour will be substantially reduced for that turn."
+            )
+
+        if receipt_error:
+            reasons.append(f"Capability receipt is unreadable ({receipt_error}).")
+        if receipt is None:
+            reasons.append("No successful Terra/Sol escalation receipt exists; no automatic paid probe was performed.")
+        else:
+            if receipt.get("schema_version") != CAPABILITY_SCHEMA_VERSION:
+                reasons.append("Capability receipt schema does not match this health checker.")
+            if receipt.get("capability_signature") != CAPABILITY_SIGNATURE:
+                reasons.append("Capability receipt signature does not match the supported direct-spawn adapter.")
+            if receipt.get("plugin_version") != plugin_version:
+                reasons.append("Capability receipt belongs to a different plugin version.")
+            if receipt.get("observed_child_model") not in {"gpt-5.6-terra", "gpt-5.6-sol"}:
+                reasons.append("Capability receipt does not attest a Terra or Sol child.")
+            if not receipt.get("effort_intent") or not receipt.get("timestamp"):
+                reasons.append("Capability receipt lacks effort intent or timestamp evidence.")
+
+        if observation is not None and receipt is not None:
+            current_runtime = observation.get("runtime_version")
+            current_build = observation.get("runtime_build")
+            receipt_runtime = receipt.get("runtime_version")
+            receipt_build = receipt.get("runtime_build")
+            if not all(isinstance(value, str) and value for value in (current_runtime, current_build, receipt_runtime, receipt_build)):
+                reasons.append("Codex runtime or build identity is unknown, so the capability receipt cannot establish READY.")
+            elif current_runtime != receipt_runtime or current_build != receipt_build:
+                reasons.append("Codex runtime or build changed after the last successful escalation receipt.")
+            current_platform = observation.get("platform")
+            receipt_platform = receipt.get("platform")
+            if current_platform and receipt_platform and current_platform != receipt_platform:
+                reasons.append("Capability receipt platform does not match the current hook observation.")
+            current_host = observation.get("host_type")
+            receipt_host = receipt.get("host_type")
+            if current_host and receipt_host and current_host != receipt_host:
+                reasons.append("Capability receipt host type does not match the current hook observation.")
+
+        if not reasons:
+            status = "READY"
+
+    return {
+        "status": status,
+        "ready": status == "READY",
+        "root_model": root_model,
+        "root_model_source": root_source,
+        "config_model": config_model,
+        "reasons": reasons,
+        "observation_present": observation is not None,
+        "capability_receipt_present": receipt is not None,
+        "automatic_paid_probe_performed": False,
+        "data_root": str(data_root),
     }
 
 
@@ -184,24 +248,29 @@ def inspect(cwd: Path, plugin_prefix: str) -> dict[str, Any]:
     events = {str(hook.get("eventName")) for hook in hooks}
     skill_entries = skills_response.get("data", [])
     skill_ready, skill_summary = _skill_binding(skill_entries, plugin_prefix)
-    local_agents_ready, local_agents = _local_agent_readiness()
     effective = _effective_readiness(config_response, requirements_response, plugin_prefix)
-    ready = (
+    supported_path_available = (
         events == EXPECTED_EVENTS
         and len(hooks) == len(EXPECTED_EVENTS)
         and all(hook.get("source") == "plugin" and hook.get("enabled") and hook.get("trustStatus") == "trusted" for hook in hooks)
         and not entry.get("warnings")
         and not entry.get("errors")
         and skill_ready
-        and local_agents_ready
-        and effective["ready"]
+        and effective["available"]
     )
+    effective["available"] = supported_path_available
+    data_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
+    health = _routing_health(effective, str(skill_summary.get("version") or ""), data_home / plugin_prefix)
     return {
         "plugin": plugin_prefix,
         "cwd_checked": bool(entry.get("cwd")),
-        "ready": ready,
-        "readiness_scope": "STATIC_INSTALLATION_ONLY",
-        "live_delegation_required": True,
+        "ready": health["ready"],
+        "status": health["status"],
+        "root_model": health["root_model"],
+        "root_model_source": health["root_model_source"],
+        "reasons": health["reasons"],
+        "readiness_scope": "OBSERVED_ROOT_AND_RUNTIME_BOUND_CAPABILITY",
+        "live_delegation_required": health["status"] != "READY",
         "hooks": [
             {
                 "event": hook.get("eventName"),
@@ -213,8 +282,9 @@ def inspect(cwd: Path, plugin_prefix: str) -> dict[str, Any]:
             for hook in hooks
         ],
         "skill": skill_summary,
-        "local_agents": local_agents,
+        "legacy_custom_agents": {"required": False, "checked": False},
         "effective": effective,
+        "health": health,
         "warnings": entry.get("warnings", []),
         "errors": entry.get("errors", []),
     }
@@ -228,10 +298,10 @@ def main() -> int:
     try:
         result = inspect(args.cwd, args.plugin)
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
-        print(json.dumps({"ready": False, "error": str(exc)}, indent=2))
+        print(json.dumps({"ready": False, "status": "UNAVAILABLE", "error": str(exc)}, indent=2))
         return 2
     print(json.dumps(result, indent=2, sort_keys=True))
-    return 0 if result["ready"] else 1
+    return 0 if result["status"] == "READY" else (1 if result["status"] == "DEGRADED" else 2)
 
 
 if __name__ == "__main__":

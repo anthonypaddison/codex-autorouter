@@ -1,10 +1,10 @@
 # Known limitations
 
-## Custom agents require explicit activation
+## Legacy custom agents are optional
 
-Codex plugins do not currently document a native custom-agent component. The plugin bundles reviewed templates, but the user must explicitly install the six namespaced TOMLs into `CODEX_HOME/agents` with `routerctl`.
+Normal routing uses the direct model-spawn compatibility adapter and does not install or require custom-agent TOMLs. The six namespaced templates remain only for compatibility testing and an explicit legacy mode. Users who deliberately need that mode can run `routerctl activate --legacy-agents`; their absence never degrades normal readiness.
 
-Native custom-agent selection requires both the exact `agent_type` and `fork_turns: "none"` on each spawn. `task_name` is only an orchestration label; using the role there does not select the custom agent. The default full-history fork inherits the parent identity and is incompatible with a custom `agent_type`. The router injects this contract and lifecycle hooks still require the expected child model and role; do not weaken attestation to accept built-in `default` as a named model route.
+Current direct-spawn schema construction, capability detection, and fallback live in one tested adapter. If Codex changes that schema, normal routing degrades to the current root model until the adapter is updated and a genuine successful Terra or Sol escalation creates a fresh capability receipt. Autorouter never runs an automatic paid probe.
 
 ## Hook trust is not filesystem-observable
 
@@ -12,11 +12,17 @@ Codex stores and evaluates hook trust separately. `routerctl status` can validat
 
 ## Pre-fix open tasks need one restart after upgrade
 
-Codex can retain the resolved, versioned hook command for an already-open task. Builds before the stale-cache launcher fix pointed directly at their own immutable cache and cannot rewrite that in-memory registration after the directory is replaced. Open a fresh task once after upgrading from such a build. Tasks created by the fixed build resolve the newest installed sibling cache from their self-contained command and do not recursively fail when their original cache is retired.
+Codex can retain the resolved, versioned hook command for an already-open task. Builds before the immutable launcher fix cannot rewrite that in-memory registration after the installed version changes. Open a fresh task once after upgrading from such a build. Tasks created by the fixed build launch only from the plugin root Codex supplied; they do not scan sibling cache directories.
 
-## Config diagnostics are local hints
+## The active root model is turn evidence
 
-`routerctl status` reads local `CODEX_HOME/config.toml` and `requirements.toml` only. It cannot calculate the final merged value after administrator profiles, policy, project configuration, or command-line overrides. Fields are named `*_by_local_config` or `*_in_local_requirements` for that reason. `scripts/check_hooks.py` performs the authoritative preflight by reading effective merged configuration and requirements from app-server alongside discovered hook trust.
+`UserPromptSubmit.model` is authoritative for the active root model on each actual turn. Local config and App Server evidence can support health reporting, but neither overrides that hook observation. A non-Luna root is therefore credit-efficiency `DEGRADED` for that turn even if configuration says Luna.
+
+`routerctl status` reads local `CODEX_HOME/config.toml` and `requirements.toml` only. It cannot calculate the final merged value after administrator profiles, policy, project configuration, or command-line overrides. Autorouter reports such evidence as diagnostic context and never writes the root model.
+
+## READY is runtime-bound
+
+`scripts/check_hooks.py` reports `READY` only after a Luna root observation and a genuine successful Terra or Sol escalation receipt for the same plugin version, Codex runtime/build, host type, platform, capability signature, and supported schema. A runtime/build change or unavailable runtime identity returns health to `DEGRADED` until normal work produces a fresh receipt. This is intentional; health checks never spend credits on an automatic probe.
 
 ## Fast is reported, not UI-attested
 
@@ -24,7 +30,7 @@ The documented common hook input does not guarantee a live `service_tier` field.
 
 ## Reasoning effort is configuration intent
 
-Lifecycle input exposes the child model but not a guaranteed live reasoning-effort field. The router validates effort against its owned agent TOML and describes this as configured intent.
+Lifecycle input exposes the child model but not a guaranteed live reasoning-effort field. The compatibility adapter supplies a validated effort intent with each direct spawn, and receipts report that value as intent rather than unavailable runtime attestation.
 
 ## Hook coverage is not an OS sandbox
 
