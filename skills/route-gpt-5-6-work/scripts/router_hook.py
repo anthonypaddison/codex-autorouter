@@ -257,6 +257,31 @@ NATURAL_CONTINUATION = re.compile(
     r"proceed|go ahead)(?:\s+please)?\s*[.!]*\s*$",
     re.I,
 )
+REFERENTIAL_CONTINUATION = re.compile(
+    r"^\s*(?:yes,?\s+do that|fix the bug we just identified)\s*[.!]*\s*$",
+    re.I,
+)
+VAGUE_MUTATION_REFERENT = re.compile(
+    r"\b(?:thing|stuff|whatever|something|that bit|this part)\b|"
+    r"^\s*make\s+(?:this|that|it)\s+better\s*[.!]*\s*$",
+    re.I,
+)
+CONCRETE_MUTATION_OUTCOME = re.compile(
+    r"\bfrom\s+`?[^.;]{1,80}?`?\s+to\s+`?[^.;]{1,80}`?(?:[.;]|$)|"
+    r"\bto\s+(?:say|state|read|set|use|include|support|return|emit|become|equal|match|"
+    r"call|write|show|display|allow|reject|accept|prevent|require)\b[^.;]{0,120}|"
+    r"\b(?:so that|such that)\b[^.;]{1,120}",
+    re.I,
+)
+CONCRETE_MUTATION_DEFECT = re.compile(
+    r"\b(?:sql injection|cross[- ]site scripting|xss|authorization bypass|auth(?:entication|orization) bypass|"
+    r"privilege escalation|race condition|deadlock|outage|crash|exception|typo|cve-\d{4}-\d+)\b",
+    re.I,
+)
+BARE_MUTATION_COMMAND = re.compile(
+    r"^\s*(?:please\s+)?(?:change|edit|fix|format|modify|patch|rename|replace|update)\b(?P<target>.+?)\s*[.!]*\s*$",
+    re.I,
+)
 ROUTER_CONTINUATION = re.compile(
     r"^\s*(?:<hook_prompt\b[^>]*>\s*)?Router completion gate:\s*.+?"
     r"(?:\s*</hook_prompt>)?\s*$",
@@ -288,6 +313,39 @@ def _mutation_intent_text(text: str) -> str:
     """Remove explicit local prohibitions without hiding other requested work."""
     without_negated_verbs = NEGATED_MUTATION_INTENT.sub(" ", text)
     return NEGATED_MUTATION_NOUN.sub(" ", without_negated_verbs)
+
+
+def _mutation_actionability(text: str, mutation: bool) -> tuple[bool, bool, bool]:
+    """Return clear-spec, underspecified-mutation, and unbound-continuation signals."""
+    unbound_continuation = bool(
+        CONTINUATION.match(text) or NATURAL_CONTINUATION.match(text) or REFERENTIAL_CONTINUATION.match(text)
+    )
+    concrete_outcome = bool(CONCRETE_MUTATION_OUTCOME.search(text) or CONCRETE_MUTATION_DEFECT.search(text))
+    clear_spec = bool(CLEAR_SPEC.search(text)) or (mutation and concrete_outcome)
+    vague_referent = bool(VAGUE_MUTATION_REFERENT.search(text) or REFERENTIAL_CONTINUATION.match(text))
+    bare_match = BARE_MUTATION_COMMAND.match(text)
+    bare_target_only = bool(bare_match) and not concrete_outcome and not re.search(
+        r"\b(?:and|because|by|from|so that|such that|to|using|with)\b",
+        str(bare_match.group("target")),
+        re.I,
+    )
+    underspecified_mutation = mutation and not clear_spec and (vague_referent or bare_target_only)
+    return clear_spec, underspecified_mutation, unbound_continuation
+
+
+def _usable_continuation_context(previous: dict[str, Any] | None, prompt: str) -> bool:
+    """Reject continuation inheritance from a turn that still needed clarification."""
+    if not previous:
+        return False
+    decision = previous.get("decision")
+    if not isinstance(decision, dict) or decision.get("requires_clarification"):
+        return False
+    if REFERENTIAL_CONTINUATION.match(prompt) and re.search(r"\bbug\b", prompt, re.I):
+        profile = decision.get("task_profile", {})
+        return profile.get("task_type") == "debugging" or bool(
+            profile.get("mutation") and profile.get("clear_spec")
+        )
+    return True
 
 
 def _route(route: str, confidence: float, reason: str, verification: str, parallel: bool = False) -> dict[str, Any]:
@@ -725,7 +783,10 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
     read_heavy = bool(READ_HEAVY.search(text))
     parallel = bool(PARALLEL.search(text))
     dependent = bool(DEPENDENT_WORK.search(text))
-    mutation = bool(MUTATION_INTENT.search(_mutation_intent_text(text)))
+    mutation = bool(MUTATION_INTENT.search(_mutation_intent_text(text))) or bool(
+        re.match(r"^\s*make\s+(?:this|that|it)\s+better\s*[.!]*\s*$", text, re.I)
+    )
+    clear_spec, underspecified_mutation, unbound_continuation = _mutation_actionability(text, mutation)
     security = security_subject and (
         bool(SECURITY_ACTION.search(text)) or mutation or consequence
     ) and not (bool(EXPLANATORY.search(text)) and not mutation and not review and not consequence)
@@ -816,10 +877,10 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
         task_type = "general"
 
     risk = "critical" if payment_critical or consequence and (destructive_external or security or critical_review or owner) else "high" if consequence or security else "normal"
-    broad_vague_product = bool(BROAD_PRODUCT.search(text)) and not bool(CLEAR_SPEC.search(text)) and words <= 30
-    multi_area_unclear = len(product["areas"]) >= 3 and (open_ended or not cheap_verify) and not bool(CLEAR_SPEC.search(text))
+    broad_vague_product = bool(BROAD_PRODUCT.search(text)) and not clear_spec and words <= 30
+    multi_area_unclear = len(product["areas"]) >= 3 and (open_ended or not cheap_verify) and not clear_spec
     explicit_council = bool(EXPLICIT_COUNCIL.search(text))
-    requires_clarification = (
+    requires_clarification = underspecified_mutation or unbound_continuation or (
         risk == "normal"
         and not security
         and not consequence
@@ -834,13 +895,14 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
     profile = {
         "task_type": task_type,
         "risk": risk,
-        "ambiguity": "high" if ambiguity or explicit_uncertainty or broad_vague_product else "medium" if open_ended or debugging else "low",
+        "ambiguity": "high" if ambiguity or explicit_uncertainty or broad_vague_product or underspecified_mutation or unbound_continuation else "medium" if open_ended or debugging else "low",
         "verification": "strong" if cheap_verify else "judgment" if open_ended or review else "ordinary",
         "volume": "large" if batch or unit_count >= 20 else "bounded",
         "unit_count": unit_count,
         "mutation": mutation or destructive_external,
         "trivial": bool(TRIVIAL.search(text)) and not consequence and not security,
-        "clear_spec": bool(CLEAR_SPEC.search(text)),
+        "clear_spec": clear_spec,
+        "underspecified_mutation": underspecified_mutation,
         "low_stakes_surface": low_stakes_surface,
         "parallel_requested": parallel,
         "parallel_safe": (parallel or (task_type == "mechanical_batch" and unit_count >= 100)) and not dependent,
@@ -856,6 +918,7 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
             ("open_ended", open_ended), ("read_heavy", read_heavy), ("review", review), ("dependent", dependent),
             ("routing_uncertainty", explicit_uncertainty), ("broad_product", broad_vague_product),
             ("payment_critical", payment_critical), ("safe_mechanical", safe_mechanical),
+            ("underspecified_mutation", underspecified_mutation), ("unbound_continuation", unbound_continuation),
         ) if present],
     }
 
@@ -1085,7 +1148,7 @@ def _apply_actual_root_policy(decision: dict[str, Any], active_model: str) -> di
     if requires_clarification:
         _set_route_fields(decision, "current")
         decision.update({
-            "reason": "user intent is too ambiguous for safe routing",
+            "reason": "user intent is insufficiently specified for safe routing",
             "verification": "confirm the requested outcome before task execution",
             "parallel": False,
             "max_workers": 1,
@@ -1538,7 +1601,11 @@ def _context(decision: dict[str, Any]) -> str:
     if mode == "direct":
         execution = "Keep this turn in the current agent; do not delegate merely for routing."
     elif mode == "clarify":
-        execution = "Ask one concise clarification about the requested outcome before task execution; do not spawn a child or routing council."
+        execution = (
+            "User intent is insufficiently specified; do not mutate files or state, do not run a mutating shell "
+            "command, do not take an external action, and do not delegate to a child or routing council. "
+            "Ask one concise clarification question and wait before task execution."
+        )
     elif mode == "single_delegate":
         execution = (
             f"Before substantial work, spawn exactly one `{decision['model']}` child at `{decision['effort']}` effort with a unique descriptive `task_name`. "
@@ -2168,7 +2235,9 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         )
         previous = _latest_session_state(data.get("session_id"), data.get("turn_id"))
         inherited_from_turn = None
-        if previous and (CONTINUATION.match(prompt) or NATURAL_CONTINUATION.match(prompt)):
+        if _usable_continuation_context(previous, prompt) and (
+            CONTINUATION.match(prompt) or NATURAL_CONTINUATION.match(prompt) or REFERENTIAL_CONTINUATION.match(prompt)
+        ):
             decision = json.loads(json.dumps(previous["decision"]))
             decision["reason"] = f"continued prior task: {decision['reason']}"
             decision["confidence"] = max(float(decision.get("confidence", 0)), 0.97)

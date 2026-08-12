@@ -197,6 +197,162 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(fixture["expected_mutation"], decision["task_profile"]["mutation"])
         self.assertEqual(fixture["expected_route"], decision["route"])
 
+    def test_desktop_test_b_underspecified_mutation_clarifies(self) -> None:
+        fixture = json.loads(
+            (Path(__file__).parent / "fixtures" / "desktop_test_b.json").read_text(encoding="utf-8")
+        )["classifier_regression"]
+        decision = router_hook.classify_prompt(fixture["prompt"], "gpt-5.6-luna", "low")
+        expected = fixture["expected"]
+        profile = decision["task_profile"]
+        actual = {
+            "mutation": profile["mutation"],
+            "clear_spec": profile["clear_spec"],
+            "underspecified_mutation": profile.get("underspecified_mutation", False),
+            "requires_clarification": decision["requires_clarification"],
+            "route": decision["route"],
+            "mode": decision["orchestration"]["mode"],
+            "child_count": sum(decision["orchestration"]["required_agents"].values()),
+        }
+        self.assertEqual(expected, actual)
+
+    def test_mutation_actionability_matrix(self) -> None:
+        cases = (
+            # prompt, mutation, clear spec, underspecified, clarification, route, children
+            ("Update README.md.", True, False, True, True, "current", 0),
+            (
+                "Update README.md to say Python 3.10–3.14 is supported.",
+                True, True, False, False, "current", 0,
+            ),
+            ("Change `MAX_WORKERS` from 2 to 3.", True, True, False, False, "current", 0),
+            ("Fix the bug we just identified.", True, False, True, True, "current", 0),
+            ("Make this better.", True, False, True, True, "current", 0),
+            ("Update the auth thing.", True, False, True, True, "current", 0),
+            ("Update the production database thing.", True, False, True, True, "current", 0),
+            (
+                "Fix the SQL injection vulnerability in this query builder.",
+                True, True, False, False, "gpt56_sol_owner", 1,
+            ),
+            ("Explain how routing works.", False, False, False, False, "current", 0),
+            (
+                "Read README and report the supported Python versions. Do not modify anything.",
+                False, False, False, False, "current", 0,
+            ),
+            (
+                "Threat-model the production authentication architecture. Do not modify anything.",
+                False, False, False, False, "gpt56_sol_deep", 1,
+            ),
+        )
+        for prompt, mutation, clear_spec, underspecified, clarify, route, children in cases:
+            with self.subTest(prompt=prompt):
+                decision = router_hook.classify_prompt(prompt, "gpt-5.6-luna", "low")
+                profile = decision["task_profile"]
+                self.assertEqual(mutation, profile["mutation"])
+                self.assertEqual(clear_spec, profile["clear_spec"])
+                self.assertEqual(underspecified, profile.get("underspecified_mutation", False))
+                self.assertEqual(clarify, decision["requires_clarification"])
+                self.assertEqual(route, decision["route"])
+                self.assertEqual(children, sum(decision["orchestration"]["required_agents"].values()))
+
+    def test_referential_continuation_requires_established_context(self) -> None:
+        base = {
+            "hook_event_name": "UserPromptSubmit",
+            "model": "gpt-5.6-luna",
+            "model_reasoning_effort": "low",
+        }
+        router_hook.handle({
+            **base,
+            "session_id": "established-context",
+            "turn_id": "t1",
+            "prompt": "Fix the SQL injection vulnerability in this query builder.",
+        })
+        router_hook.handle({
+            **base,
+            "session_id": "established-context",
+            "turn_id": "t2",
+            "prompt": "Fix the bug we just identified.",
+        })
+        continued = json.loads(
+            (Path(self.temp.name) / "established-context--t2.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual("t1", continued["inherited_from_turn"])
+        self.assertFalse(continued["decision"]["requires_clarification"])
+
+        router_hook.handle({
+            **base,
+            "session_id": "unbound-context",
+            "turn_id": "t1",
+            "prompt": "Fix the bug we just identified.",
+        })
+        isolated = json.loads(
+            (Path(self.temp.name) / "unbound-context--t1.json").read_text(encoding="utf-8")
+        )
+        self.assertIsNone(isolated["inherited_from_turn"])
+        self.assertTrue(isolated["decision"]["requires_clarification"])
+        self.assertEqual("clarify", isolated["decision"]["orchestration"]["mode"])
+
+        router_hook.handle({
+            **base,
+            "session_id": "natural-context",
+            "turn_id": "t1",
+            "prompt": "Change `MAX_WORKERS` from 2 to 3.",
+        })
+        router_hook.handle({
+            **base,
+            "session_id": "natural-context",
+            "turn_id": "t2",
+            "prompt": "Yes, do that.",
+        })
+        natural = json.loads(
+            (Path(self.temp.name) / "natural-context--t2.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual("t1", natural["inherited_from_turn"])
+        self.assertFalse(natural["decision"]["requires_clarification"])
+
+        router_hook.handle({
+            **base,
+            "session_id": "unbound-natural-context",
+            "turn_id": "t1",
+            "prompt": "Yes, do that.",
+        })
+        unbound_natural = json.loads(
+            (Path(self.temp.name) / "unbound-natural-context--t1.json").read_text(encoding="utf-8")
+        )
+        self.assertTrue(unbound_natural["decision"]["requires_clarification"])
+
+        router_hook.handle({
+            **base,
+            "session_id": "unusable-context",
+            "turn_id": "t1",
+            "prompt": "Update README.md.",
+        })
+        router_hook.handle({
+            **base,
+            "session_id": "unusable-context",
+            "turn_id": "t2",
+            "prompt": "Yes, do that.",
+        })
+        unusable = json.loads(
+            (Path(self.temp.name) / "unusable-context--t2.json").read_text(encoding="utf-8")
+        )
+        self.assertIsNone(unusable["inherited_from_turn"])
+        self.assertTrue(unusable["decision"]["requires_clarification"])
+
+    def test_clarification_contract_prohibits_execution(self) -> None:
+        decision = router_hook.classify_prompt(
+            "Update the production database thing.",
+            "gpt-5.6-luna",
+            "low",
+        )
+        context = router_hook._context(decision)
+        self.assertEqual("clarify", decision["orchestration"]["mode"])
+        self.assertEqual({}, decision["orchestration"]["required_agents"])
+        self.assertIn("User intent is insufficiently specified", context)
+        self.assertIn("do not mutate", context)
+        self.assertIn("mutating shell command", context)
+        self.assertIn("external action", context)
+        self.assertIn("do not delegate", context)
+        self.assertIn("Ask one concise clarification question and wait", context)
+
     def test_negated_mutation_phrases_do_not_create_mutation_intent(self) -> None:
         prompts = (
             "Read README and report the supported Python versions. Do not modify anything.",

@@ -1,0 +1,14 @@
+{
+  "classifier_regression": {
+    "prompt": "Update the routing documentation thing.",
+    "expected": {
+      "mutation": true,
+      "clear_spec": false,
+      "underspecified_mutation": true,
+      "requires_clarification": true,
+      "route": "current",
+      "mode": "clarify",
+      "child_count": 0
+    }
+  }
+}
