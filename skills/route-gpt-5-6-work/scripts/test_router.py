@@ -215,31 +215,76 @@ class RouterTests(unittest.TestCase):
         }
         self.assertEqual(expected, actual)
 
+    def test_desktop_test_b2_explicit_outcome_is_actionable(self) -> None:
+        decision = router_hook.classify_prompt(
+            "Update README.md so the supported Python versions are stated as Python 3.10–3.14.",
+            "gpt-5.6-luna",
+            "low",
+        )
+        profile = decision["task_profile"]
+        self.assertEqual({
+            "mutation": True,
+            "clear_spec": True,
+            "underspecified_mutation": False,
+            "requires_clarification": False,
+            "route": "current",
+            "mode": "direct",
+            "child_count": 0,
+        }, {
+            "mutation": profile["mutation"],
+            "clear_spec": profile["clear_spec"],
+            "underspecified_mutation": profile["underspecified_mutation"],
+            "requires_clarification": decision["requires_clarification"],
+            "route": decision["route"],
+            "mode": decision["orchestration"]["mode"],
+            "child_count": sum(decision["orchestration"]["required_agents"].values()),
+        })
+
     def test_mutation_actionability_matrix(self) -> None:
         cases = (
             # prompt, mutation, clear spec, underspecified, clarification, route, children
-            ("Update README.md.", True, False, True, True, "current", 0),
+            (
+                "Update README.md so the supported Python versions are stated as Python 3.10–3.14.",
+                True, True, False, False, "current", 0,
+            ),
+            (
+                "Update README.md so the supported versions are Python 3.10–3.14.",
+                True, True, False, False, "current", 0,
+            ),
+            ("Change the setting so retries are disabled.", True, True, False, False, "current", 0),
+            ("Update the config so the timeout is 30 seconds.", True, True, False, False, "current", 0),
+            ("Change the handler so invalid tokens are rejected.", True, True, False, False, "current", 0),
+            ("Update the endpoint so deleted records are excluded.", True, True, False, False, "current", 0),
+            (
+                "Update this function so it returns None when the record is missing.",
+                True, True, False, False, "current", 0,
+            ),
             (
                 "Update README.md to say Python 3.10–3.14 is supported.",
                 True, True, False, False, "current", 0,
             ),
-            ("Change `MAX_WORKERS` from 2 to 3.", True, True, False, False, "current", 0),
-            ("Fix the bug we just identified.", True, False, True, True, "current", 0),
-            ("Make this better.", True, False, True, True, "current", 0),
-            ("Update the auth thing.", True, False, True, True, "current", 0),
-            ("Update the production database thing.", True, False, True, True, "current", 0),
+            ("Change MAX_WORKERS from 2 to 3.", True, True, False, False, "current", 0),
             (
                 "Fix the SQL injection vulnerability in this query builder.",
                 True, True, False, False, "gpt56_sol_owner", 1,
             ),
+            ("Update README.md.", True, False, True, True, "current", 0),
+            ("Update the routing documentation thing.", True, False, True, True, "current", 0),
+            ("Fix the bug we just identified.", True, False, True, True, "current", 0),
+            ("Make this better.", True, False, True, True, "current", 0),
+            ("Update this so stuff works.", True, False, True, True, "current", 0),
+            ("Change this so it is better.", True, False, True, True, "current", 0),
+            ("Update the auth thing.", True, False, True, True, "current", 0),
+            ("Update the production database thing.", True, False, True, True, "current", 0),
             ("Explain how routing works.", False, False, False, False, "current", 0),
             (
-                "Read README and report the supported Python versions. Do not modify anything.",
+                "Read README.md and tell me which Python versions the CI matrix supports. Do not modify anything.",
                 False, False, False, False, "current", 0,
             ),
             (
-                "Threat-model the production authentication architecture. Do not modify anything.",
-                False, False, False, False, "gpt56_sol_deep", 1,
+                "Threat-model the Autorouter plugin hook trust boundary and analyse the security consequences "
+                "if plugin cache isolation were broken. Do not modify anything.",
+                False, False, False, False, "gpt56_terra_deep", 1,
             ),
         )
         for prompt, mutation, clear_spec, underspecified, clarify, route, children in cases:
@@ -252,6 +297,53 @@ class RouterTests(unittest.TestCase):
                 self.assertEqual(clarify, decision["requires_clarification"])
                 self.assertEqual(route, decision["route"])
                 self.assertEqual(children, sum(decision["orchestration"]["required_agents"].values()))
+
+    def test_desktop_test_b_to_b2_sequence_resets_clarification(self) -> None:
+        base = {
+            "hook_event_name": "UserPromptSubmit",
+            "model": "gpt-5.6-luna",
+            "model_reasoning_effort": "low",
+            "session_id": "desktop-b-to-b2",
+        }
+        router_hook.handle({
+            **base,
+            "turn_id": "b",
+            "prompt": "Update the routing documentation thing.",
+        })
+        first = json.loads(
+            (Path(self.temp.name) / "desktop-b-to-b2--b.json").read_text(encoding="utf-8")
+        )
+        self.assertTrue(first["decision"]["requires_clarification"])
+        self.assertEqual("clarify", first["decision"]["orchestration"]["mode"])
+
+        router_hook.handle({
+            **base,
+            "turn_id": "b2",
+            "prompt": "Update README.md so the supported Python versions are stated as Python 3.10–3.14.",
+        })
+        second = json.loads(
+            (Path(self.temp.name) / "desktop-b-to-b2--b2.json").read_text(encoding="utf-8")
+        )
+        decision = second["decision"]
+        profile = decision["task_profile"]
+        self.assertIsNone(second["inherited_from_turn"])
+        self.assertEqual({
+            "mutation": True,
+            "clear_spec": True,
+            "underspecified_mutation": False,
+            "requires_clarification": False,
+            "route": "current",
+            "mode": "direct",
+            "child_count": 0,
+        }, {
+            "mutation": profile["mutation"],
+            "clear_spec": profile["clear_spec"],
+            "underspecified_mutation": profile["underspecified_mutation"],
+            "requires_clarification": decision["requires_clarification"],
+            "route": decision["route"],
+            "mode": decision["orchestration"]["mode"],
+            "child_count": sum(decision["orchestration"]["required_agents"].values()),
+        })
 
     def test_referential_continuation_requires_established_context(self) -> None:
         base = {

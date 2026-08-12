@@ -273,6 +273,17 @@ CONCRETE_MUTATION_OUTCOME = re.compile(
     r"\b(?:so that|such that)\b[^.;]{1,120}",
     re.I,
 )
+CONCRETE_SO_OUTCOME = re.compile(
+    r"\bso\s+(?P<subject>[a-z0-9_`][a-z0-9_`' -]{0,80}?)\s+"
+    r"(?P<predicate>is|are|becomes?|returns?|includes?|excludes?|rejects?|allows?|uses?|shows?)\b\s+"
+    r"(?P<result>[^.;\n]{1,120})",
+    re.I,
+)
+VAGUE_SO_RESULT = re.compile(
+    r"^(?:anything|as needed|as desired|better|best|correctly|good|great|properly|right|"
+    r"something|stuff(?:\s+works?)?|whatever|works?)$",
+    re.I,
+)
 CONCRETE_MUTATION_DEFECT = re.compile(
     r"\b(?:sql injection|cross[- ]site scripting|xss|authorization bypass|auth(?:entication|orization) bypass|"
     r"privilege escalation|race condition|deadlock|outage|crash|exception|typo|cve-\d{4}-\d+)\b",
@@ -315,12 +326,25 @@ def _mutation_intent_text(text: str) -> str:
     return NEGATED_MUTATION_NOUN.sub(" ", without_negated_verbs)
 
 
+def _has_concrete_so_outcome(text: str) -> bool:
+    """Recognise bounded result clauses without treating every ``so`` as actionable."""
+    for match in CONCRETE_SO_OUTCOME.finditer(text):
+        result = match.group("result").strip(" `\t\r\n")
+        if result and not VAGUE_SO_RESULT.fullmatch(result):
+            return True
+    return False
+
+
 def _mutation_actionability(text: str, mutation: bool) -> tuple[bool, bool, bool]:
     """Return clear-spec, underspecified-mutation, and unbound-continuation signals."""
     unbound_continuation = bool(
         CONTINUATION.match(text) or NATURAL_CONTINUATION.match(text) or REFERENTIAL_CONTINUATION.match(text)
     )
-    concrete_outcome = bool(CONCRETE_MUTATION_OUTCOME.search(text) or CONCRETE_MUTATION_DEFECT.search(text))
+    concrete_outcome = bool(
+        CONCRETE_MUTATION_OUTCOME.search(text)
+        or CONCRETE_MUTATION_DEFECT.search(text)
+        or _has_concrete_so_outcome(text)
+    )
     clear_spec = bool(CLEAR_SPEC.search(text)) or (mutation and concrete_outcome)
     vague_referent = bool(VAGUE_MUTATION_REFERENT.search(text) or REFERENTIAL_CONTINUATION.match(text))
     bare_match = BARE_MUTATION_COMMAND.match(text)
