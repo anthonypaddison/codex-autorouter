@@ -1,0 +1,46 @@
+{
+  "provenance": "Sanitized from real Codex Desktop Test C lifecycle evidence for candidate af41563. Prompt text and identifiers are synthetic; event shapes preserve the observed parent session, distinct child turn, standard agent_type, and absent child-prompt agent_id.",
+  "lifecycle_events": [
+    {
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "desktop-test-c-session",
+      "turn_id": "desktop-test-c-parent-turn",
+      "model": "gpt-5.6-luna",
+      "prompt": "Diagnose why this flaky test fails intermittently."
+    },
+    {
+      "hook_event_name": "SubagentStart",
+      "session_id": "desktop-test-c-session",
+      "turn_id": "desktop-test-c-parent-turn",
+      "agent_id": "desktop-test-c-terra-child",
+      "agent_type": "gpt56_terra_deep",
+      "model": "gpt-5.6-terra",
+      "permission_mode": "default"
+    },
+    {
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "desktop-test-c-session",
+      "turn_id": "desktop-test-c-child-turn",
+      "model": "gpt-5.6-terra",
+      "prompt": "Diagnose the bounded flaky-test case and return focused evidence."
+    },
+    {
+      "hook_event_name": "SubagentStop",
+      "session_id": "desktop-test-c-session",
+      "turn_id": "desktop-test-c-child-turn",
+      "agent_id": "desktop-test-c-terra-child",
+      "agent_type": "gpt56_terra_deep",
+      "model": "gpt-5.6-terra",
+      "agent_transcript_path": "/sanitized/rollout-desktop-test-c-terra-child.jsonl",
+      "stop_hook_active": false,
+      "last_assistant_message": "Evidence: isolated the deterministic trigger\nVerification: focused regression test passed\nUncertainty: none"
+    },
+    {
+      "hook_event_name": "Stop",
+      "session_id": "desktop-test-c-session",
+      "turn_id": "desktop-test-c-parent-turn",
+      "model": "gpt-5.6-luna",
+      "stop_hook_active": false
+    }
+  ]
+}

@@ -741,6 +741,34 @@ class RouterTests(unittest.TestCase):
             receipt["runtime_identity_source"],
         )
 
+    def test_sanitized_desktop_test_c_correlates_standard_agent_type_as_direct(self) -> None:
+        fixture = json.loads(
+            (Path(__file__).parent / "fixtures" / "desktop_test_c.json").read_text(encoding="utf-8")
+        )
+        child_prompt = fixture["lifecycle_events"][2]
+        self.assertNotIn("agent_id", child_prompt)
+        for event in fixture["lifecycle_events"]:
+            router_hook.handle(event)
+
+        observation = json.loads(router_hook.ROOT_OBSERVATION_PATH.read_text(encoding="utf-8"))
+        ledger = json.loads(
+            (Path(self.temp.name) / "desktop-test-c-session--desktop-test-c-parent-turn.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        child = ledger["agents"]["desktop-test-c-terra-child"]
+        self.assertEqual("gpt-5.6-luna", observation["root_model"])
+        self.assertEqual("direct_agent_id", child["correlation_mode"])
+        self.assertEqual("desktop-test-c-child-turn", child["child_turn_id"])
+        self.assertEqual("gpt-5.6-terra", child["start_observed_model"])
+        self.assertEqual("gpt-5.6-terra", child["prompt_observed_model"])
+        self.assertEqual("gpt-5.6-terra", child["stop_observed_model"])
+        self.assertEqual("completed", child["status"])
+        self.assertEqual("COMPLETE", ledger["status"])
+        receipt = json.loads(router_hook.CAPABILITY_PATH.read_text(encoding="utf-8"))
+        self.assertEqual("desktop-test-c-terra-child", receipt["agent_id"])
+        self.assertEqual("gpt-5.6-terra", receipt["observed_child_model"])
+
     def test_direct_receipt_requires_an_observed_child_prompt(self) -> None:
         base = {"session_id": "receipt-needs-observation", "turn_id": "parent"}
         router_hook.handle({
@@ -870,7 +898,7 @@ class RouterTests(unittest.TestCase):
         self.assertEqual("FAILED_OPEN", ledger["status"])
         self.assertFalse(router_hook.CAPABILITY_PATH.exists())
 
-    def test_supported_concurrent_children_correlate_each_stop_by_agent_id(self) -> None:
+    def test_same_model_concurrent_child_prompts_are_ambiguous_and_fail_closed(self) -> None:
         session = "concurrent-direct"
         router_hook.handle({
             "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "parent",
@@ -897,10 +925,49 @@ class RouterTests(unittest.TestCase):
             "hook_event_name": "Stop", "session_id": session, "turn_id": "parent", "stop_hook_active": False,
         })
         ledger = json.loads((Path(self.temp.name) / f"{session}--parent.json").read_text(encoding="utf-8"))
-        self.assertEqual("COMPLETE", ledger["status"])
+        observation = json.loads(router_hook.ROOT_OBSERVATION_PATH.read_text(encoding="utf-8"))
+        self.assertEqual("FAILED_OPEN", ledger["status"])
         self.assertEqual({"terra-a", "terra-b"}, set(ledger["agents"]))
-        self.assertEqual({"child-a", "child-b"}, {agent["child_turn_id"] for agent in ledger["agents"].values()})
+        self.assertEqual({None}, {agent.get("child_turn_id") for agent in ledger["agents"].values()})
         self.assertEqual({"completed"}, {agent["status"] for agent in ledger["agents"].values()})
+        self.assertEqual("gpt-5.6-luna", observation["root_model"])
+        self.assertEqual(2, len(ledger["child_prompt_ambiguities"]))
+        self.assertTrue(all(len(item["candidate_agent_ids"]) == 2 for item in ledger["child_prompt_ambiguities"]))
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+
+    def test_concurrent_terra_and_sol_prompts_correlate_uniquely_by_model(self) -> None:
+        session = "concurrent-distinct-models"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "parent",
+            "model": "gpt-5.6-luna",
+            "prompt": (
+                "Review production authorization checks and independently diagnose a flaky queue worker, "
+                "then synthesize a safe fix."
+            ),
+        })
+        starts = (
+            ("terra", "gpt-5.6-terra", "medium"),
+            ("sol", "gpt-5.6-sol", "high"),
+        )
+        for agent_id, model, effort in starts:
+            router_hook.handle({
+                "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "parent",
+                "agent_id": agent_id, "agent_type": "worker", "model": model,
+                "reasoning_effort": effort,
+            })
+        for turn_id, model, effort in (
+            ("terra-turn", "gpt-5.6-terra", "medium"),
+            ("sol-turn", "gpt-5.6-sol", "high"),
+        ):
+            router_hook.handle({
+                "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn_id,
+                "model": model, "model_reasoning_effort": effort, "prompt": "Do the bounded child task.",
+            })
+        ledger = json.loads((Path(self.temp.name) / f"{session}--parent.json").read_text(encoding="utf-8"))
+        observation = json.loads(router_hook.ROOT_OBSERVATION_PATH.read_text(encoding="utf-8"))
+        self.assertEqual("terra-turn", ledger["agents"]["terra"]["child_turn_id"])
+        self.assertEqual("sol-turn", ledger["agents"]["sol"]["child_turn_id"])
+        self.assertEqual("gpt-5.6-luna", observation["root_model"])
 
     def test_subsequent_parent_turn_can_update_the_root_after_child_completion(self) -> None:
         fixture = json.loads(
@@ -955,8 +1022,15 @@ class RouterTests(unittest.TestCase):
             "stop_hook_active": False,
         })
         ledger = json.loads((Path(self.temp.name) / "model-mismatch--parent.json").read_text(encoding="utf-8"))
+        observation = json.loads(router_hook.ROOT_OBSERVATION_PATH.read_text(encoding="utf-8"))
         self.assertFalse(router_hook.CAPABILITY_PATH.exists())
         self.assertEqual("FAILED_OPEN", ledger["status"])
+        self.assertEqual("gpt-5.6-luna", observation["root_model"])
+        child = ledger["agents"]["wrong-model"]
+        self.assertEqual("gpt-5.6-terra", child["start_observed_model"])
+        self.assertIsNone(child["prompt_observed_model"])
+        self.assertEqual("gpt-5.6-sol", child["stop_observed_model"])
+        self.assertFalse(child["model_evidence_consistent"])
 
     def test_actual_root_model_matrix_prevents_downward_delegation(self) -> None:
         normal = "Implement a feature with multiple states, error handling, and targeted tests."

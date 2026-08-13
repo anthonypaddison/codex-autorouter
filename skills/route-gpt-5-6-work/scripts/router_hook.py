@@ -528,6 +528,30 @@ def _record_root_observation(data: dict[str, Any]) -> dict[str, Any]:
     return observation
 
 
+def _model_evidence_consistent(agent: dict[str, Any]) -> bool:
+    """Require one requested model across every observable lifecycle source."""
+    requested_model = str(agent.get("requested_model") or "")
+    requested_effort = str(agent.get("requested_effort") or "")
+    if not requested_model or any(
+        str(agent.get(field) or "") != requested_model
+        for field in ("start_observed_model", "prompt_observed_model", "stop_observed_model")
+    ):
+        return False
+    if requested_effort and any(
+        str(agent.get(field) or "") not in {"", requested_effort}
+        for field in ("start_observed_effort", "prompt_observed_effort", "stop_observed_effort")
+    ):
+        return False
+    return True
+
+
+def _record_child_model_mismatch(state: dict[str, Any], agent_id: str, source: str) -> None:
+    violation = f"child_model_mismatch:{agent_id}:{source}"
+    if violation not in state.setdefault("violations", []):
+        state["violations"].append(violation)
+    state["agents"][agent_id]["model_evidence_consistent"] = False
+
+
 def _record_capability(state: dict[str, Any], agent_id: str) -> bool:
     agent = state.get("agents", {}).get(agent_id, {})
     role = str(agent.get("type") or "")
@@ -541,6 +565,7 @@ def _record_capability(state: dict[str, Any], agent_id: str) -> bool:
         or not agent.get("completion_structured")
         or requested_model not in spawn_compat.SUPPORTED_EFFORTS
         or observed_model != requested_model
+        or not _model_evidence_consistent(agent)
         or not state.get("agent_attestations", {}).get(agent_id, {}).get("matched")
         or agent.get("receipt_recorded")
     ):
@@ -1456,55 +1481,78 @@ def _state_for_agent(session_id: Any, agent_id: str) -> dict[str, Any] | None:
     )
 
 
-def _active_child_for_prompt(data: dict[str, Any]) -> tuple[dict[str, Any], str] | None:
-    """Correlate a child prompt to an already-started direct child.
-
-    Desktop supplies a different turn id for the child prompt, but the same
-    session as its parent. The immediately preceding SubagentStart is the
-    lifecycle relationship; model/effort narrow concurrent candidates.
-    """
+def _active_children_for_prompt(
+    data: dict[str, Any],
+) -> tuple[dict[str, Any], list[tuple[str, dict[str, Any]]]] | None:
+    """Return the newest active direct-child scope for a non-parent turn."""
     event_turn = str(data.get("turn_id") or "")
-    model = str(data.get("model") or "")
-    effort = str(data.get("model_reasoning_effort") or data.get("reasoning_effort") or "")
-    candidates: list[tuple[dict[str, Any], str, dict[str, Any]]] = []
-    for state in _session_states(data.get("session_id")):
-        if event_turn and event_turn == str(state.get("turn_id") or ""):
-            continue
-        for agent_id, agent in state.get("agents", {}).items():
+    states = _session_states(data.get("session_id"))
+    if event_turn and any(event_turn == str(state.get("turn_id") or "") for state in states):
+        return None
+    for state in states:
+        active = [
+            (str(agent_id), agent)
+            for agent_id, agent in state.get("agents", {}).items()
             if (
                 agent.get("status") == "started"
-                and agent.get("correlation_mode") == "direct_agent_id"
+                and agent.get("correlation_mode") in {"direct_agent_id", "observed_agent_id"}
                 and not agent.get("child_turn_id")
-            ):
-                candidates.append((state, str(agent_id), agent))
-    if not candidates:
-        return None
-    exact = [item for item in candidates if item[2].get("requested_model") == model]
-    if effort:
-        exact_effort = [item for item in exact if item[2].get("requested_effort") == effort]
-        if exact_effort:
-            exact = exact_effort
-    selected = max(exact or candidates, key=lambda item: int(item[2].get("start_order") or 0))
-    return selected[0], selected[1]
+            )
+        ]
+        if active:
+            return state, active
+    return None
 
 
 def _record_child_prompt(data: dict[str, Any]) -> bool:
-    target = _active_child_for_prompt(data)
-    if target is None:
+    scope = _active_children_for_prompt(data)
+    if scope is None:
         return False
-    state, agent_id = target
+    state, active = scope
+    observed_model = str(data.get("model") or "")
+    observed_effort = str(data.get("model_reasoning_effort") or data.get("reasoning_effort") or "")
+    candidates = [
+        (agent_id, agent)
+        for agent_id, agent in active
+        if agent.get("requested_model") == observed_model
+        and agent.get("start_observed_model") in {None, observed_model}
+        and (not observed_effort or agent.get("requested_effort") == observed_effort)
+    ]
+    if len(candidates) != 1:
+        turn_id = str(data.get("turn_id") or "") or None
+        record = {
+            "turn_id": turn_id,
+            "observed_model": observed_model or None,
+            "observed_effort": observed_effort or None,
+            "candidate_agent_ids": sorted(agent_id for agent_id, _ in candidates),
+            "active_agent_ids": sorted(agent_id for agent_id, _ in active),
+            "timestamp": int(time.time()),
+        }
+        if candidates:
+            state.setdefault("child_prompt_ambiguities", []).append(record)
+            violation = f"ambiguous_child_prompt:{turn_id or 'unknown'}:{observed_model or 'unknown'}"
+        else:
+            state.setdefault("unmatched_child_prompts", []).append(record)
+            violation = f"unmatched_child_prompt:{turn_id or 'unknown'}:{observed_model or 'unknown'}"
+        if violation not in state.setdefault("violations", []):
+            state["violations"].append(violation)
+        _write_existing_state(data, state)
+        return True
+    agent_id, _ = candidates[0]
     agent = state["agents"][agent_id]
-    observed_model = str(data.get("model") or "") or None
-    observed_effort = str(data.get("model_reasoning_effort") or data.get("reasoning_effort") or "") or None
     agent.update({
-        "observed_model": observed_model,
-        "observed_effort": observed_effort,
+        "observed_model": observed_model or None,
+        "observed_effort": observed_effort or None,
+        "prompt_observed_model": observed_model or None,
+        "prompt_observed_effort": observed_effort or None,
         "child_turn_id": str(data.get("turn_id") or "") or None,
         "observed_at": int(time.time()),
         "model_match": observed_model == agent.get("requested_model"),
     })
     if not agent["model_match"]:
-        state.setdefault("violations", []).append(f"child_model_mismatch:{agent_id}")
+        _record_child_model_mismatch(state, agent_id, "prompt")
+    else:
+        agent["model_evidence_consistent"] = _model_evidence_consistent(agent)
     _write_existing_state(data, state)
     return True
 
@@ -2505,11 +2553,6 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         allowed = set(plan["allowed_agents"])
         direct_model = str(data.get("model") or "")
         direct_effort = str(data.get("reasoning_effort") or data.get("model_reasoning_effort") or "")
-        direct_lifecycle = bool(
-            supplied_agent_id
-            and not data.get("agent_type")
-            and direct_model in spawn_compat.SUPPORTED_EFFORTS
-        )
         council = plan["mode"] == "routing_council"
         council_phase = str(plan.get("phase") or "")
         existing_roles = [str(agent.get("type") or "") for agent in state.setdefault("agents", {}).values()]
@@ -2540,19 +2583,44 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             str(decision.get("route") or "") if decision.get("route") in allowed else next(iter(sorted(allowed)), "")
         )
         expected_spec = ROUTES.get(expected_role, {})
+        direct_lifecycle = bool(
+            supplied_agent_id
+            and role in allowed
+            and direct_model in spawn_compat.SUPPORTED_EFFORTS
+            and direct_model == expected_spec.get("model")
+            and (not direct_effort or direct_effort == expected_spec.get("effort"))
+        )
+        observed_lifecycle = bool(supplied_agent_id and direct_model in spawn_compat.SUPPORTED_EFFORTS)
         state["agents"][agent_id] = {
             "type": role,
+            "agent_type": str(data.get("agent_type") or "") or None,
             "status": "started",
             "phase": phase,
-            "correlation_mode": "direct_agent_id" if direct_lifecycle else "legacy_agent_type",
+            "correlation_mode": (
+                "direct_agent_id" if direct_lifecycle
+                else "observed_agent_id" if observed_lifecycle
+                else "legacy_agent_type"
+            ),
             "parent_session_id": state.get("session_id"),
             "parent_turn_id": state.get("turn_id"),
-            "requested_model": expected_spec.get("model") if direct_lifecycle else ROUTES.get(role, {}).get("model"),
+            "requested_model": (
+                expected_spec.get("model") if direct_lifecycle
+                else direct_model if observed_lifecycle
+                else ROUTES.get(role, {}).get("model")
+            ),
             "start_observed_model": direct_model or None,
-            "requested_effort": expected_spec.get("effort") if direct_lifecycle else ROUTES.get(role, {}).get("effort"),
+            "requested_effort": (
+                expected_spec.get("effort") if direct_lifecycle
+                else direct_effort or ROUTES.get(role, {}).get("effort")
+            ),
             "start_observed_effort": direct_effort or None,
             "observed_model": None,
             "observed_effort": None,
+            "prompt_observed_model": None,
+            "prompt_observed_effort": None,
+            "stop_observed_model": None,
+            "stop_observed_effort": None,
+            "model_evidence_consistent": False,
             "purpose": str(decision.get("reason") or "")[:500],
             "expected_by_parent": role in allowed,
             "start_order": len(state["agents"]) + 1,
@@ -2666,6 +2734,13 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         target["stop_observed_effort"] = str(
             data.get("reasoning_effort") or data.get("model_reasoning_effort") or ""
         ) or None
+        if (
+            target.get("correlation_mode") == "direct_agent_id"
+            and target.get("stop_observed_model") != target.get("requested_model")
+        ):
+            _record_child_model_mismatch(state, target_id, "stop")
+        else:
+            target["model_evidence_consistent"] = _model_evidence_consistent(target)
         target["completion_structured"] = required
         if required:
             if role not in state["subagents_completed"]:
@@ -2818,7 +2893,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
                     problems.append("execute with the exact routing-council selected role")
         if any(item.startswith((
             "unexpected_agent:", "worker_cap_exceeded:", "ordering_violation:", "advisor_mutation:",
-            "child_model_mismatch:",
+            "child_model_mismatch:", "ambiguous_child_prompt:", "unmatched_child_prompt:",
         )) for item in state["violations"]):
             problems.append(
                 "resolve unexpected-agent, child-model, worker-cap, orchestration-order, or advisor-mutation violations"
