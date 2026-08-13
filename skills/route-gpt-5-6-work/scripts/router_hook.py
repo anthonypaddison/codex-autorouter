@@ -69,6 +69,7 @@ ROUTING_PROFILES = {
 }
 STATE_VERSION = 4
 STATE_MARKER_SCHEMA = 1
+MAX_CHILD_PROMPT_OBSERVATIONS = 64
 STATE_MARKER_OWNER = "gpt-5-6-router"
 NONCE = re.compile(r"[0-9a-f]{64}")
 ROUTES = {
@@ -532,6 +533,17 @@ def _model_evidence_consistent(agent: dict[str, Any]) -> bool:
     """Require one requested model across every observable lifecycle source."""
     requested_model = str(agent.get("requested_model") or "")
     requested_effort = str(agent.get("requested_effort") or "")
+    prompt_observations = agent.get("prompt_observations")
+    if isinstance(prompt_observations, list) and (
+        not prompt_observations
+        or agent.get("prompt_evidence_overflow")
+        or any(str(item.get("model") or "") != requested_model for item in prompt_observations)
+        or (
+            requested_effort
+            and any(str(item.get("effort") or "") not in {"", requested_effort} for item in prompt_observations)
+        )
+    ):
+        return False
     if not requested_model or any(
         str(agent.get(field) or "") != requested_model
         for field in ("start_observed_model", "prompt_observed_model", "stop_observed_model")
@@ -543,6 +555,40 @@ def _model_evidence_consistent(agent: dict[str, Any]) -> bool:
     ):
         return False
     return True
+
+
+def _child_turn_ids(agent: dict[str, Any]) -> list[str]:
+    values = agent.get("child_turn_ids")
+    turns = [str(value) for value in values if str(value)] if isinstance(values, list) else []
+    legacy = str(agent.get("child_turn_id") or "")
+    if legacy and legacy not in turns:
+        turns.append(legacy)
+    return turns[:MAX_CHILD_PROMPT_OBSERVATIONS]
+
+
+def _child_prompt_event_key(data: dict[str, Any]) -> str:
+    material = json.dumps(
+        {
+            "turn_id": str(data.get("turn_id") or ""),
+            "model": str(data.get("model") or ""),
+            "effort": str(data.get("model_reasoning_effort") or data.get("reasoning_effort") or ""),
+            "prompt": str(data.get("prompt") or ""),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
+
+
+def _completion_is_trustworthy(agent: dict[str, Any]) -> bool:
+    return bool(
+        agent.get("status") == "completed"
+        and agent.get("completion_structured")
+        and (
+            int(agent.get("stop_events") or 0) > 0
+            or agent.get("completion_source") == "transcript"
+        )
+    )
 
 
 def _record_child_model_mismatch(state: dict[str, Any], agent_id: str, source: str) -> None:
@@ -1469,7 +1515,23 @@ def _session_states(session_id: Any) -> list[dict[str, Any]]:
         paths = heapq.nlargest(100, itertools.islice(eligible, 2000), key=lambda item: item.stat().st_mtime_ns)
     except OSError:
         return []
-    return [state for path in paths if (state := _load_state_path(path)) is not None]
+    states: list[dict[str, Any]] = []
+    owners: dict[tuple[str, str], tuple[int, bool]] = {}
+    for path in paths:
+        state = _load_state_path(path)
+        if state is None:
+            continue
+        key = (str(state.get("session_id") or ""), str(state.get("turn_id") or ""))
+        expected = _state_path({"session_id": key[0], "turn_id": key[1]})
+        exact = path == expected
+        prior = owners.get(key)
+        if prior is None:
+            owners[key] = (len(states), exact)
+            states.append(state)
+        elif exact and not prior[1]:
+            states[prior[0]] = state
+            owners[key] = (prior[0], True)
+    return states
 
 
 def _state_for_agent(session_id: Any, agent_id: str) -> dict[str, Any] | None:
@@ -1487,7 +1549,14 @@ def _active_children_for_prompt(
     """Return the newest active direct-child scope for a non-parent turn."""
     event_turn = str(data.get("turn_id") or "")
     states = _session_states(data.get("session_id"))
-    if event_turn and any(event_turn == str(state.get("turn_id") or "") for state in states):
+    known_child_turn = any(
+        event_turn in _child_turn_ids(agent)
+        for state in states
+        for agent in state.get("agents", {}).values()
+    )
+    if event_turn and not known_child_turn and any(
+        event_turn == str(state.get("turn_id") or "") for state in states
+    ):
         return None
     for state in states:
         active = [
@@ -1496,7 +1565,6 @@ def _active_children_for_prompt(
             if (
                 agent.get("status") == "started"
                 and agent.get("correlation_mode") in {"direct_agent_id", "observed_agent_id"}
-                and not agent.get("child_turn_id")
             )
         ]
         if active:
@@ -1511,7 +1579,11 @@ def _record_child_prompt(data: dict[str, Any]) -> bool:
     state, active = scope
     observed_model = str(data.get("model") or "")
     observed_effort = str(data.get("model_reasoning_effort") or data.get("reasoning_effort") or "")
-    candidates = [
+    event_turn = str(data.get("turn_id") or "")
+    previously_bound = [
+        (agent_id, agent) for agent_id, agent in active if event_turn and event_turn in _child_turn_ids(agent)
+    ]
+    candidates = previously_bound or [
         (agent_id, agent)
         for agent_id, agent in active
         if agent.get("requested_model") == observed_model
@@ -1540,14 +1612,36 @@ def _record_child_prompt(data: dict[str, Any]) -> bool:
         return True
     agent_id, _ = candidates[0]
     agent = state["agents"][agent_id]
+    turn_ids = _child_turn_ids(agent)
+    if event_turn and event_turn not in turn_ids:
+        if len(turn_ids) >= MAX_CHILD_PROMPT_OBSERVATIONS:
+            agent["prompt_evidence_overflow"] = True
+        else:
+            turn_ids.append(event_turn)
+    observations = agent.setdefault("prompt_observations", [])
+    event_key = _child_prompt_event_key(data)
+    if not any(item.get("event_key") == event_key for item in observations):
+        if len(observations) >= MAX_CHILD_PROMPT_OBSERVATIONS:
+            agent["prompt_evidence_overflow"] = True
+        else:
+            observations.append({
+                "event_key": event_key,
+                "turn_id": event_turn or None,
+                "model": observed_model or None,
+                "effort": observed_effort or None,
+            })
     agent.update({
         "observed_model": observed_model or None,
         "observed_effort": observed_effort or None,
         "prompt_observed_model": observed_model or None,
         "prompt_observed_effort": observed_effort or None,
-        "child_turn_id": str(data.get("turn_id") or "") or None,
+        "child_turn_id": turn_ids[0] if turn_ids else None,
+        "child_turn_ids": turn_ids,
         "observed_at": int(time.time()),
-        "model_match": observed_model == agent.get("requested_model"),
+        "model_match": (
+            observed_model == agent.get("requested_model")
+            and (not observed_effort or observed_effort == agent.get("requested_effort"))
+        ),
     })
     if not agent["model_match"]:
         _record_child_model_mismatch(state, agent_id, "prompt")
@@ -2263,12 +2357,37 @@ def _reconcile_subagent_transcript(data: dict[str, Any], state: dict[str, Any]) 
     spawn_count = 0
     inheriting_spawns = 0
     pending_types: list[str] = []
-    agent_roles: dict[str, str] = {}
+    agent_roles: dict[str, str] = {
+        str(agent_id): str(agent.get("type") or "")
+        for agent_id, agent in state.get("agents", {}).items()
+        if str(agent_id) and str(agent.get("type") or "")
+    }
     spawn_calls: dict[str, str] = {}
     agent_paths: dict[str, str] = {}
     completed_ids: set[str] = set()
     structured_ids: set[str] = set()
-    id_pattern = re.compile(r'agent_(?:id|path)[\\\"]*\s*:\s*[\\\"]+([A-Za-z0-9-]+)')
+
+    def decoded_objects(payload: dict[str, Any]):
+        for text in _text_values(payload):
+            candidate = text.strip()
+            match = re.fullmatch(r"<subagent_notification>(.*)</subagent_notification>", candidate, re.S)
+            if match:
+                candidate = match.group(1)
+            try:
+                value = json.loads(candidate)
+            except json.JSONDecodeError:
+                # Older Codex notifications carried one surplus closing brace
+                # inside the host-owned wrapper. Accept only that exact legacy
+                # defect; never scan arbitrary surrounding tool text.
+                if match and candidate.endswith("}}}"):
+                    try:
+                        value = json.loads(candidate[:-1])
+                    except json.JSONDecodeError:
+                        continue
+                else:
+                    continue
+            if isinstance(value, dict):
+                yield value
 
     for line in lines:
         try:
@@ -2312,7 +2431,7 @@ def _reconcile_subagent_transcript(data: dict[str, Any], state: dict[str, Any]) 
         texts = list(_text_values(payload))
         joined = "\n".join(texts)
         transcript_role = spawn_compat.role_from_text(joined)
-        if "spawn_agent" in joined and transcript_role:
+        if payload.get("type") == "custom_tool_call" and "spawn_agent" in joined and transcript_role:
             role = transcript_role
             completed_role_counts: dict[str, int] = {}
             for completed_id in completed_ids:
@@ -2333,21 +2452,31 @@ def _reconcile_subagent_transcript(data: dict[str, Any], state: dict[str, Any]) 
             if ordering_violation:
                 state["violations"].append(f"ordering_violation:{staged_plan['mode']}:{role}")
             continue
+        if payload.get("type") == "function_call_output":
+            for value in decoded_objects(payload):
+                agent_id = str(value.get("agent_id") or "")
+                if pending_types and agent_id:
+                    role = pending_types.pop(0)
+                    agent_roles.setdefault(agent_id, role)
+            continue
         author = str(payload.get("author") or "")
         if payload.get("type") == "agent_message" and author in agent_paths:
             agent_id = agent_paths[author]
             completed_ids.add(agent_id)
             if _structured_return(joined):
                 structured_ids.add(agent_id)
-        for match in id_pattern.finditer(joined):
-            agent_id = match.group(1)
-            if pending_types and agent_id not in agent_roles:
-                agent_roles[agent_id] = pending_types.pop(0)
-        for agent_id in tuple(agent_roles):
-            if agent_id in joined and "completed" in joined:
-                completed_ids.add(agent_id)
-                if _structured_return(joined):
-                    structured_ids.add(agent_id)
+        if payload.get("type") in {"message", "agent_message"}:
+            for value in decoded_objects(payload):
+                agent_id = str(value.get("agent_path") or value.get("agent_id") or "")
+                status = value.get("status")
+                message = status.get("completed") if isinstance(status, dict) else None
+                if pending_types and agent_id:
+                    role = pending_types.pop(0)
+                    agent_roles.setdefault(agent_id, role)
+                if agent_id in agent_roles and isinstance(message, str):
+                    completed_ids.add(agent_id)
+                    if _structured_return(message):
+                        structured_ids.add(agent_id)
 
     if spawn_count > 0:
         if inheriting_spawns != spawn_count:
@@ -2361,10 +2490,13 @@ def _reconcile_subagent_transcript(data: dict[str, Any], state: dict[str, Any]) 
         if agent_id not in state["agent_ids"]:
             state["agent_ids"].append(agent_id)
         existing = state["agents"].get(agent_id, {})
+        transcript_complete = agent_id in completed_ids and agent_id in structured_ids
         state["agents"][agent_id] = {
             **existing,
             "type": role,
-            "status": "completed" if agent_id in completed_ids and agent_id in structured_ids else "started",
+            "status": "completed" if transcript_complete else existing.get("status", "started"),
+            "completion_structured": True if transcript_complete else bool(existing.get("completion_structured")),
+            "completion_source": "transcript" if transcript_complete else existing.get("completion_source"),
         }
         if plan["mode"] == "routing_council" and existing.get("phase") == "execution":
             plan["execution_agent_id"] = agent_id
@@ -2618,6 +2750,10 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             "observed_effort": None,
             "prompt_observed_model": None,
             "prompt_observed_effort": None,
+            "prompt_observations": [],
+            "prompt_evidence_overflow": False,
+            "child_turn_id": None,
+            "child_turn_ids": [],
             "stop_observed_model": None,
             "stop_observed_effort": None,
             "model_evidence_consistent": False,
@@ -2701,7 +2837,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             else:
                 state["verification_unobservable_attempts"] = state.get("verification_unobservable_attempts", 0) + 1
                 state["last_unobservable_verification_generation"] = state.get("mutation_generation", 0)
-        _write_state(data, state)
+        _write_existing_state(data, state)
         return None
 
     if event == "SubagentStop":
@@ -2742,6 +2878,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         else:
             target["model_evidence_consistent"] = _model_evidence_consistent(target)
         target["completion_structured"] = required
+        target["completion_source"] = "subagent_stop" if required else None
         if required:
             if role not in state["subagents_completed"]:
                 state["subagents_completed"].append(role)
@@ -2844,6 +2981,17 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
                     ),
                 }
         _write_existing_state(data, state)
+        if required and state.get("parent_stop_observed") and state.get("status") == "FAILED_OPEN":
+            state["status"] = "RUNNING"
+            state.pop("failed_open_problems", None)
+            _write_existing_state(data, state)
+            return _handle_unlocked({
+                "hook_event_name": "Stop",
+                "session_id": state.get("session_id"),
+                "turn_id": state.get("turn_id"),
+                "stop_hook_active": False,
+                "late_child_recheck": True,
+            })
         if route_up_requested and not route_up:
             return {
                 "continue": True,
@@ -2864,8 +3012,11 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         return {"continue": True}
 
     if event == "Stop":
-        if state.get("status") in {"COMPLETE", "FAILED_OPEN"}:
+        if state.get("status") == "COMPLETE" or (
+            state.get("status") == "FAILED_OPEN" and not data.get("late_child_recheck")
+        ):
             return {"continue": True}
+        state["parent_stop_observed"] = True
         state["status"] = "VERIFYING"
         _reconcile_subagent_transcript(data, state)
         _reconcile_verification_transcript(data, state)
@@ -2874,7 +3025,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         plan = decision["orchestration"]
         completed_counts: dict[str, int] = {}
         for agent in state.get("agents", {}).values():
-            if agent.get("status") == "completed":
+            if _completion_is_trustworthy(agent):
                 role = str(agent.get("type") or "")
                 completed_counts[role] = completed_counts.get(role, 0) + 1
         for role, count in plan["required_agents"].items():
@@ -2943,7 +3094,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
                 else "root_owned"
             )
             state["failed_open_problems"] = [verification_problem]
-            _write_state(data, state)
+            _write_existing_state(data, state)
             return {"continue": True}
         if problems and not data.get("stop_hook_active"):
             # Advisory instead of a hard block. Codex turns a Stop-hook `block` reason into a
@@ -2953,7 +3104,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             state["status"] = "FAILED_OPEN"
             state["violations"].extend(problems)
             state["failed_open_problems"] = problems
-            _write_state(data, state)
+            _write_existing_state(data, state)
             return {
                 "continue": True,
                 "systemMessage": "Router completion gate (advisory): " + "; ".join(problems) + ".",
@@ -2961,7 +3112,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         state["status"] = "COMPLETE" if not problems else "FAILED_OPEN"
         if problems:
             state["failed_open_problems"] = problems
-        _write_state(data, state)
+        _write_existing_state(data, state)
         return {"continue": True}
 
     return None

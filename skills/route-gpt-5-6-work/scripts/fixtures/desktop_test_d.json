@@ -1,0 +1,52 @@
+{
+  "provenance": "Sanitized from the real Codex Desktop Test D lifecycle for candidate f4e06d3. Identifiers and task text are synthetic; event order preserves the two genuine same-turn child prompts, parent Stop before child completion, and late matching SubagentStop emitted after the temporary plugin had been removed.",
+  "lifecycle_events": [
+    {
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "desktop-test-d-session",
+      "turn_id": "desktop-test-d-parent-turn",
+      "model": "gpt-5.6-luna",
+      "model_reasoning_effort": "low",
+      "prompt": "Audit session authentication for privilege escalation vulnerabilities."
+    },
+    {
+      "hook_event_name": "SubagentStart",
+      "session_id": "desktop-test-d-session",
+      "turn_id": "desktop-test-d-parent-turn",
+      "agent_id": "desktop-test-d-sol-child",
+      "agent_type": "default",
+      "model": "gpt-5.6-sol"
+    },
+    {
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "desktop-test-d-session",
+      "turn_id": "desktop-test-d-child-turn",
+      "model": "gpt-5.6-sol",
+      "prompt": "Perform the bounded authentication audit and return evidence."
+    },
+    {
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "desktop-test-d-session",
+      "turn_id": "desktop-test-d-child-turn",
+      "model": "gpt-5.6-sol",
+      "prompt": "Finish with Evidence, Verification, and Uncertainty headings."
+    },
+    {
+      "hook_event_name": "Stop",
+      "session_id": "desktop-test-d-session",
+      "turn_id": "desktop-test-d-parent-turn",
+      "model": "gpt-5.6-luna",
+      "stop_hook_active": false
+    },
+    {
+      "hook_event_name": "SubagentStop",
+      "session_id": "desktop-test-d-session",
+      "turn_id": "desktop-test-d-child-turn",
+      "agent_id": "desktop-test-d-sol-child",
+      "agent_type": "default",
+      "model": "gpt-5.6-sol",
+      "stop_hook_active": false,
+      "last_assistant_message": "Evidence: bounded authentication audit completed\nVerification: findings checked against the scoped source\nUncertainty: no runtime exploit test was performed"
+    }
+  ]
+}
