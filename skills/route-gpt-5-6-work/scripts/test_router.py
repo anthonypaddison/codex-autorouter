@@ -182,6 +182,241 @@ class RouterTests(unittest.TestCase):
         transcript.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
         return transcript
 
+    def _ledger(self, session: str, turn: str) -> dict:
+        return json.loads((Path(self.temp.name) / f"{session}--{turn}.json").read_text(encoding="utf-8"))
+
+    def _patch_event(self, session: str, turn: str, patches: list[tuple[str, str]]) -> dict:
+        body = ["*** Begin Patch"]
+        for path, changed_line in patches:
+            body.extend((f"*** Update File: {path}", "@@", f"-old", f"+{changed_line}"))
+        body.append("*** End Patch")
+        patch = "\n".join(body)
+        return {
+            "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+            "tool_name": "exec",
+            "tool_input": {"command": f"const patch = {json.dumps(patch)}; text(await tools.apply_patch(patch));"},
+            "tool_response": [{"type": "input_text", "text": "{}"}],
+        }
+
+    def _verification_event(
+        self, session: str, turn: str, command: str = "git diff --check", exit_code: int = 0,
+    ) -> dict:
+        nested = (
+            f"const r = await tools.exec_command({{cmd:{json.dumps(command)}}}); "
+            "text(JSON.stringify({exit_code:r.exit_code,output:r.output}));"
+        )
+        return {
+            "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+            "tool_name": "exec", "tool_input": {"command": nested},
+            "tool_response": [
+                {"type": "input_text", "text": "Script completed\nOutput:\n"},
+                {"type": "input_text", "text": json.dumps({"exit_code": exit_code, "output": ""})},
+            ],
+        }
+
+    def _run_mutation_lifecycle(
+        self,
+        session: str,
+        prompt: str,
+        mutation_events: list[dict],
+        verification_events: list[dict],
+        *,
+        model: str = "gpt-5.6-luna",
+    ) -> dict:
+        turn = "t1"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+            "model": model, "model_reasoning_effort": "low", "prompt": prompt,
+        })
+        for event in mutation_events + verification_events:
+            router_hook.handle(event)
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
+            "stop_hook_active": False,
+        })
+        return self._ledger(session, turn)
+
+    def test_desktop_b_to_b2_documentation_verification_lifecycle(self) -> None:
+        fixture = json.loads(
+            (Path(__file__).parent / "fixtures" / "desktop_test_b2_verification.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        for event in fixture["turn_b"]["events"]:
+            router_hook.handle(event)
+        turn_b = self._ledger(fixture["turn_b"]["session_id"], fixture["turn_b"]["turn_id"])
+        self.assertEqual("COMPLETE", turn_b["status"])
+        self.assertTrue(turn_b["decision"]["requires_clarification"])
+        self.assertEqual(0, turn_b["mutations"])
+
+        for event in fixture["turn_b2"]["events"]:
+            router_hook.handle(event)
+        turn_b2 = self._ledger(fixture["turn_b2"]["session_id"], fixture["turn_b2"]["turn_id"])
+        profile = turn_b2["decision"]["task_profile"]
+        self.assertEqual({
+            "mutation": True,
+            "clear_spec": True,
+            "underspecified_mutation": False,
+            "requires_clarification": False,
+            "route": "current",
+            "mode": "direct",
+            "child_count": 0,
+        }, {
+            "mutation": profile["mutation"],
+            "clear_spec": profile["clear_spec"],
+            "underspecified_mutation": profile["underspecified_mutation"],
+            "requires_clarification": turn_b2["decision"]["requires_clarification"],
+            "route": turn_b2["decision"]["route"],
+            "mode": turn_b2["decision"]["orchestration"]["mode"],
+            "child_count": turn_b2["telemetry"]["child_count"],
+        })
+        self.assertEqual(1, turn_b2["mutations"])
+        self.assertEqual(1, turn_b2["mutation_generation"])
+        self.assertEqual(1, turn_b2["verified_generation"])
+        self.assertEqual(["/workspace/README.md"], turn_b2.get("changed_files"))
+        self.assertEqual("documentation_only", turn_b2.get("mutation_surface"))
+        self.assertEqual("diff_check", turn_b2.get("observed_verification"))
+        self.assertEqual("COMPLETE", turn_b2["status"])
+
+    def test_documentation_diff_check_generation_order_and_result(self) -> None:
+        prompt = "Update README.md so the supported versions are stated as Python 3.10–3.14."
+        cases = (
+            ("docs-no-check", ["mutation"], "FAILED_OPEN"),
+            ("docs-stale-check", ["verification", "mutation"], "FAILED_OPEN"),
+            ("docs-failed-check", ["mutation", "failed_verification"], "FAILED_OPEN"),
+            ("docs-post-check", ["mutation", "verification"], "COMPLETE"),
+        )
+        for session, order, expected in cases:
+            with self.subTest(session=session):
+                turn = "t1"
+                router_hook.handle({
+                    "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+                    "model": "gpt-5.6-luna", "model_reasoning_effort": "low", "prompt": prompt,
+                })
+                for item in order:
+                    if item == "mutation":
+                        event = self._patch_event(session, turn, [("/workspace/README.md", "new wording")])
+                    else:
+                        event = self._verification_event(
+                            session, turn, exit_code=1 if item == "failed_verification" else 0
+                        )
+                    router_hook.handle(event)
+                router_hook.handle({
+                    "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
+                    "stop_hook_active": False,
+                })
+                ledger = self._ledger(session, turn)
+                self.assertEqual(expected, ledger["status"])
+                if expected == "COMPLETE":
+                    self.assertEqual(ledger["mutation_generation"], ledger["verified_generation"])
+
+    def test_diff_check_requires_actual_low_risk_documentation_surface(self) -> None:
+        cases = (
+            ("readme", [("/workspace/README.md", "plain wording")], "documentation_only", "COMPLETE"),
+            ("ordinary-doc", [("/workspace/docs/guide.md", "plain wording")], "documentation_only", "COMPLETE"),
+            ("mixed", [("/workspace/README.md", "plain wording"), ("/workspace/app.py", "print('x')")], "non_documentation", "FAILED_OPEN"),
+            ("python", [("/workspace/app.py", "print('x')")], "non_documentation", "FAILED_OPEN"),
+            ("config", [("/workspace/config.toml", "enabled = true")], "non_documentation", "FAILED_OPEN"),
+            ("runbook", [("/workspace/docs/production-runbook.md", "skip backups")], "high_consequence_documentation", "FAILED_OPEN"),
+            ("runbook-directory", [("/workspace/docs/runbooks/database.md", "skip backups")], "high_consequence_documentation", "FAILED_OPEN"),
+            ("generated-directory", [("/workspace/docs/generated/guide.md", "generated output")], "high_consequence_documentation", "FAILED_OPEN"),
+            ("security-policy", [("/workspace/SECURITY.md", "reporting disabled")], "high_consequence_documentation", "FAILED_OPEN"),
+            ("security-code", [("/workspace/auth.py", "allow_admin = True")], "non_documentation", "FAILED_OPEN"),
+            ("frontmatter", [("/workspace/docs/page.md", "title: machine value")], "machine_consumed_documentation", "FAILED_OPEN"),
+        )
+        prompt = "Apply the exact requested wording change."
+        for name, patches, surface, expected in cases:
+            with self.subTest(name=name):
+                session = f"surface-{name}"
+                turn = "t1"
+                ledger = self._run_mutation_lifecycle(
+                    session,
+                    prompt,
+                    [self._patch_event(session, turn, patches)],
+                    [self._verification_event(session, turn)],
+                    model="gpt-5.6-sol",
+                )
+                self.assertEqual(surface, ledger.get("mutation_surface"))
+                self.assertEqual(expected, ledger["status"])
+
+    def test_unknown_mutation_surface_cannot_use_diff_check(self) -> None:
+        session = "surface-unknown"
+        turn = "t1"
+        unknown = {
+            "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+            "tool_name": "Bash", "tool_input": {"command": "touch docs/guide.md"},
+            "tool_response": {"exit_code": 0},
+        }
+        ledger = self._run_mutation_lifecycle(
+            session,
+            "Apply the exact requested wording change.",
+            [unknown],
+            [self._verification_event(session, turn)],
+            model="gpt-5.6-sol",
+        )
+        self.assertEqual("unknown", ledger.get("mutation_surface"))
+        self.assertEqual("FAILED_OPEN", ledger["status"])
+
+    def test_documentation_move_to_executable_surface_cannot_use_diff_check(self) -> None:
+        session = "surface-doc-move-to-code"
+        turn = "t1"
+        patch = (
+            "*** Begin Patch\n"
+            "*** Update File: /workspace/README.md\n"
+            "*** Move to: /workspace/app.py\n"
+            "@@\n-old\n+new\n"
+            "*** End Patch"
+        )
+        mutation = {
+            "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+            "tool_name": "exec",
+            "tool_input": {"command": f"const patch = {json.dumps(patch)}; text(await tools.apply_patch(patch));"},
+            "tool_response": [{"type": "input_text", "text": "{}"}],
+        }
+        ledger = self._run_mutation_lifecycle(
+            session,
+            "Move the documentation into app.py.",
+            [mutation],
+            [self._verification_event(session, turn)],
+            model="gpt-5.6-sol",
+        )
+        self.assertEqual("non_documentation", ledger.get("mutation_surface"))
+        self.assertEqual("FAILED_OPEN", ledger["status"])
+
+    def test_harmless_readme_security_wording_can_use_documentation_verification(self) -> None:
+        session = "surface-readme-oauth"
+        turn = "t1"
+        ledger = self._run_mutation_lifecycle(
+            session,
+            "Update README.md so the glossary calls the mechanism OAuth.",
+            [self._patch_event(session, turn, [("/workspace/README.md", "The mechanism is called OAuth.")])],
+            [self._verification_event(session, turn, "git -C /workspace diff --check")],
+            model="gpt-5.6-sol",
+        )
+        self.assertEqual("documentation_only", ledger.get("mutation_surface"))
+        self.assertEqual("COMPLETE", ledger["status"])
+
+    def test_code_mutation_still_requires_strong_verification(self) -> None:
+        session = "surface-code-strong"
+        turn = "t1"
+        patch = self._patch_event(session, turn, [("/workspace/app.py", "print('fixed')")])
+        diff_only = self._run_mutation_lifecycle(
+            session, "Fix app.py.", [patch], [self._verification_event(session, turn)], model="gpt-5.6-sol"
+        )
+        self.assertEqual("FAILED_OPEN", diff_only["status"])
+
+        session = "surface-code-tested"
+        patch = self._patch_event(session, turn, [("/workspace/app.py", "print('fixed')")])
+        tested = self._run_mutation_lifecycle(
+            session,
+            "Fix app.py.",
+            [patch],
+            [self._verification_event(session, turn, "python3 -m unittest -q")],
+            model="gpt-5.6-sol",
+        )
+        self.assertEqual("non_documentation", tested.get("mutation_surface"))
+        self.assertEqual("COMPLETE", tested["status"])
+
     def test_route_cases(self) -> None:
         self.assertGreaterEqual(len(CASES), 40)
         for prompt, expected in CASES:
@@ -1668,6 +1903,15 @@ class RouterTests(unittest.TestCase):
         self.assertTrue(router_hook._is_verification("uv run python scripts/check-output.py fixture.json"))
         self.assertFalse(router_hook._is_verification("python3 scripts/deploy.py"))
         self.assertFalse(router_hook._is_verification("python3 scripts/generate-fixtures.py"))
+        self.assertTrue(router_hook._is_verification("git diff --check"))
+        self.assertTrue(router_hook._is_verification("git -C /workspace diff --check"))
+        self.assertFalse(router_hook._is_verification("git diff"))
+        self.assertFalse(router_hook._is_verification("echo git diff --check"))
+        self.assertFalse(router_hook._is_verification("python3 -c 'print(\"git diff --check\")'"))
+        self.assertFalse(router_hook._is_verification("git diff --check || true"))
+        self.assertFalse(router_hook._is_verification("git diff --check; true"))
+        self.assertFalse(router_hook._is_verification("git diff --check | cat"))
+        self.assertTrue(router_hook._is_verification("rg -n Python README.md && git diff --check && git status --short"))
 
     def test_transcript_custom_validator_settles_the_latest_mutation(self) -> None:
         session = "transcript-custom-validator"

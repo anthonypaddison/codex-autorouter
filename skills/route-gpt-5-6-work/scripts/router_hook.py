@@ -1787,7 +1787,92 @@ def _is_mutation(tool: str, command: str) -> bool:
     return any(mutation.search(candidate) for candidate in _command_candidates(command))
 
 
-def _is_verification(command: str) -> bool:
+def _mutation_evidence(data: dict[str, Any], tool: str, command: str) -> tuple[list[str], str]:
+    """Derive a conservative changed surface from trusted mutation tool input."""
+    tool_input = data.get("tool_input")
+    payloads = [command]
+    if isinstance(tool_input, dict):
+        payloads.extend(
+            str(tool_input.get(key) or "")
+            for key in ("patch", "content", "old_string", "new_string")
+        )
+    normalized = "\n".join(payloads).replace("\\r\\n", "\n").replace("\\n", "\n")
+    paths: list[str] = []
+    for match in re.finditer(
+        r"(?m)^\*\*\* (?:(?:Add|Update|Delete) File|Move to): (.+?)\s*$",
+        normalized,
+    ):
+        paths.append(match.group(1).strip().strip("\"'"))
+    if isinstance(tool_input, dict) and tool in {"Edit", "Write", "apply_patch"}:
+        for key in ("file_path", "path"):
+            value = tool_input.get(key)
+            if isinstance(value, str) and value.strip():
+                paths.append(value.strip())
+    paths = list(dict.fromkeys(path.replace("\\", "/") for path in paths if path and path != "/dev/null"))
+    if not paths:
+        return [], "unknown"
+
+    machine_content = bool(re.search(
+        r"(?m)^[+-](?:---\s*$|[a-z][a-z0-9_.-]*:\s*\S)",
+        normalized,
+        re.I,
+    ))
+    categories: list[str] = []
+    for path in paths:
+        lowered = path.lower()
+        parts = [part for part in lowered.split("/") if part]
+        name = parts[-1] if parts else lowered
+        is_readme = name.startswith("readme") and name.endswith(".md")
+        is_docs_markdown = "docs" in parts and name.endswith(".md")
+        if name == "security.md":
+            categories.append("high_consequence_documentation")
+            continue
+        if not (is_readme or is_docs_markdown):
+            categories.append("non_documentation")
+            continue
+        if re.search(
+            r"(?:^|[/\-_.])(security|policy|runbooks?|playbooks?|production|deployment|operations?|incident|"
+            r"disaster|rollback|manifest|generated)(?:[/\-_.]|$)",
+            lowered,
+            re.I,
+        ):
+            categories.append("high_consequence_documentation")
+        elif machine_content:
+            categories.append("machine_consumed_documentation")
+        else:
+            categories.append("documentation_only")
+
+    if "non_documentation" in categories:
+        surface = "non_documentation"
+    elif "high_consequence_documentation" in categories:
+        surface = "high_consequence_documentation"
+    elif "machine_consumed_documentation" in categories:
+        surface = "machine_consumed_documentation"
+    else:
+        surface = "documentation_only"
+    return paths, surface
+
+
+def _merge_mutation_surface(state: dict[str, Any], paths: list[str], surface: str) -> None:
+    state["changed_files"] = list(dict.fromkeys(state.get("changed_files", []) + paths))
+    current = str(state.get("mutation_surface") or "none")
+    surfaces = {current, surface} - {"none"}
+    if "non_documentation" in surfaces:
+        combined = "non_documentation"
+    elif "unknown" in surfaces:
+        combined = "unknown"
+    elif "high_consequence_documentation" in surfaces:
+        combined = "high_consequence_documentation"
+    elif "machine_consumed_documentation" in surfaces:
+        combined = "machine_consumed_documentation"
+    elif surfaces == {"documentation_only"}:
+        combined = "documentation_only"
+    else:
+        combined = "unknown"
+    state["mutation_surface"] = combined
+
+
+def _verification_kind(command: str) -> str | None:
     segments = [
         segment
         for candidate in _command_candidates(command)
@@ -1805,14 +1890,44 @@ def _is_verification(command: str) -> bool:
         r"[^\s]*quick_validate\.py\b)",
         re.I,
     )
-    return any(verifier.search(segment) for segment in segments)
+    if any(verifier.search(segment) for segment in segments):
+        return "strong"
+    diff_check = re.compile(
+        r"^\s*git(?:\s+-C\s+(?:'[^']*'|\"[^\"]*\"|[^\s;&|]+))?\s+diff\s+--check\s*$",
+        re.I,
+    )
+    for candidate in _command_candidates(command):
+        if re.search(r"\|\||(?<!\|)\|(?!\|)|;|\n|\\n", candidate):
+            continue
+        if any(diff_check.fullmatch(part) for part in re.split(r"\s*&&\s*", candidate)):
+            return "diff_check"
+    return None
+
+
+def _is_verification(command: str) -> bool:
+    return _verification_kind(command) is not None
+
+
+def _verification_satisfies(state: dict[str, Any], kind: str) -> bool:
+    return kind == "strong" or (
+        kind == "diff_check" and state.get("mutation_surface") == "documentation_only"
+    )
 
 
 def _effective_verification(state: dict[str, Any]) -> str:
+    if state.get("mutation_surface") == "documentation_only":
+        return "successful post-mutation git diff --check"
     verification = str(state["decision"].get("verification") or "evidence check")
     if state.get("mutation_generation", 0) > 0 and verification in {"answer check", "evidence check"}:
         return "targeted tests or build"
     return verification
+
+
+def _ensure_verification_state(state: dict[str, Any]) -> None:
+    state.setdefault("changed_files", [])
+    state.setdefault("mutation_surface", "none")
+    state.setdefault("observed_verification", None)
+    state.setdefault("verification_requirement", _effective_verification(state))
 
 
 def _structured_return(message: str) -> bool:
@@ -2025,14 +2140,18 @@ def _reconcile_verification_transcript(data: dict[str, Any], state: dict[str, An
 
     last_mutation_sequence = -1
     successful_verification_sequence = -1
+    successful_verification_kind: str | None = None
     recovered_attempts = 0
     recovered_failures = 0
     successful_call_ids: list[str] = []
     for call_sequence, tool, command in calls.values():
         if _is_mutation(tool, command):
             last_mutation_sequence = max(last_mutation_sequence, call_sequence)
+            paths, surface = _mutation_evidence({"tool_input": command}, tool, command)
+            _merge_mutation_surface(state, paths, surface)
     for call_id, (call_sequence, _tool, command) in calls.items():
-        if not _is_verification(command) or call_id not in outputs:
+        kind = _verification_kind(command)
+        if kind is None or call_id not in outputs:
             continue
         output_sequence, output = outputs[call_id]
         status = _response_status(output)
@@ -2040,14 +2159,21 @@ def _reconcile_verification_transcript(data: dict[str, Any], state: dict[str, An
             recovered_attempts += 1
         if status is False:
             recovered_failures += 1
-        if status is True and call_sequence > last_mutation_sequence and output_sequence > call_sequence:
+        if (
+            status is True
+            and call_sequence > last_mutation_sequence
+            and output_sequence > call_sequence
+            and _verification_satisfies(state, kind)
+        ):
             successful_verification_sequence = max(successful_verification_sequence, output_sequence)
+            successful_verification_kind = kind
             successful_call_ids.append(call_id)
 
     if successful_verification_sequence >= 0:
         state["verified_generation"] = state.get("mutation_generation", 0)
         state["verification_successes"] = max(state.get("verification_successes", 0), 1)
         state["verification_observability"] = "transcript_exit_status"
+        state["observed_verification"] = successful_verification_kind
         state["reconciled_verification_from_transcript"] = True
         state["reconciled_verification_call_ids"] = sorted(set(
             state.get("reconciled_verification_call_ids", []) + successful_call_ids
@@ -2056,6 +2182,7 @@ def _reconcile_verification_transcript(data: dict[str, Any], state: dict[str, An
         state["verification_attempts"] = max(state.get("verification_attempts", 0), recovered_attempts)
     if recovered_failures:
         state["verification_failures"] = max(state.get("verification_failures", 0), recovered_failures)
+    state["verification_requirement"] = _effective_verification(state)
 
 
 def _reconcile_subagent_transcript(data: dict[str, Any], state: dict[str, Any]) -> None:
@@ -2312,12 +2439,16 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             "service_tier_inheritance_verified": True,
             "mutations": 0,
             "mutation_generation": 0,
+            "changed_files": [],
+            "mutation_surface": "none",
             "verification_attempts": 0,
             "verification_successes": 0,
             "verification_failures": 0,
             "verification_unobservable_attempts": 0,
             "last_unobservable_verification_generation": -1,
             "verified_generation": -1,
+            "observed_verification": None,
+            "verification_requirement": str(decision.get("verification") or "evidence check"),
             "continuations": 0,
             "violations": [],
             "escalations": [],
@@ -2352,6 +2483,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
     state = state or _read_state(data)
     if state is None:
         return {"continue": True} if event in {"Stop", "SubagentStop"} else None
+    _ensure_verification_state(state)
     if _migrate_state_identity(state):
         _write_existing_state(data, state)
 
@@ -2476,18 +2608,26 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
     if event == "PostToolUse":
         tool = str(data.get("tool_name") or "")
         command = _command_from(data)
-        if _is_mutation(tool, command):
+        mutation = _is_mutation(tool, command)
+        if mutation:
             state["mutations"] += 1
             state["mutation_generation"] = state.get("mutation_generation", 0) + 1
+            paths, surface = _mutation_evidence(data, tool, command)
+            _merge_mutation_surface(state, paths, surface)
+            state["verification_requirement"] = _effective_verification(state)
             agent_id = str(data.get("agent_id") or "")
             if state.get("agents", {}).get(agent_id, {}).get("phase") == "advisory":
                 state["violations"].append(f"advisor_mutation:{agent_id}")
-        if _is_verification(command):
+        verification_kind = _verification_kind(command)
+        if verification_kind is not None:
             state["verification_attempts"] += 1
             response_status = _response_status(data.get("tool_response"))
             if response_status is True:
                 state["verification_successes"] += 1
-                state["verified_generation"] = state.get("mutation_generation", 0)
+                state["observed_verification"] = verification_kind
+                if not mutation and _verification_satisfies(state, verification_kind):
+                    state["verified_generation"] = state.get("mutation_generation", 0)
+                    state["verification_observability"] = "tool_response_exit_status"
             elif response_status is False:
                 state["verification_failures"] = state.get("verification_failures", 0) + 1
             else:
@@ -2654,6 +2794,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         state["status"] = "VERIFYING"
         _reconcile_subagent_transcript(data, state)
         _reconcile_verification_transcript(data, state)
+        state["verification_requirement"] = _effective_verification(state)
         problems: list[str] = []
         plan = decision["orchestration"]
         completed_counts: dict[str, int] = {}
