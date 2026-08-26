@@ -1,0 +1,37 @@
+{
+  "provenance": "Sanitized from the read-only Autorouter operational audit. Prompt text, paths, session identifiers, and turn identifiers are synthetic; event shapes preserve one Desktop session, a terminal earlier Luna parent, a still-started Terra child, and a distinct later Luna parent UserPromptSubmit with no child identity and zero compatible children.",
+  "lifecycle_events": [
+    {
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "root-bypass-audit-session",
+      "turn_id": "earlier-parent-turn",
+      "model": "gpt-5.6-luna",
+      "model_reasoning_effort": "low",
+      "prompt": "Implement a bounded parser with targeted tests."
+    },
+    {
+      "hook_event_name": "SubagentStart",
+      "session_id": "root-bypass-audit-session",
+      "turn_id": "earlier-parent-turn",
+      "agent_id": "stale-terra-child",
+      "agent_type": "default",
+      "model": "gpt-5.6-terra",
+      "reasoning_effort": "medium"
+    },
+    {
+      "hook_event_name": "Stop",
+      "session_id": "root-bypass-audit-session",
+      "turn_id": "earlier-parent-turn",
+      "model": "gpt-5.6-luna",
+      "stop_hook_active": false
+    },
+    {
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "root-bypass-audit-session",
+      "turn_id": "later-parent-turn",
+      "model": "gpt-5.6-luna",
+      "model_reasoning_effort": "low",
+      "prompt": "Explain this helper in two sentences."
+    }
+  ]
+}

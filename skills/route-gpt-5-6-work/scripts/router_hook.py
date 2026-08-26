@@ -1583,7 +1583,13 @@ def _record_child_prompt(data: dict[str, Any]) -> bool:
     previously_bound = [
         (agent_id, agent) for agent_id, agent in active if event_turn and event_turn in _child_turn_ids(agent)
     ]
-    candidates = previously_bound or [
+    event_agent_id = str(data.get("agent_id") or "")
+    explicitly_identified = [
+        (agent_id, agent) for agent_id, agent in active if event_agent_id and agent_id == event_agent_id
+    ]
+    if state.get("status") in {"COMPLETE", "FAILED_OPEN"} and not previously_bound and not explicitly_identified:
+        return False
+    candidates = previously_bound or explicitly_identified or [
         (agent_id, agent)
         for agent_id, agent in active
         if agent.get("requested_model") == observed_model

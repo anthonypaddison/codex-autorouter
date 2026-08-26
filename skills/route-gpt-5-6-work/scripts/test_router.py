@@ -809,6 +809,157 @@ class RouterTests(unittest.TestCase):
             router_hook.ROOT_OBSERVATION_PATH.read_text(encoding="utf-8")
         )["root_model"])
 
+    def test_sanitized_audit_terminal_parent_stale_child_does_not_swallow_later_root(self) -> None:
+        fixture = json.loads(
+            (Path(__file__).parent / "fixtures" / "root_bypass_audit.json").read_text(encoding="utf-8")
+        )
+        for event in fixture["lifecycle_events"]:
+            router_hook.handle(event)
+
+        earlier = self._ledger("root-bypass-audit-session", "earlier-parent-turn")
+        later = self._ledger("root-bypass-audit-session", "later-parent-turn")
+        ledgers = sorted(Path(self.temp.name).glob("root-bypass-audit-session--*.json"))
+        observation = json.loads(router_hook.ROOT_OBSERVATION_PATH.read_text(encoding="utf-8"))
+
+        self.assertEqual("FAILED_OPEN", earlier["status"])
+        self.assertEqual("started", earlier["agents"]["stale-terra-child"]["status"])
+        self.assertEqual([], earlier.get("unmatched_child_prompts", []))
+        self.assertEqual(2, len(ledgers))
+        self.assertEqual({
+            "root-bypass-audit-session--earlier-parent-turn.json",
+            "root-bypass-audit-session--later-parent-turn.json",
+        }, {path.name for path in ledgers})
+        self.assertEqual("root-bypass-audit-session", later["session_id"])
+        self.assertEqual("later-parent-turn", later["turn_id"])
+        self.assertEqual("gpt-5.6-luna", later["decision"]["actual_root_model"])
+        self.assertEqual("current", later["decision"]["route"])
+        self.assertEqual("gpt-5.6-luna", observation["root_model"])
+
+    def test_terminal_stale_child_matrix_recovers_later_root_model(self) -> None:
+        cases = (
+            ("failed-terra-to-terra", "gpt-5.6-terra", "medium", "FAILED_OPEN", "gpt-5.6-terra"),
+            ("failed-sol-to-luna", "gpt-5.6-sol", "high", "FAILED_OPEN", "gpt-5.6-luna"),
+            ("complete-terra-to-luna", "gpt-5.6-terra", "medium", "COMPLETE", "gpt-5.6-luna"),
+        )
+        for session, child_model, child_effort, terminal_status, later_model in cases:
+            with self.subTest(session=session):
+                parent_prompt = (
+                    "Audit session authentication for privilege escalation vulnerabilities."
+                    if child_model.endswith("sol")
+                    else "Add pagination to this endpoint and include targeted tests."
+                )
+                router_hook.handle({
+                    "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "parent",
+                    "model": "gpt-5.6-luna", "model_reasoning_effort": "low", "prompt": parent_prompt,
+                })
+                router_hook.handle({
+                    "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "parent",
+                    "agent_id": "stale-child", "model": child_model, "reasoning_effort": child_effort,
+                })
+                router_hook.handle({
+                    "hook_event_name": "Stop", "session_id": session, "turn_id": "parent",
+                    "stop_hook_active": False,
+                })
+                parent_path = Path(self.temp.name) / f"{session}--parent.json"
+                parent = json.loads(parent_path.read_text(encoding="utf-8"))
+                if terminal_status == "COMPLETE":
+                    parent["status"] = "COMPLETE"
+                    parent_path.write_text(json.dumps(parent), encoding="utf-8")
+
+                router_hook.handle({
+                    "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "later-root",
+                    "model": later_model, "prompt": "Explain this helper in two sentences.",
+                })
+
+                parent = self._ledger(session, "parent")
+                later = self._ledger(session, "later-root")
+                self.assertEqual(terminal_status, parent["status"])
+                self.assertEqual("started", parent["agents"]["stale-child"]["status"])
+                self.assertEqual([], parent.get("unmatched_child_prompts", []))
+                self.assertEqual(later_model, later["decision"]["actual_root_model"])
+                self.assertEqual("later-root", later["turn_id"])
+                self.assertEqual(later_model, json.loads(
+                    router_hook.ROOT_OBSERVATION_PATH.read_text(encoding="utf-8")
+                )["root_model"])
+
+    def test_terminal_stale_child_does_not_affect_an_unrelated_session_root(self) -> None:
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "old-session", "turn_id": "parent",
+            "model": "gpt-5.6-luna", "prompt": "Add pagination and targeted tests.",
+        })
+        router_hook.handle({
+            "hook_event_name": "SubagentStart", "session_id": "old-session", "turn_id": "parent",
+            "agent_id": "stale-terra", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+        })
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": "old-session", "turn_id": "parent",
+            "stop_hook_active": False,
+        })
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "new-session", "turn_id": "root",
+            "model": "gpt-5.6-luna", "prompt": "Explain this helper in two sentences.",
+        })
+
+        self.assertEqual("root", self._ledger("new-session", "root")["turn_id"])
+        self.assertEqual([], self._ledger("old-session", "parent").get("unmatched_child_prompts", []))
+
+    def test_terminal_parent_keeps_a_known_wrong_model_child_turn_out_of_root_handling(self) -> None:
+        session = "terminal-known-child"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "parent",
+            "model": "gpt-5.6-luna", "prompt": "Audit session authentication for privilege escalation vulnerabilities.",
+        })
+        router_hook.handle({
+            "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "parent",
+            "agent_id": "sol-child", "model": "gpt-5.6-sol", "reasoning_effort": "high",
+        })
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "known-child-turn",
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Perform the bounded audit.",
+        })
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": "parent", "stop_hook_active": False,
+        })
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "known-child-turn",
+            "model": "gpt-5.6-terra", "model_reasoning_effort": "high", "prompt": "Finish the bounded audit.",
+        })
+
+        ledger = self._ledger(session, "parent")
+        self.assertEqual("FAILED_OPEN", ledger["status"])
+        self.assertIn("child_model_mismatch:sol-child:prompt", ledger["violations"])
+        self.assertFalse((Path(self.temp.name) / f"{session}--known-child-turn.json").exists())
+        self.assertEqual("gpt-5.6-luna", json.loads(
+            router_hook.ROOT_OBSERVATION_PATH.read_text(encoding="utf-8")
+        )["root_model"])
+
+    def test_terminal_parent_accepts_explicit_child_identity_despite_model_mismatch(self) -> None:
+        session = "terminal-explicit-child"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "parent",
+            "model": "gpt-5.6-luna", "prompt": "Add pagination and targeted tests.",
+        })
+        router_hook.handle({
+            "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "parent",
+            "agent_id": "terra-child", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+        })
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": "parent", "stop_hook_active": False,
+        })
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "late-child-turn",
+            "agent_id": "terra-child", "model": "gpt-5.6-sol", "model_reasoning_effort": "medium",
+            "prompt": "Complete the bounded child task.",
+        })
+
+        ledger = self._ledger(session, "parent")
+        self.assertEqual("late-child-turn", ledger["agents"]["terra-child"]["child_turn_id"])
+        self.assertIn("child_model_mismatch:terra-child:prompt", ledger["violations"])
+        self.assertFalse((Path(self.temp.name) / f"{session}--late-child-turn.json").exists())
+        self.assertEqual("gpt-5.6-luna", json.loads(
+            router_hook.ROOT_OBSERVATION_PATH.read_text(encoding="utf-8")
+        )["root_model"])
+
     def test_single_and_multi_prompt_children_support_terra_and_sol(self) -> None:
         cases = (
             ("terra-single", "gpt-5.6-terra", "medium", 1),
@@ -1314,6 +1465,9 @@ class RouterTests(unittest.TestCase):
         self.assertIsNone(child["prompt_observed_model"])
         self.assertEqual("gpt-5.6-sol", child["stop_observed_model"])
         self.assertFalse(child["model_evidence_consistent"])
+        self.assertEqual(1, len(ledger["unmatched_child_prompts"]))
+        self.assertEqual([], ledger["unmatched_child_prompts"][0]["candidate_agent_ids"])
+        self.assertEqual(["wrong-model"], ledger["unmatched_child_prompts"][0]["active_agent_ids"])
 
     def test_actual_root_model_matrix_prevents_downward_delegation(self) -> None:
         normal = "Implement a feature with multiple states, error handling, and targeted tests."
