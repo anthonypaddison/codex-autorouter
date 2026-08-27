@@ -1587,7 +1587,9 @@ def _record_child_prompt(data: dict[str, Any]) -> bool:
     explicitly_identified = [
         (agent_id, agent) for agent_id, agent in active if event_agent_id and agent_id == event_agent_id
     ]
-    if state.get("status") in {"COMPLETE", "FAILED_OPEN"} and not previously_bound and not explicitly_identified:
+    if (
+        state.get("status") in {"COMPLETE", "FAILED_OPEN"} or state.get("parent_stop_observed") is True
+    ) and not previously_bound and not explicitly_identified:
         return False
     candidates = previously_bound or explicitly_identified or [
         (agent_id, agent)

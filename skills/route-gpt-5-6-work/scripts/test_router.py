@@ -185,6 +185,15 @@ class RouterTests(unittest.TestCase):
     def _ledger(self, session: str, turn: str) -> dict:
         return json.loads((Path(self.temp.name) / f"{session}--{turn}.json").read_text(encoding="utf-8"))
 
+    def _retain_running_parent_after_stop(self, session: str, turn: str = "parent") -> dict:
+        path = Path(self.temp.name) / f"{session}--{turn}.json"
+        ledger = json.loads(path.read_text(encoding="utf-8"))
+        self.assertTrue(ledger["parent_stop_observed"])
+        self.assertEqual("started", ledger["agents"]["terra-child"]["status"])
+        ledger["status"] = "RUNNING"
+        path.write_text(json.dumps(ledger), encoding="utf-8")
+        return ledger
+
     def _patch_event(self, session: str, turn: str, patches: list[tuple[str, str]]) -> dict:
         body = ["*** Begin Patch"]
         for path, changed_line in patches:
@@ -834,6 +843,107 @@ class RouterTests(unittest.TestCase):
         self.assertEqual("gpt-5.6-luna", later["decision"]["actual_root_model"])
         self.assertEqual("current", later["decision"]["route"])
         self.assertEqual("gpt-5.6-luna", observation["root_model"])
+
+    def test_parent_stop_observed_running_parent_does_not_swallow_later_root(self) -> None:
+        for suffix, later_model in (("luna", "gpt-5.6-luna"), ("terra", "gpt-5.6-terra")):
+            with self.subTest(later_model=later_model):
+                session = f"parent-stop-running-{suffix}"
+                router_hook.handle({
+                    "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "parent",
+                    "model": "gpt-5.6-luna", "model_reasoning_effort": "low",
+                    "prompt": "Add pagination to this endpoint and include targeted tests.",
+                })
+                router_hook.handle({
+                    "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "parent",
+                    "agent_id": "terra-child", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+                })
+                router_hook.handle({
+                    "hook_event_name": "Stop", "session_id": session, "turn_id": "parent",
+                    "stop_hook_active": False,
+                })
+                self._retain_running_parent_after_stop(session)
+
+                router_hook.handle({
+                    "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "later-root",
+                    "model": later_model,
+                    "model_reasoning_effort": "medium" if later_model.endswith("terra") else "low",
+                    "prompt": "Explain this helper in two sentences.",
+                })
+
+                parent = self._ledger(session, "parent")
+                later_path = Path(self.temp.name) / f"{session}--later-root.json"
+                self.assertTrue(later_path.exists())
+                later = self._ledger(session, "later-root")
+                self.assertTrue(parent["parent_stop_observed"])
+                self.assertEqual("RUNNING", parent["status"])
+                self.assertEqual("started", parent["agents"]["terra-child"]["status"])
+                self.assertEqual([], parent["agents"]["terra-child"]["child_turn_ids"])
+                self.assertEqual([], parent.get("unmatched_child_prompts", []))
+                self.assertEqual([], parent.get("child_prompt_ambiguities", []))
+                self.assertEqual(later_model, later["decision"]["actual_root_model"])
+                self.assertEqual("current", later["decision"]["route"])
+                self.assertEqual(later_model, json.loads(
+                    router_hook.ROOT_OBSERVATION_PATH.read_text(encoding="utf-8")
+                )["root_model"])
+
+    def test_parent_stop_observed_preserves_previously_bound_multi_prompt_child(self) -> None:
+        session = "parent-stop-bound-child"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "parent",
+            "model": "gpt-5.6-luna", "prompt": "Add pagination and targeted tests.",
+        })
+        router_hook.handle({
+            "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "parent",
+            "agent_id": "terra-child", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+        })
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "child-turn",
+            "model": "gpt-5.6-terra", "model_reasoning_effort": "medium", "prompt": "First child prompt.",
+        })
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": "parent", "stop_hook_active": False,
+        })
+        self._retain_running_parent_after_stop(session)
+
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "child-turn",
+            "model": "gpt-5.6-terra", "model_reasoning_effort": "medium", "prompt": "Second child prompt.",
+        })
+
+        parent = self._ledger(session, "parent")
+        child = parent["agents"]["terra-child"]
+        self.assertEqual(["child-turn"], child["child_turn_ids"])
+        self.assertEqual(2, len(child["prompt_observations"]))
+        self.assertFalse((Path(self.temp.name) / f"{session}--child-turn.json").exists())
+
+    def test_parent_stop_observed_preserves_explicit_model_mismatched_child_without_receipt(self) -> None:
+        session = "parent-stop-explicit-child"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "parent",
+            "model": "gpt-5.6-luna", "prompt": "Add pagination and targeted tests.",
+        })
+        router_hook.handle({
+            "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "parent",
+            "agent_id": "terra-child", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+        })
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": "parent", "stop_hook_active": False,
+        })
+        self._retain_running_parent_after_stop(session)
+
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "late-child-turn",
+            "agent_id": "terra-child", "model": "gpt-5.6-sol", "model_reasoning_effort": "medium",
+            "prompt": "Complete the bounded child task.",
+        })
+
+        parent = self._ledger(session, "parent")
+        child = parent["agents"]["terra-child"]
+        self.assertEqual(["late-child-turn"], child["child_turn_ids"])
+        self.assertEqual("gpt-5.6-sol", child["prompt_observed_model"])
+        self.assertIn("child_model_mismatch:terra-child:prompt", parent["violations"])
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+        self.assertFalse((Path(self.temp.name) / f"{session}--late-child-turn.json").exists())
 
     def test_terminal_stale_child_matrix_recovers_later_root_model(self) -> None:
         cases = (
