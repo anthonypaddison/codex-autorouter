@@ -194,6 +194,29 @@ class RouterTests(unittest.TestCase):
         path.write_text(json.dumps(ledger), encoding="utf-8")
         return ledger
 
+    def _start_concurrent_terra_children(self, session: str) -> None:
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "parent",
+            "model": "gpt-5.6-luna", "model_reasoning_effort": "low",
+            "prompt": "In parallel, extract version numbers from two independent manifests.",
+        })
+        for agent_id in ("terra-a", "terra-b"):
+            router_hook.handle({
+                "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "parent",
+                "agent_id": agent_id, "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+            })
+
+    def _stop_terra_child(
+        self, session: str, turn_id: str, agent_id: str, model: str = "gpt-5.6-terra",
+    ) -> None:
+        router_hook.handle({
+            "hook_event_name": "SubagentStop", "session_id": session, "turn_id": turn_id,
+            "agent_id": agent_id, "model": model, "reasoning_effort": "medium",
+            "last_assistant_message": (
+                "Evidence: version extracted\nVerification: manifest checked\nUncertainty: none"
+            ),
+        })
+
     def _patch_event(self, session: str, turn: str, patches: list[tuple[str, str]]) -> dict:
         body = ["*** Begin Patch"]
         for path, changed_line in patches:
@@ -1478,6 +1501,200 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(2, len(ledger["child_prompt_ambiguities"]))
         self.assertTrue(all(len(item["candidate_agent_ids"]) == 2 for item in ledger["child_prompt_ambiguities"]))
         self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+
+    def test_authoritative_stop_resolves_one_ambiguity_and_allows_truthful_completion(self) -> None:
+        session = "resolved-ambiguity-stop"
+        self._start_concurrent_terra_children(session)
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "ambiguous-a",
+            "model": "gpt-5.6-terra", "model_reasoning_effort": "medium",
+            "prompt": "Extract the assigned manifest.",
+        })
+
+        initial = self._ledger(session, "parent")
+        ambiguity = initial["child_prompt_ambiguities"][0]
+        ambiguity_key = ambiguity.get("ambiguity_key")
+        violation = "ambiguous_child_prompt:ambiguous-a:gpt-5.6-terra"
+        self.assertTrue(ambiguity_key)
+        self.assertEqual("unresolved", ambiguity.get("resolution", {}).get("status"))
+        self.assertIn(violation, initial["violations"])
+        self.assertEqual({None}, {agent.get("child_turn_id") for agent in initial["agents"].values()})
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+
+        self._stop_terra_child(session, "ambiguous-a", "terra-a")
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "child-b",
+            "agent_id": "terra-b", "model": "gpt-5.6-terra", "model_reasoning_effort": "medium",
+            "prompt": "Extract the other assigned manifest.",
+        })
+        self._stop_terra_child(session, "child-b", "terra-b")
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": "parent", "stop_hook_active": False,
+        })
+
+        ledger = self._ledger(session, "parent")
+        resolved = ledger["child_prompt_ambiguities"][0]
+        self.assertEqual("COMPLETE", ledger["status"])
+        self.assertIn(violation, ledger["violations"])
+        self.assertEqual(ambiguity_key, resolved["ambiguity_key"])
+        self.assertEqual({
+            "status": "resolved",
+            "ambiguity_key": ambiguity_key,
+            "agent_id": "terra-a",
+            "source": "subagent_stop",
+            "turn_id": "ambiguous-a",
+            "observed_model": "gpt-5.6-terra",
+            "observed_effort": "medium",
+        }, {key: resolved["resolution"][key] for key in (
+            "status", "ambiguity_key", "agent_id", "source", "turn_id", "observed_model", "observed_effort",
+        )})
+        self.assertEqual(["ambiguous-a"], ledger["agents"]["terra-a"]["child_turn_ids"])
+        self.assertEqual(["child-b"], ledger["agents"]["terra-b"]["child_turn_ids"])
+        self.assertTrue(ledger["agents"]["terra-a"]["receipt_recorded"])
+        self.assertTrue(ledger["agents"]["terra-b"]["receipt_recorded"])
+        self.assertTrue(router_hook.CAPABILITY_PATH.exists())
+
+    def test_resolving_one_stable_ambiguity_key_does_not_clear_another(self) -> None:
+        session = "independent-ambiguities"
+        self._start_concurrent_terra_children(session)
+        for turn_id in ("ambiguous-a", "ambiguous-b"):
+            router_hook.handle({
+                "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn_id,
+                "model": "gpt-5.6-terra", "model_reasoning_effort": "medium",
+                "prompt": f"Extract the manifest for {turn_id}.",
+            })
+        initial = self._ledger(session, "parent")
+        keys = [item.get("ambiguity_key") for item in initial["child_prompt_ambiguities"]]
+        self.assertEqual(2, len(set(keys)))
+
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "ambiguous-a",
+            "agent_id": "terra-a", "model": "gpt-5.6-terra", "model_reasoning_effort": "medium",
+            "prompt": "Extract the manifest for ambiguous-a.",
+        })
+
+        ledger = self._ledger(session, "parent")
+        by_turn = {item["turn_id"]: item for item in ledger["child_prompt_ambiguities"]}
+        self.assertEqual(keys, [item["ambiguity_key"] for item in ledger["child_prompt_ambiguities"]])
+        self.assertEqual("resolved", by_turn["ambiguous-a"]["resolution"]["status"])
+        self.assertEqual("terra-a", by_turn["ambiguous-a"]["resolution"]["agent_id"])
+        self.assertEqual("unresolved", by_turn["ambiguous-b"]["resolution"]["status"])
+        self.assertEqual(["ambiguous-a"], ledger["agents"]["terra-a"]["child_turn_ids"])
+        self.assertEqual([], ledger["agents"]["terra-b"]["child_turn_ids"])
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+
+    def test_same_turn_ambiguity_occurrences_cannot_be_bulk_resolved(self) -> None:
+        session = "same-turn-ambiguities"
+        self._start_concurrent_terra_children(session)
+        ambiguous = {
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "shared-turn",
+            "model": "gpt-5.6-terra", "model_reasoning_effort": "medium",
+            "prompt": "Extract the assigned manifest.",
+        }
+        router_hook.handle(ambiguous)
+        router_hook.handle(ambiguous)
+        before = self._ledger(session, "parent")
+        keys = [item.get("ambiguity_key") for item in before["child_prompt_ambiguities"]]
+        self.assertEqual(2, len(set(keys)))
+
+        self._stop_terra_child(session, "shared-turn", "terra-a")
+
+        ledger = self._ledger(session, "parent")
+        self.assertEqual(keys, [item["ambiguity_key"] for item in ledger["child_prompt_ambiguities"]])
+        self.assertEqual(
+            {"unresolved"}, {item["resolution"]["status"] for item in ledger["child_prompt_ambiguities"]},
+        )
+        self.assertEqual([], ledger["agents"]["terra-a"]["child_turn_ids"])
+        self.assertFalse(ledger["agents"]["terra-a"]["receipt_recorded"])
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+
+    def test_legacy_unkeyed_ambiguity_remains_fatal_without_resolution(self) -> None:
+        session = "legacy-unkeyed-ambiguity"
+        self._start_concurrent_terra_children(session)
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "ambiguous-a",
+            "model": "gpt-5.6-terra", "model_reasoning_effort": "medium",
+            "prompt": "Extract the assigned manifest.",
+        })
+        path = Path(self.temp.name) / f"{session}--parent.json"
+        legacy = json.loads(path.read_text(encoding="utf-8"))
+        record = legacy["child_prompt_ambiguities"][0]
+        record.pop("ambiguity_key")
+        record.pop("resolution")
+        record.pop("violation")
+        path.write_text(json.dumps(legacy), encoding="utf-8")
+
+        try:
+            self._stop_terra_child(session, "ambiguous-a", "terra-a")
+        except KeyError as exc:
+            self.fail(f"legacy ambiguity must remain unresolved rather than crash: {exc}")
+
+        ledger = self._ledger(session, "parent")
+        self.assertNotIn("ambiguity_key", ledger["child_prompt_ambiguities"][0])
+        self.assertFalse(ledger["agents"]["terra-a"]["receipt_recorded"])
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+
+    def test_insufficient_or_contradictory_evidence_cannot_resolve_ambiguity(self) -> None:
+        cases = (
+            ("wrong-turn", "different-turn", "gpt-5.6-terra"),
+            ("wrong-model", "ambiguous-a", "gpt-5.6-sol"),
+        )
+        for suffix, stop_turn, stop_model in cases:
+            with self.subTest(suffix=suffix):
+                session = f"unresolved-{suffix}"
+                self._start_concurrent_terra_children(session)
+                router_hook.handle({
+                    "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "ambiguous-a",
+                    "model": "gpt-5.6-terra", "model_reasoning_effort": "medium",
+                    "prompt": "Extract the assigned manifest.",
+                })
+                self._stop_terra_child(session, stop_turn, "terra-a", stop_model)
+
+                ledger = self._ledger(session, "parent")
+                ambiguity = ledger["child_prompt_ambiguities"][0]
+                self.assertEqual("unresolved", ambiguity.get("resolution", {}).get("status"))
+                self.assertEqual([], ledger["agents"]["terra-a"]["child_turn_ids"])
+                self.assertFalse(ledger["agents"]["terra-a"]["receipt_recorded"])
+                self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+
+    def test_late_authoritative_resolution_is_idempotent_after_parent_stop(self) -> None:
+        session = "late-resolved-ambiguity"
+        self._start_concurrent_terra_children(session)
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "ambiguous-a",
+            "model": "gpt-5.6-terra", "model_reasoning_effort": "medium",
+            "prompt": "Extract the assigned manifest.",
+        })
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "child-b",
+            "agent_id": "terra-b", "model": "gpt-5.6-terra", "model_reasoning_effort": "medium",
+            "prompt": "Extract the other assigned manifest.",
+        })
+        self._stop_terra_child(session, "child-b", "terra-b")
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": "parent", "stop_hook_active": False,
+        })
+        failed = self._ledger(session, "parent")
+        self.assertEqual("FAILED_OPEN", failed["status"])
+        self.assertTrue(failed["parent_stop_observed"])
+        self.assertEqual(
+            "unresolved", failed["child_prompt_ambiguities"][0].get("resolution", {}).get("status"),
+        )
+
+        self._stop_terra_child(session, "ambiguous-a", "terra-a")
+        resolved = self._ledger(session, "parent")
+        resolution = dict(resolved["child_prompt_ambiguities"][0]["resolution"])
+        self.assertEqual("COMPLETE", resolved["status"])
+        self.assertEqual("resolved", resolution["status"])
+        self.assertTrue(resolved["agents"]["terra-a"]["receipt_recorded"])
+        self.assertEqual(1, len(resolved["agents"]["terra-a"]["prompt_observations"]))
+
+        self._stop_terra_child(session, "ambiguous-a", "terra-a")
+        replayed = self._ledger(session, "parent")
+        self.assertEqual("COMPLETE", replayed["status"])
+        self.assertEqual(resolution, replayed["child_prompt_ambiguities"][0]["resolution"])
+        self.assertEqual(1, len(replayed["agents"]["terra-a"]["prompt_observations"]))
+        self.assertEqual(1, replayed["agents"]["terra-a"]["duplicate_stops"])
 
     def test_concurrent_terra_and_sol_prompts_correlate_uniquely_by_model(self) -> None:
         session = "concurrent-distinct-models"

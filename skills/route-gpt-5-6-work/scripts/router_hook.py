@@ -580,6 +580,143 @@ def _child_prompt_event_key(data: dict[str, Any]) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
 
 
+def _next_ambiguity_key(state: dict[str, Any]) -> str:
+    sequence = int(state.get("ambiguity_sequence") or 0) + 1
+    state["ambiguity_sequence"] = sequence
+    return f"ambiguity-{sequence:06d}"
+
+
+def _ambiguity_violation(record: dict[str, Any]) -> str:
+    return str(record.get("violation") or (
+        f"ambiguous_child_prompt:{record.get('turn_id') or 'unknown'}:"
+        f"{record.get('observed_model') or 'unknown'}"
+    ))
+
+
+def _ambiguity_is_resolved(record: dict[str, Any]) -> bool:
+    resolution = record.get("resolution")
+    key = str(record.get("ambiguity_key") or "")
+    if not isinstance(resolution, dict) or not key:
+        return False
+    agent_id = str(resolution.get("agent_id") or "")
+    observed_effort = str(resolution.get("observed_effort") or "")
+    return bool(
+        resolution.get("status") == "resolved"
+        and resolution.get("ambiguity_key") == key
+        and agent_id in record.get("candidate_agent_ids", [])
+        and str(resolution.get("turn_id") or "") == str(record.get("turn_id") or "")
+        and str(resolution.get("observed_model") or "") == str(record.get("observed_model") or "")
+        and (
+            not observed_effort
+            or not record.get("observed_effort")
+            or observed_effort == str(record.get("observed_effort"))
+        )
+        and resolution.get("source") in {"user_prompt_submit", "subagent_stop"}
+    )
+
+
+def _has_unresolved_child_prompt_ambiguity(state: dict[str, Any]) -> bool:
+    records = [
+        record for record in state.get("child_prompt_ambiguities", []) if isinstance(record, dict)
+    ]
+    if any(not _ambiguity_is_resolved(record) for record in records):
+        return True
+    recorded_violations = {_ambiguity_violation(record) for record in records}
+    return any(
+        str(violation).startswith("ambiguous_child_prompt:")
+        and str(violation) not in recorded_violations
+        for violation in state.get("violations", [])
+    )
+
+
+def _bind_resolved_ambiguity(
+    state: dict[str, Any], agent_id: str, record: dict[str, Any],
+) -> None:
+    agent = state["agents"][agent_id]
+    event_turn = str(record.get("turn_id") or "")
+    observed_model = str(record.get("observed_model") or "")
+    observed_effort = str(record.get("observed_effort") or "")
+    turn_ids = _child_turn_ids(agent)
+    if event_turn and event_turn not in turn_ids:
+        if len(turn_ids) >= MAX_CHILD_PROMPT_OBSERVATIONS:
+            agent["prompt_evidence_overflow"] = True
+        else:
+            turn_ids.append(event_turn)
+    observations = agent.setdefault("prompt_observations", [])
+    event_key = f"resolved:{record['ambiguity_key']}"
+    if not any(item.get("event_key") == event_key for item in observations):
+        if len(observations) >= MAX_CHILD_PROMPT_OBSERVATIONS:
+            agent["prompt_evidence_overflow"] = True
+        else:
+            observations.append({
+                "event_key": event_key,
+                "turn_id": event_turn or None,
+                "model": observed_model or None,
+                "effort": observed_effort or None,
+            })
+    agent.update({
+        "observed_model": observed_model or None,
+        "observed_effort": observed_effort or None,
+        "prompt_observed_model": observed_model or None,
+        "prompt_observed_effort": observed_effort or None,
+        "child_turn_id": turn_ids[0] if turn_ids else None,
+        "child_turn_ids": turn_ids,
+        "observed_at": int(time.time()),
+        "model_match": (
+            observed_model == agent.get("requested_model")
+            and (not observed_effort or observed_effort == agent.get("requested_effort"))
+        ),
+    })
+
+
+def _resolve_child_prompt_ambiguity(
+    state: dict[str, Any], agent_id: str, event_turn: str, observed_model: str,
+    observed_effort: str, source: str, *, bind_observation: bool,
+) -> bool:
+    agent = state.get("agents", {}).get(agent_id, {})
+    if (
+        source not in {"user_prompt_submit", "subagent_stop"}
+        or not agent_id
+        or not event_turn
+        or not observed_model
+        or agent.get("correlation_mode") not in {"direct_agent_id", "observed_agent_id"}
+        or observed_model != agent.get("requested_model")
+        or agent.get("start_observed_model") not in {None, observed_model}
+        or (observed_effort and observed_effort != agent.get("requested_effort"))
+    ):
+        return False
+    matches = [
+        record for record in state.get("child_prompt_ambiguities", [])
+        if isinstance(record, dict)
+        and bool(str(record.get("ambiguity_key") or ""))
+        and not _ambiguity_is_resolved(record)
+        and str(record.get("turn_id") or "") == event_turn
+        and str(record.get("observed_model") or "") == observed_model
+        and agent_id in record.get("candidate_agent_ids", [])
+        and (
+            not observed_effort
+            or not record.get("observed_effort")
+            or str(record.get("observed_effort")) == observed_effort
+        )
+    ]
+    if len(matches) != 1:
+        return False
+    record = matches[0]
+    record["resolution"] = {
+        "status": "resolved",
+        "ambiguity_key": record["ambiguity_key"],
+        "agent_id": agent_id,
+        "source": source,
+        "turn_id": event_turn,
+        "observed_model": observed_model,
+        "observed_effort": observed_effort or None,
+        "timestamp": int(time.time()),
+    }
+    if bind_observation:
+        _bind_resolved_ambiguity(state, agent_id, record)
+    return True
+
+
 def _completion_is_trustworthy(agent: dict[str, Any]) -> bool:
     return bool(
         agent.get("status") == "completed"
@@ -612,6 +749,7 @@ def _record_capability(state: dict[str, Any], agent_id: str) -> bool:
         or requested_model not in spawn_compat.SUPPORTED_EFFORTS
         or observed_model != requested_model
         or not _model_evidence_consistent(agent)
+        or _has_unresolved_child_prompt_ambiguity(state)
         or not state.get("agent_attestations", {}).get(agent_id, {}).get("matched")
         or agent.get("receipt_recorded")
     ):
@@ -1609,8 +1747,13 @@ def _record_child_prompt(data: dict[str, Any]) -> bool:
             "timestamp": int(time.time()),
         }
         if candidates:
-            state.setdefault("child_prompt_ambiguities", []).append(record)
             violation = f"ambiguous_child_prompt:{turn_id or 'unknown'}:{observed_model or 'unknown'}"
+            record.update({
+                "ambiguity_key": _next_ambiguity_key(state),
+                "violation": violation,
+                "resolution": {"status": "unresolved"},
+            })
+            state.setdefault("child_prompt_ambiguities", []).append(record)
         else:
             state.setdefault("unmatched_child_prompts", []).append(record)
             violation = f"unmatched_child_prompt:{turn_id or 'unknown'}:{observed_model or 'unknown'}"
@@ -1620,6 +1763,11 @@ def _record_child_prompt(data: dict[str, Any]) -> bool:
         return True
     agent_id, _ = candidates[0]
     agent = state["agents"][agent_id]
+    if explicitly_identified:
+        _resolve_child_prompt_ambiguity(
+            state, agent_id, event_turn, observed_model, observed_effort,
+            "user_prompt_submit", bind_observation=False,
+        )
     turn_ids = _child_turn_ids(agent)
     if event_turn and event_turn not in turn_ids:
         if len(turn_ids) >= MAX_CHILD_PROMPT_OBSERVATIONS:
@@ -2884,6 +3032,15 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         ):
             _record_child_model_mismatch(state, target_id, "stop")
         else:
+            _resolve_child_prompt_ambiguity(
+                state,
+                target_id,
+                str(data.get("turn_id") or ""),
+                str(target.get("stop_observed_model") or ""),
+                str(target.get("stop_observed_effort") or ""),
+                "subagent_stop",
+                bind_observation=True,
+            )
             target["model_evidence_consistent"] = _model_evidence_consistent(target)
         target["completion_structured"] = required
         target["completion_source"] = "subagent_stop" if required else None
@@ -3052,8 +3209,8 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
                     problems.append("execute with the exact routing-council selected role")
         if any(item.startswith((
             "unexpected_agent:", "worker_cap_exceeded:", "ordering_violation:", "advisor_mutation:",
-            "child_model_mismatch:", "ambiguous_child_prompt:", "unmatched_child_prompt:",
-        )) for item in state["violations"]):
+            "child_model_mismatch:", "unmatched_child_prompt:",
+        )) for item in state["violations"]) or _has_unresolved_child_prompt_ambiguity(state):
             problems.append(
                 "resolve unexpected-agent, child-model, worker-cap, orchestration-order, or advisor-mutation violations"
             )
