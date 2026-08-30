@@ -507,6 +507,76 @@ class RouterTests(unittest.TestCase):
             "child_count": sum(decision["orchestration"]["required_agents"].values()),
         })
 
+    def test_sanitized_desktop_safe_command_regressions_stay_current(self) -> None:
+        prompts = (
+            (
+                "daily review",
+                "Run exactly this production research command once: cd /workspace/research && "
+                "python3 -m safe_research daily-review. Report only persisted bankroll evidence, "
+                "do not use any order API, and preserve zero real bets and zero external spend.",
+            ),
+            (
+                "bounded cycle",
+                "Run exactly this production research command once: cd /workspace/research && "
+                "python3 -m safe_research cycle. Do not modify strategy controls, do not use any "
+                "order API, and report the persisted cycle status. Market access must remain "
+                "delayed and read-only; real bets and external spend remain zero.",
+            ),
+        )
+        for name, prompt in prompts:
+            with self.subTest(name=name):
+                decision = router_hook.classify_prompt(prompt, "gpt-5.6-luna", "low")
+                profile = decision["task_profile"]
+                self.assertTrue(profile["clear_spec"])
+                self.assertFalse(profile["mutation"])
+                self.assertEqual("normal", profile["risk"])
+                self.assertIn("safe_bounded_command", profile["signals"])
+                self.assertEqual("current", decision["route"])
+                self.assertEqual("direct", decision["orchestration"]["mode"])
+                self.assertEqual({}, decision["orchestration"]["required_agents"])
+
+    def test_safe_command_safeguards_do_not_override_consequential_actions(self) -> None:
+        prompts = (
+            (
+                "contradictory order",
+                "Run exactly this read-only production command once: trade-cli inspect. Now place "
+                "this bet and submit the order using the live account; spend remains zero.",
+            ),
+            (
+                "money movement",
+                "Run exactly this production financial command once: treasury-cli transfer 500. "
+                "Move the money to the external account after checking the balance.",
+            ),
+            (
+                "production mutation",
+                "Run exactly this production command once: deploy-cli apply. Modify the live "
+                "service configuration and deploy it.",
+            ),
+            (
+                "destructive action",
+                "Run exactly this irreversible production command once: db-cli drop customer_data. "
+                "Delete the production customer database after export.",
+            ),
+            (
+                "inadequately bounded financial action",
+                "Use the production account to place live bets across suitable markets; choose "
+                "the stakes and submit whichever orders you judge best.",
+            ),
+            (
+                "high-risk judgment",
+                "Review current market conditions and decide which live bets to place with the "
+                "production account.",
+            ),
+        )
+        for name, prompt in prompts:
+            with self.subTest(name=name):
+                decision = router_hook.classify_prompt(prompt, "gpt-5.6-luna", "low")
+                profile = decision["task_profile"]
+                self.assertNotIn("safe_bounded_command", profile["signals"])
+                self.assertIn(profile["risk"], {"high", "critical"})
+                self.assertIn(decision["route"], {"gpt56_sol_owner", "gpt56_sol_deep"})
+                self.assertGreaterEqual(sum(decision["orchestration"]["required_agents"].values()), 1)
+
     def test_mutation_actionability_matrix(self) -> None:
         cases = (
             # prompt, mutation, clear spec, underspecified, clarification, route, children

@@ -136,6 +136,52 @@ ROUTING_UNCERTAINTY = re.compile(
 EXPLICIT_COUNCIL = re.compile(r"\b(?:independent\s+)?routing council\b", re.I)
 BROAD_PRODUCT = re.compile(r"\b(build|create|design|launch|make)\b.{0,30}\b(app|application|product|platform|saas|startup|mvp|marketplace)\b", re.I)
 CLEAR_SPEC = re.compile(r"\b(approved|specified|documented|exact|acceptance criteria|complete spec|existing pattern|fixed schema|provided design)\b", re.I)
+EXACT_ONCE_COMMAND = re.compile(
+    r"\b(?:run|execute)\s+(?:exactly\s+(?:this|the)|(?:this|the)\s+exact)\b"
+    r"[^:.;]{0,120}\bcommand\s+once\s*:",
+    re.I,
+)
+COMMAND_RESULT = re.compile(
+    r"\b(?:report|return|print|output|show|list|summari[sz]e)\b"
+    r"[^.;]{0,160}\b(?:evidence|status|result|output|records?|totals?|findings?)\b",
+    re.I,
+)
+READ_ONLY_GUARD = re.compile(
+    r"\bread[- ]only\b|\b(?:no|without)\s+(?:mutation|writes?|changes?)\b|"
+    r"\b(?:do\s+not|don['’]?t|never|must\s+not)\s+(?:modify|change|write|deploy|publish)\b",
+    re.I,
+)
+NO_ORDER_GUARD = re.compile(
+    r"\b(?:do\s+not|don['’]?t|never|must\s+not)\s+"
+    r"(?:(?:use|call|invoke|place|submit|execute)\s+)?(?:any\s+)?"
+    r"(?:orders?\s+api|orders?|bets?|trades?)\b|\bno[- ](?:order|bet|trade)\b",
+    re.I,
+)
+ZERO_SPEND_GUARD = re.compile(
+    r"\b(?:preserve|maintain)\s+zero\b[^.;]{0,100}\b(?:bets?|orders?|spend|purchases?)\b|"
+    r"\bzero\s+(?:real\s+)?(?:bets?|orders?|purchases?)\b|"
+    r"\bzero\s+(?:external\s+)?spend\b|"
+    r"\b(?:real\s+bets?(?:\s+and\s+external\s+spend)?|external\s+spend)\s+"
+    r"(?:must\s+)?remain(?:s)?\s+zero\b",
+    re.I,
+)
+CONSEQUENTIAL_ACTION = re.compile(
+    r"\b(?:place|submit|execute|send)\b[^.;]{0,48}\b(?:orders?|bets?|trades?)\b|"
+    r"\b(?:transfer|move|withdraw|deposit)\b[^.;]{0,60}\b(?:money|funds?|cash|balance|accounts?)\b|"
+    r"\bspend\b[^.;]{0,24}(?:£|\$|\d|\bmoney\b|\bfunds?\b)|"
+    r"\b(?:drop|truncate|wipe|purge|destroy|delete)\b[^.;]{0,60}"
+    r"\b(?:database|data|records?|customers?|tables?|schemas?|files?|clusters?|accounts?|services?)\b|"
+    r"\b(?:modify|update|change|configure|write|deploy|publish|release|merge|push)\b[^.;]{0,80}"
+    r"\b(?:production|prod|live|customers?|database|systems?|services?|configuration)\b|"
+    r"\b(?:production|prod|live|customers?|database|systems?|services?|configuration)\b"
+    r"[^.;]{0,80}\b(?:modify|update|change|configure|write|deploy|publish|release|merge|push)\b|"
+    r"\b(?:decide|choose|recommend)\b[^.;]{0,80}\b(?:orders?|bets?|trades?|stakes?|money movement)\b",
+    re.I,
+)
+DIRECT_NEGATION = re.compile(
+    r"\b(?:do\s+not|don['’]?t|never|must\s+not|without)\s+(?:\w+[ -]+){0,4}$",
+    re.I,
+)
 PRODUCT_AREA_PATTERNS = {
     "product_strategy": re.compile(r"\b(product strategy|roadmap|prioriti[sz]|mvp|market fit|positioning|pricing|portfolio|opportunity)\b", re.I),
     "user_research": re.compile(r"\b(user research|customer interviews?|usability|personas?|jobs to be done|jtbd|research findings?)\b", re.I),
@@ -336,7 +382,19 @@ def _has_concrete_so_outcome(text: str) -> bool:
     return False
 
 
-def _mutation_actionability(text: str, mutation: bool) -> tuple[bool, bool, bool]:
+def _has_consequential_action(text: str) -> bool:
+    """Recognise requested consequential action while respecting direct negation."""
+    for match in CONSEQUENTIAL_ACTION.finditer(text):
+        prefix = text[max(0, match.start() - 64):match.start()]
+        if DIRECT_NEGATION.search(prefix):
+            continue
+        return True
+    return False
+
+
+def _mutation_actionability(
+    text: str, mutation: bool, explicit_command_contract: bool = False
+) -> tuple[bool, bool, bool]:
     """Return clear-spec, underspecified-mutation, and unbound-continuation signals."""
     unbound_continuation = bool(
         CONTINUATION.match(text) or NATURAL_CONTINUATION.match(text) or REFERENTIAL_CONTINUATION.match(text)
@@ -346,7 +404,7 @@ def _mutation_actionability(text: str, mutation: bool) -> tuple[bool, bool, bool
         or CONCRETE_MUTATION_DEFECT.search(text)
         or _has_concrete_so_outcome(text)
     )
-    clear_spec = bool(CLEAR_SPEC.search(text)) or (mutation and concrete_outcome)
+    clear_spec = bool(CLEAR_SPEC.search(text)) or explicit_command_contract or (mutation and concrete_outcome)
     vague_referent = bool(VAGUE_MUTATION_REFERENT.search(text) or REFERENTIAL_CONTINUATION.match(text))
     bare_match = BARE_MUTATION_COMMAND.match(text)
     bare_target_only = bool(bare_match) and not concrete_outcome and not re.search(
@@ -962,11 +1020,13 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
         semantic_text,
         flags=re.I,
     )
+    explicit_command_contract = bool(EXACT_ONCE_COMMAND.search(text) and COMMAND_RESULT.search(text))
+    consequential_action = _has_consequential_action(text)
     security_subject = bool(SECURITY.search(semantic_text))
     review = bool(REVIEW.search(text))
     critical_review = bool(CRITICAL_REVIEW.search(text))
     low_stakes_surface = bool(LOW_STAKES_SURFACE.search(text))
-    destructive_external = bool(DESTRUCTIVE_OR_EXTERNAL.search(text))
+    destructive_external = bool(DESTRUCTIVE_OR_EXTERNAL.search(text)) or consequential_action
     regulatory = bool(PRIVACY_REGULATORY.search(text))
     deployment = bool(DEPLOYMENT.search(text))
     dependency_change = bool(DEPENDENCY_CHANGE.search(text))
@@ -976,7 +1036,7 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
     # Bare fixture values such as `billing-reliability` must not turn an
     # otherwise mechanical corpus job into a critical financial operation.
     nonpayment_consequence_text = re.sub(r"\b(?:payments?|billing)\b", "", semantic_text, flags=re.I)
-    consequence = (bool(HIGH_CONSEQUENCE.search(nonpayment_consequence_text)) and not low_stakes_surface) or (
+    consequence = consequential_action or (bool(HIGH_CONSEQUENCE.search(nonpayment_consequence_text)) and not low_stakes_surface) or (
         destructive_external and bool(DANGEROUS_TARGET.search(text))
     ) or regulatory
     owner_text = re.sub(r"\b(?:no|without)\s+(?:a\s+|an\s+|any\s+)?(?:planned\s+)?(?:migration|rewrite|redesign|refactor)\b", "", text, flags=re.I)
@@ -1019,7 +1079,9 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
     mutation = bool(MUTATION_INTENT.search(_mutation_intent_text(text))) or bool(
         re.match(r"^\s*make\s+(?:this|that|it)\s+better\s*[.!]*\s*$", text, re.I)
     )
-    clear_spec, underspecified_mutation, unbound_continuation = _mutation_actionability(text, mutation)
+    clear_spec, underspecified_mutation, unbound_continuation = _mutation_actionability(
+        text, mutation, explicit_command_contract
+    )
     security = security_subject and (
         bool(SECURITY_ACTION.search(text)) or mutation or consequence
     ) and not (bool(EXPLANATORY.search(text)) and not mutation and not review and not consequence)
@@ -1031,6 +1093,21 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
         and bool(PAYMENT_BEHAVIOR.search(payment_text))
         and "payments_billing" in product["areas"]
     )
+    guarded_command = bool(READ_ONLY_GUARD.search(text)) or bool(
+        NO_ORDER_GUARD.search(text) and ZERO_SPEND_GUARD.search(text)
+    )
+    safe_bounded_command = (
+        explicit_command_contract
+        and guarded_command
+        and not consequential_action
+        and not any((security_subject, regulatory, owner, ambiguity, debugging, payment_critical))
+    )
+    if safe_bounded_command:
+        # The domain can be consequential while the requested operation is not.
+        # Only a consistent, exact-once reporting contract earns this reduction.
+        consequence = False
+        destructive_external = False
+        deployment = False
 
     if batch and cheap_verify and not open_ended and not payment_critical and not consequence:
         # For fixed-schema corpora, example values are data, not the product
@@ -1151,6 +1228,7 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
             ("open_ended", open_ended), ("read_heavy", read_heavy), ("review", review), ("dependent", dependent),
             ("routing_uncertainty", explicit_uncertainty), ("broad_product", broad_vague_product),
             ("payment_critical", payment_critical), ("safe_mechanical", safe_mechanical),
+            ("consequential_action", consequential_action), ("safe_bounded_command", safe_bounded_command),
             ("underspecified_mutation", underspecified_mutation), ("unbound_continuation", unbound_continuation),
         ) if present],
     }
@@ -1160,6 +1238,11 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
         result["capability_target"] = route
         return result
 
+    if safe_bounded_command:
+        return _attach_plan(
+            _route("current", 0.96, "safe bounded command with explicit safeguards", "reported result check"),
+            profile,
+        )
     if security and (review or consequence):
         return choose("gpt56_sol_deep", 0.96, "security-sensitive deep analysis", "security evidence and targeted checks")
     if security:
