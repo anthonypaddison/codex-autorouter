@@ -22,7 +22,7 @@ Codex can retain the resolved, versioned hook command for an already-open task. 
 
 ## READY is runtime-bound
 
-`scripts/check_hooks.py` reports `READY` only after a Luna root observation and a genuine successful Terra or Sol escalation receipt for the same plugin version, Codex runtime/build, host type, platform, capability signature, and supported schema. A runtime/build change or unavailable runtime identity returns health to `DEGRADED` until normal work produces a fresh receipt. This is intentional; health checks never spend credits on an automatic probe.
+`scripts/check_hooks.py` reports `READY` only after a current-task Luna root observation and a genuine successful Terra or Sol escalation receipt for the same plugin content identity/version, at least one matching versioned Codex runtime/build identifier, host type, platform, capability signature, and supported schema. Another task's observation, missing current-task context, null runtime identity, a candidate change, or a receipt older than 30 days returns health to `DEGRADED`. Historical receipts remain auditable as `ESCALATION PREVIOUSLY OBSERVED`. This is intentional; health checks never spend credits on an automatic probe.
 
 ## Fast is reported, not UI-attested
 

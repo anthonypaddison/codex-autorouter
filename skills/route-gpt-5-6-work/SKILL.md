@@ -33,7 +33,7 @@ The router has three persistent preferences, changed with `python3 scripts/route
 
 When a user explicitly asks to set Token Saver, Balanced, or Max Quality, run the matching `routerctl profile` command and report the stored label. Do not ask them to choose a model or effort afterward. Treat the envelope's `routing_profile` fields as authoritative for an active task.
 
-Treat readiness failures as real deployment blockers. `scripts/check_hooks.py` reports `READY`, `DEGRADED`, or `UNAVAILABLE` from App Server discovery/trust, current `[agents].enabled`, the latest authoritative `UserPromptSubmit.model` observation, and a plugin/runtime-bound successful Terra/Sol capability receipt. It never runs a paid probe. A changed or unobservable runtime/build, unknown/non-Luna turn root, or missing receipt is `DEGRADED`; blocked hooks/plugin/subagents are `UNAVAILABLE`.
+Treat readiness failures as real deployment blockers. `scripts/check_hooks.py` reports `READY`, `DEGRADED`, or `UNAVAILABLE` from App Server discovery/trust, current `[agents].enabled`, the current task's authoritative `UserPromptSubmit.model` observation, and a non-stale plugin-candidate/runtime-bound successful Terra/Sol capability receipt. It never runs a paid probe. Another task's root, absent task context, a changed or unobservable versioned runtime/build, candidate mismatch, unknown/non-Luna turn root, receipt older than 30 days, or missing receipt is `DEGRADED`; blocked hooks/plugin/subagents are `UNAVAILABLE`.
 
 Require Python 3.10 or newer. Plugin hooks use relocatable `${PLUGIN_ROOT}` and `%PLUGIN_ROOT%` commands, while runtime state uses Codex's writable `${PLUGIN_DATA}` location.
 

@@ -75,13 +75,13 @@ python3 scripts/check_hooks.py
 
 The command returns one of three top-level health states:
 
-- `READY`: Luna is the observed root for the latest actual turn and a receipt proves a successful Terra or Sol escalation through the same plugin build, with all currently observable host identity matching.
+- `READY`: Luna is the observed root for the current task and a non-stale receipt proves a successful Terra or Sol escalation through the same plugin candidate and versioned Codex runtime/build identity.
 - `DEGRADED`: Autorouter remains usable, but the active root was not Luna or current escalation capability is not proven. When the root is not Luna, credit-saving behaviour will be substantially reduced.
 - `UNAVAILABLE`: the supported hooks or direct child-routing path cannot operate.
 
 The hook's `UserPromptSubmit.model` is authoritative for every actual turn. Desktop, app-server, and config evidence can explain health, but cannot override that active-model evidence. Follow the [troubleshooting guide](docs/TROUBLESHOOTING.md) for any state other than `READY`.
 
-Readiness receipts are earned only after an expected child is observed on the requested Terra or Sol model and the same `agent_id` completes successfully. Child `UserPromptSubmit` observations remain separate from the authoritative parent/root observation. Receipts bind, where observable, the plugin version, Codex runtime/build, Desktop or CLI host type, platform, observed child model, effort intent, capability/schema signature, and timestamp. If optional runtime/build/host identity is absent from the current Codex hook surface, health reports that limitation explicitly without fabricating evidence or making `READY` permanently impossible. An observable identity change invalidates `READY` until normal work produces a fresh successful receipt; the health check never launches an automatic paid probe. A receipt proves observed capability at that time, not permanent compatibility with future Codex updates.
+Readiness receipts are earned only after an expected child is observed on the requested Terra or Sol model and the same `agent_id` completes successfully. The exact bounded child transcript may supply authoritative model, effort, and turn evidence when Desktop omits a child prompt hook; missing, contradictory, malformed, or oversized evidence creates no receipt. Receipts bind the plugin content identity, plugin version, Codex runtime/build where exposed, Desktop or CLI host type, platform, observed child model, effort intent, capability/schema signature, and timestamp. At least one matching versioned runtime/build identifier is mandatory for `READY`; null never matches null. Identity-null receipts remain visible as `ESCALATION PREVIOUSLY OBSERVED` but cannot establish current-runtime capability. Receipts expire for readiness after 30 days but remain available as history. A runtime/build or plugin-candidate change invalidates `READY` until normal work produces a fresh successful receipt; the health check never launches an automatic paid probe.
 
 ## Your first task
 

@@ -38,11 +38,11 @@ python3 scripts/check_hooks.py
 
 The combined check reports:
 
-- `READY` when the latest actual turn observed Luna and a capability receipt proves a genuine successful Terra or Sol escalation against the same plugin and observable Codex runtime/build;
+- `READY` when the current task observed Luna and a non-stale capability receipt proves a genuine successful Terra or Sol escalation against the same plugin candidate and at least one matching versioned Codex runtime/build identifier;
 - `DEGRADED` when Autorouter works but the observed root is not Luna, the runtime/build changed, or current escalation capability is not yet proven; a non-Luna root substantially reduces credit-saving behaviour;
 - `ADVISORY` when hooks or the supported direct child path cannot enforce the complete contract.
 
-`UserPromptSubmit.model` is authoritative for the active root on every actual turn. App Server and config evidence may support health reporting but cannot override it. The receipt binds, where observable, plugin version, Codex runtime/build, Desktop or CLI host type, platform, observed child model, effort intent, capability/schema signature, and timestamp. A runtime/build change invalidates `READY` until normal work produces a fresh successful receipt. The check never launches an automatic paid probe.
+`UserPromptSubmit.model` is authoritative for the active root on every actual turn. Root observations carry task and turn identity, and `CODEX_SESSION_ID`/`CODEX_THREAD_ID` selects current-task evidence; another task's Luna observation cannot establish readiness. Without authoritative task context the global report remains conservative. App Server and config evidence may support health reporting but cannot override hook evidence. The receipt binds plugin content identity, plugin version, Codex runtime/build where exposed, Desktop or CLI host type, platform, observed child model, effort intent, capability/schema signature, and timestamp. Null runtime identity never proves compatibility, and receipts older than 30 days are history rather than current capability. The check never launches an automatic paid probe.
 
 ## Routing preference
 

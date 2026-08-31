@@ -1431,6 +1431,90 @@ class RouterTests(unittest.TestCase):
         })
         self.assertFalse(router_hook.CAPABILITY_PATH.exists())
 
+    def test_exact_child_transcript_can_supply_the_missing_authoritative_prompt_evidence(self) -> None:
+        session = "receipt-from-child-transcript"
+        base = {
+            "session_id": session,
+            "runtime_version": "codex-1.2.3",
+            "runtime_build": "desktop-456",
+            "host_type": "Desktop",
+        }
+        router_hook.handle({
+            **base,
+            "hook_event_name": "UserPromptSubmit",
+            "turn_id": "parent",
+            "model": "gpt-5.6-luna",
+            "prompt": "Add pagination to this endpoint and include targeted tests for the changed behavior.",
+        })
+        router_hook.handle({
+            **base,
+            "hook_event_name": "SubagentStart",
+            "turn_id": "parent",
+            "agent_id": "terra-child",
+            "model": "gpt-5.6-terra",
+            "reasoning_effort": "medium",
+        })
+        router_hook.handle({
+            **base,
+            "hook_event_name": "SubagentStop",
+            "turn_id": "child-turn",
+            "agent_id": "terra-child",
+            "model": "gpt-5.6-terra",
+            "reasoning_effort": "medium",
+            "last_assistant_message": "Evidence: done\nVerification: tests passed\nUncertainty: none",
+        })
+        parent = Path(self.temp.name) / f"{session}-parent.jsonl"
+        parent.write_text("", encoding="utf-8")
+        (Path(self.temp.name) / "rollout-terra-child.jsonl").write_text(json.dumps({
+            "type": "turn_context",
+            "payload": {"turn_id": "child-turn", "model": "gpt-5.6-terra", "effort": "medium"},
+        }), encoding="utf-8")
+
+        router_hook.handle({
+            **base,
+            "hook_event_name": "Stop",
+            "turn_id": "parent",
+            "stop_hook_active": False,
+            "transcript_path": str(parent),
+        })
+
+        receipt = json.loads(router_hook.CAPABILITY_PATH.read_text(encoding="utf-8"))
+        child = self._ledger(session, "parent")["agents"]["terra-child"]
+        self.assertEqual("terra-child", receipt["agent_id"])
+        self.assertEqual("child-turn", receipt["child_turn_id"])
+        self.assertEqual("gpt-5.6-terra", receipt["observed_child_model"])
+        self.assertEqual("medium", receipt["observed_effort"])
+        self.assertEqual(["child-turn"], child["child_turn_ids"])
+        self.assertEqual("child_turn_context", child["prompt_observations"][0]["source"])
+
+    def test_child_transcript_effort_contradiction_cannot_create_a_receipt(self) -> None:
+        session = "receipt-child-effort-contradiction"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "parent",
+            "model": "gpt-5.6-luna",
+            "prompt": "Add pagination to this endpoint and include targeted tests for the changed behavior.",
+        })
+        router_hook.handle({
+            "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "parent",
+            "agent_id": "terra-child", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+        })
+        router_hook.handle({
+            "hook_event_name": "SubagentStop", "session_id": session, "turn_id": "child-turn",
+            "agent_id": "terra-child", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+            "last_assistant_message": "Evidence: done\nVerification: tests passed\nUncertainty: none",
+        })
+        parent = Path(self.temp.name) / f"{session}-parent.jsonl"
+        parent.write_text("", encoding="utf-8")
+        (Path(self.temp.name) / "rollout-terra-child.jsonl").write_text(json.dumps({
+            "type": "turn_context",
+            "payload": {"turn_id": "child-turn", "model": "gpt-5.6-terra", "effort": "high"},
+        }), encoding="utf-8")
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": "parent",
+            "stop_hook_active": False, "transcript_path": str(parent),
+        })
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+
     def test_unknown_agent_stop_cannot_complete_the_expected_child(self) -> None:
         root = {
             "hook_event_name": "UserPromptSubmit",
@@ -1962,10 +2046,15 @@ class RouterTests(unittest.TestCase):
         })
         observation = json.loads(router_hook.ROOT_OBSERVATION_PATH.read_text(encoding="utf-8"))
         self.assertEqual("gpt-5.6-luna", observation["root_model"])
+        self.assertEqual("root-observation", observation["session_id"])
+        self.assertEqual("t1", observation["turn_id"])
+        self.assertEqual(router_hook.PLUGIN_IDENTITY, observation["plugin_identity"])
         self.assertEqual("codex-1.2.3", observation["runtime_version"])
         self.assertEqual("desktop-456", observation["runtime_build"])
         self.assertEqual("Desktop", observation["host_type"])
         self.assertNotIn(secret_prompt, json.dumps(observation))
+        task_observation = router_hook.ROOT_OBSERVATION_PATH.parent / "root-observations-v1" / "root-observation.json"
+        self.assertEqual(observation, json.loads(task_observation.read_text(encoding="utf-8")))
 
     def test_successful_direct_child_writes_runtime_bound_capability_receipt(self) -> None:
         base = {
@@ -2007,6 +2096,8 @@ class RouterTests(unittest.TestCase):
         })
         receipt = json.loads(router_hook.CAPABILITY_PATH.read_text(encoding="utf-8"))
         self.assertEqual("direct-model-spawn-v1", receipt["capability_signature"])
+        self.assertEqual(router_hook.PLUGIN_IDENTITY, receipt["plugin_identity"])
+        self.assertEqual("child-turn", receipt["child_turn_id"])
         self.assertEqual("gpt-5.6-sol", receipt["observed_child_model"])
         self.assertEqual("high", receipt["effort_intent"])
         self.assertEqual("codex-1.2.3", receipt["runtime_version"])
@@ -3719,6 +3810,45 @@ class RouterTests(unittest.TestCase):
         self.assertTrue(attestation["matched"])
         self.assertTrue(attestation["mutation_seen"])
         self.assertTrue(attestation["recursive_spawn_seen"])
+
+    def test_child_attestation_rejects_malformed_oversized_contradictory_or_duplicate_evidence(self) -> None:
+        parent = Path(self.temp.name) / "parent.jsonl"
+        parent.write_text("", encoding="utf-8")
+        expected = router_hook.ROUTES["gpt56_terra_worker"]
+
+        malformed = Path(self.temp.name) / "rollout-malformed-child.jsonl"
+        malformed.write_text(
+            "not-json\n" + json.dumps({
+                "type": "turn_context",
+                "payload": {"turn_id": "child", "model": "gpt-5.6-terra", "effort": "medium"},
+            }),
+            encoding="utf-8",
+        )
+        self.assertFalse(router_hook._attest_child(parent, "malformed-child", expected)["matched"])
+
+        oversized = Path(self.temp.name) / "rollout-oversized-child.jsonl"
+        oversized.write_bytes(b" " * ((8 * 1024 * 1024) + 1))
+        self.assertFalse(router_hook._attest_child(parent, "oversized-child", expected)["matched"])
+
+        contradictory = Path(self.temp.name) / "rollout-contradictory-child.jsonl"
+        contradictory.write_text("\n".join(json.dumps(item) for item in (
+            {"type": "turn_context", "payload": {
+                "turn_id": "child-a", "model": "gpt-5.6-terra", "effort": "medium",
+            }},
+            {"type": "turn_context", "payload": {
+                "turn_id": "child-b", "model": "gpt-5.6-terra", "effort": "medium",
+            }},
+        )), encoding="utf-8")
+        contradiction = router_hook._attest_child(parent, "contradictory-child", expected)
+        self.assertFalse(contradiction["matched"])
+        self.assertTrue(contradiction["contradictory"])
+
+        for suffix in ("a", "b"):
+            (Path(self.temp.name) / f"rollout-{suffix}-duplicate-child.jsonl").write_text(json.dumps({
+                "type": "turn_context",
+                "payload": {"turn_id": "child", "model": "gpt-5.6-terra", "effort": "medium"},
+            }), encoding="utf-8")
+        self.assertFalse(router_hook._attest_child(parent, "duplicate-child", expected)["matched"])
 
     def test_stable_subagent_start_attests_model_and_agent_config_without_transcript(self) -> None:
         router_hook.handle({

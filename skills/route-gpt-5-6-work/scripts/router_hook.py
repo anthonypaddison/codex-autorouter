@@ -40,6 +40,15 @@ except ImportError:  # macOS and Linux
 _plugin_data = os.environ.get("PLUGIN_DATA") or os.environ.get("CLAUDE_PLUGIN_DATA")
 CODEX_HOME = Path(os.environ.get("CODEX_HOME", "~/.codex")).expanduser().absolute()
 PLUGIN_ROOT = Path(__file__).resolve().parents[3]
+PLUGIN_IDENTITY_FILES = (
+    ".codex-plugin/plugin.json",
+    "hooks/hooks.json",
+    "scripts/check_hooks.py",
+    "scripts/hook_launcher.py",
+    "skills/route-gpt-5-6-work/SKILL.md",
+    "skills/route-gpt-5-6-work/scripts/router_hook.py",
+    "skills/route-gpt-5-6-work/scripts/spawn_compat.py",
+)
 
 
 def _current_plugin_version() -> str:
@@ -51,7 +60,24 @@ def _current_plugin_version() -> str:
         return "standalone"
 
 
+def _current_plugin_identity() -> str | None:
+    digest = hashlib.sha256()
+    try:
+        for relative in PLUGIN_IDENTITY_FILES:
+            path = PLUGIN_ROOT / relative
+            if path.is_symlink() or not path.is_file():
+                return None
+            digest.update(relative.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+            digest.update(b"\0")
+    except OSError:
+        return None
+    return f"sha256:{digest.hexdigest()}"
+
+
 PLUGIN_VERSION = _current_plugin_version()
+PLUGIN_IDENTITY = _current_plugin_identity()
 STATE_ROOT = Path(
     os.environ.get("CODEX_ROUTER_STATE_DIR")
     or (str(Path(_plugin_data) / "router-state-v2") if _plugin_data else "~/.codex/router-state-v2")
@@ -555,14 +581,23 @@ def _usage_telemetry(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def _write_health_record(path: Path, payload: dict[str, Any]) -> None:
-    if _is_linklike(HEALTH_ROOT):
+    health_root = ROOT_OBSERVATION_PATH.parent
+    allowed_directories = {health_root, health_root / "root-observations-v1"}
+    if path.parent not in allowed_directories:
+        raise RuntimeError("refusing health record outside the router health directory")
+    if _is_linklike(health_root):
         raise RuntimeError("refusing linked health directory")
-    HEALTH_ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(HEALTH_ROOT, 0o700)
+    health_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(health_root, 0o700)
+    if path.parent != health_root:
+        if _is_linklike(path.parent):
+            raise RuntimeError("refusing linked task observation directory")
+        path.parent.mkdir(mode=0o700, exist_ok=True)
+        os.chmod(path.parent, 0o700)
     if _is_linklike(path):
         raise RuntimeError(f"refusing linked health record: {path.name}")
     with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=HEALTH_ROOT, prefix=f".{path.stem}-", suffix=".tmp", delete=False
+        mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.stem}-", suffix=".tmp", delete=False
     ) as stream:
         stream.write(json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n")
         temporary = Path(stream.name)
@@ -576,14 +611,24 @@ def _write_health_record(path: Path, payload: dict[str, Any]) -> None:
 
 def _record_root_observation(data: dict[str, Any]) -> dict[str, Any]:
     identity = _runtime_identity(data)
+    session_id = str(data.get("session_id") or "")
+    turn_id = str(data.get("turn_id") or "")
     observation = {
         "schema_version": 1,
         "plugin_version": PLUGIN_VERSION,
+        "plugin_identity": PLUGIN_IDENTITY,
+        "session_id": session_id or None,
+        "turn_id": turn_id or None,
         "root_model": str(data.get("model") or "") or None,
         **identity,
         "timestamp": int(time.time()),
     }
     _write_health_record(ROOT_OBSERVATION_PATH, observation)
+    if re.fullmatch(r"[A-Za-z0-9_-]{8,128}", session_id):
+        _write_health_record(
+            ROOT_OBSERVATION_PATH.parent / "root-observations-v1" / f"{session_id}.json",
+            observation,
+        )
     return observation
 
 
@@ -804,11 +849,13 @@ def _record_capability(state: dict[str, Any], agent_id: str) -> bool:
         or not agent.get("expected_by_parent")
         or agent.get("status") != "completed"
         or not agent.get("completion_structured")
+        or not agent.get("child_turn_id")
         or requested_model not in spawn_compat.SUPPORTED_EFFORTS
         or observed_model != requested_model
         or not _model_evidence_consistent(agent)
         or _has_unresolved_child_prompt_ambiguity(state)
         or not state.get("agent_attestations", {}).get(agent_id, {}).get("matched")
+        or not PLUGIN_IDENTITY
         or agent.get("receipt_recorded")
     ):
         return False
@@ -817,6 +864,7 @@ def _record_capability(state: dict[str, Any], agent_id: str) -> bool:
         "schema_version": 1,
         "capability_signature": spawn_compat.CAPABILITY_SIGNATURE,
         "plugin_version": PLUGIN_VERSION,
+        "plugin_identity": PLUGIN_IDENTITY,
         "runtime_version": identity.get("runtime_version"),
         "runtime_build": identity.get("runtime_build"),
         "host_type": identity.get("host_type"),
@@ -825,6 +873,7 @@ def _record_capability(state: dict[str, Any], agent_id: str) -> bool:
         "agent_id": agent_id,
         "parent_session_id": state.get("session_id"),
         "parent_turn_id": state.get("turn_id"),
+        "child_turn_id": agent.get("child_turn_id"),
         "requested_child_model": requested_model,
         "observed_child_model": observed_model,
         "effort_intent": agent.get("requested_effort") or ROUTES[role]["effort"],
@@ -2365,26 +2414,48 @@ def _text_values(value: Any):
 
 
 def _attest_child(parent_transcript: Path, agent_id: str, expected: dict[str, Any]) -> dict[str, Any]:
-    candidates = list(parent_transcript.parent.glob(f"*{agent_id}*.jsonl"))
-    candidates = candidates[:2]
-    attestation = {"model": None, "effort": None, "matched": False, "mutation_seen": False, "recursive_spawn_seen": False}
+    attestation = {
+        "model": None,
+        "effort": None,
+        "turn_id": None,
+        "candidate_count": 0,
+        "matched": False,
+        "contradictory": False,
+        "mutation_seen": False,
+        "recursive_spawn_seen": False,
+        "source": "child_turn_context",
+    }
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", agent_id):
+        return attestation
+    candidates = sorted(
+        path for path in parent_transcript.parent.glob(f"*{agent_id}.jsonl")
+        if path.name.endswith(f"{agent_id}.jsonl")
+    )[:2]
+    attestation["candidate_count"] = len(candidates)
+    if len(candidates) != 1:
+        return attestation
     for candidate in candidates:
         try:
             if candidate.is_symlink() or not candidate.is_file() or candidate.stat().st_size > 8 * 1024 * 1024:
                 continue
+            contexts: list[tuple[str, str, str]] = []
+            malformed = False
             for line in candidate.read_text(encoding="utf-8", errors="replace").splitlines():
                 try:
                     record = json.loads(line)
                 except json.JSONDecodeError:
-                    continue
+                    malformed = True
+                    break
                 payload = record.get("payload", {})
+                if not isinstance(payload, dict):
+                    malformed = True
+                    break
                 if record.get("type") == "turn_context" or payload.get("type") == "turn_context":
-                    attestation["model"] = payload.get("model")
-                    attestation["effort"] = payload.get("effort")
-                    attestation["matched"] = (
-                        attestation["model"] == expected["model"]
-                        and attestation["effort"] == expected["effort"]
-                    )
+                    contexts.append((
+                        str(payload.get("model") or ""),
+                        str(payload.get("effort") or ""),
+                        str(payload.get("turn_id") or ""),
+                    ))
                 record_type = str(record.get("type") or payload.get("type") or "")
                 if record_type in {"custom_tool_call", "function_call"}:
                     joined = "\n".join(_text_values(record))
@@ -2392,11 +2463,69 @@ def _attest_child(parent_transcript: Path, agent_id: str, expected: dict[str, An
                         attestation["mutation_seen"] = True
                     if re.search(r"\bspawn_agent\b", joined):
                         attestation["recursive_spawn_seen"] = True
-            if attestation["model"] is not None:
+            if malformed:
+                return attestation
+            distinct_contexts = set(contexts)
+            if len(distinct_contexts) == 1:
+                model, effort, turn_id = distinct_contexts.pop()
+                attestation["model"] = model or None
+                attestation["effort"] = effort or None
+                attestation["turn_id"] = turn_id or None
+                attestation["matched"] = model == expected["model"] and effort == expected["effort"]
+            elif contexts:
+                attestation["contradictory"] = True
+            if contexts:
                 return attestation
         except OSError:
             continue
     return attestation
+
+
+def _bind_child_transcript_evidence(
+    state: dict[str, Any], agent_id: str, attestation: dict[str, Any],
+) -> bool:
+    """Bind one exact child transcript context without inferring from model or order."""
+    agent = state.get("agents", {}).get(agent_id, {})
+    observed_model = str(attestation.get("model") or "")
+    observed_effort = str(attestation.get("effort") or "")
+    child_turn_id = str(attestation.get("turn_id") or "")
+    existing_turns = _child_turn_ids(agent)
+    existing_observations = agent.get("prompt_observations")
+    if (
+        not attestation.get("matched")
+        or attestation.get("contradictory")
+        or agent.get("correlation_mode") != "direct_agent_id"
+        or not child_turn_id
+        or existing_turns
+        or not isinstance(existing_observations, list)
+        or existing_observations
+        or observed_model != agent.get("requested_model")
+        or observed_effort != agent.get("requested_effort")
+        or agent.get("start_observed_model") != observed_model
+        or agent.get("stop_observed_model") != observed_model
+        or str(agent.get("start_observed_effort") or "") not in {"", observed_effort}
+        or str(agent.get("stop_observed_effort") or "") not in {"", observed_effort}
+    ):
+        return False
+    agent.update({
+        "observed_model": observed_model,
+        "observed_effort": observed_effort,
+        "prompt_observed_model": observed_model,
+        "prompt_observed_effort": observed_effort,
+        "child_turn_id": child_turn_id,
+        "child_turn_ids": [child_turn_id],
+        "observed_at": int(time.time()),
+        "model_match": True,
+    })
+    existing_observations.append({
+        "event_key": f"child-turn-context:{agent_id}:{child_turn_id}",
+        "turn_id": child_turn_id,
+        "model": observed_model,
+        "effort": observed_effort,
+        "source": "child_turn_context",
+    })
+    agent["model_evidence_consistent"] = _model_evidence_consistent(agent)
+    return bool(agent["model_evidence_consistent"])
 
 
 def _transcript_turn_matches(payload: dict[str, Any], state: dict[str, Any]) -> bool:
@@ -2741,13 +2870,14 @@ def _reconcile_subagent_transcript(data: dict[str, Any], state: dict[str, Any]) 
             plan["execution_agent_id"] = agent_id
         if role in ROUTES:
             transcript_attestation = _attest_child(path, agent_id, ROUTES[role])
-            if transcript_attestation.get("model") is not None:
+            if int(transcript_attestation.get("candidate_count") or 0) > 0:
                 state["agent_attestations"][agent_id] = transcript_attestation
+            if transcript_attestation.get("model") is not None:
+                _bind_child_transcript_evidence(state, agent_id, transcript_attestation)
         if agent_id in completed_ids and agent_id in structured_ids and role not in state["subagents_completed"]:
             state["subagents_completed"].append(role)
         if (
-            agent_id in completed_ids
-            and agent_id in structured_ids
+            _completion_is_trustworthy(state["agents"][agent_id])
             and state.get("agent_attestations", {}).get(agent_id, {}).get("matched")
         ):
             if _record_capability(state, agent_id):

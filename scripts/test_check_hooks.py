@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -14,6 +16,9 @@ import hook_launcher
 
 
 PLUGIN_VERSION = "1.2.3"
+PLUGIN_IDENTITY = "sha256:test-plugin-candidate"
+CURRENT_SESSION_ID = "current-task"
+NOW = int(time.time())
 
 
 def _effective(*, model: str = "gpt-5.6-luna", agents_enabled: bool = True) -> dict[str, object]:
@@ -39,23 +44,32 @@ def _write_evidence(
     host_type: str | None = "Desktop",
     receipt_version: str | None = None,
     receipt_build: str | None = None,
+    session_id: str = CURRENT_SESSION_ID,
+    plugin_identity: str = PLUGIN_IDENTITY,
+    receipt_plugin_identity: str | None = None,
+    observation_timestamp: int = NOW - 60,
+    receipt_timestamp: int = NOW - 30,
 ) -> None:
     root.mkdir(parents=True, exist_ok=True)
     observation = {
         "schema_version": 1,
         "plugin_version": PLUGIN_VERSION,
+        "plugin_identity": plugin_identity,
+        "session_id": session_id,
+        "turn_id": "root-turn",
         "root_model": root_model,
         "runtime_version": runtime_version,
         "runtime_build": runtime_build,
         "host_type": host_type,
         "runtime_identity_source": "hook_payload" if any((runtime_version, runtime_build, host_type)) else "unavailable_from_current_codex_hook_surface",
         "platform": "darwin",
-        "timestamp": "2026-08-11T12:00:00Z",
+        "timestamp": observation_timestamp,
     }
     receipt = {
         "schema_version": 1,
         "capability_signature": "direct-model-spawn-v1",
         "plugin_version": PLUGIN_VERSION,
+        "plugin_identity": receipt_plugin_identity or plugin_identity,
         "runtime_version": runtime_version if receipt_version is None else receipt_version,
         "runtime_build": runtime_build if receipt_build is None else receipt_build,
         "host_type": host_type,
@@ -63,10 +77,28 @@ def _write_evidence(
         "platform": "darwin",
         "observed_child_model": "gpt-5.6-terra",
         "effort_intent": "medium",
-        "timestamp": "2026-08-11T12:01:00Z",
+        "timestamp": receipt_timestamp,
     }
     (root / "root-observation-v1.json").write_text(json.dumps(observation), encoding="utf-8")
+    observations = root / "root-observations-v1"
+    observations.mkdir()
+    (observations / f"{session_id}.json").write_text(json.dumps(observation), encoding="utf-8")
     (root / "capability-v1.json").write_text(json.dumps(receipt), encoding="utf-8")
+
+
+def _health(
+    data: Path,
+    *,
+    effective: dict[str, object] | None = None,
+    session_id: str = CURRENT_SESSION_ID,
+) -> dict[str, object]:
+    with mock.patch.dict(os.environ, {"CODEX_SESSION_ID": session_id}, clear=False):
+        return check_hooks._routing_health(
+            effective or _effective(),
+            PLUGIN_VERSION,
+            data,
+            plugin_identity=PLUGIN_IDENTITY,
+        )
 
 
 class ExactHookLauncherTests(unittest.TestCase):
@@ -148,16 +180,19 @@ class RoutingHealthTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             data = Path(raw)
             _write_evidence(data)
-            health = check_hooks._routing_health(_effective(), PLUGIN_VERSION, data)
+            health = _health(data)
         self.assertEqual("READY", health["status"])
         self.assertTrue(health["ready"])
         self.assertEqual("hook_observation", health["root_model_source"])
+        self.assertEqual("CHEAP_ROOT", health["current_task_root_state"])
+        self.assertEqual("ESCALATION PREVIOUSLY OBSERVED", health["historical_escalation_state"])
+        self.assertEqual("CURRENT RUNTIME ESCALATION CAPABLE", health["current_runtime_capability_state"])
 
     def test_authoritative_non_luna_hook_observation_overrides_luna_config(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             data = Path(raw)
             _write_evidence(data, root_model="gpt-5.6-sol")
-            health = check_hooks._routing_health(_effective(model="gpt-5.6-luna"), PLUGIN_VERSION, data)
+            health = _health(data, effective=_effective(model="gpt-5.6-luna"))
         self.assertEqual("DEGRADED", health["status"])
         self.assertEqual("gpt-5.6-sol", health["root_model"])
         self.assertIn("credit-saving", " ".join(health["reasons"]))
@@ -165,18 +200,28 @@ class RoutingHealthTests(unittest.TestCase):
     def test_config_model_is_supporting_evidence_not_authoritative_turn_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             data = Path(raw) / "absent-data-root"
-            health = check_hooks._routing_health(_effective(model="gpt-5.6-luna"), PLUGIN_VERSION, data)
+            health = _health(data, effective=_effective(model="gpt-5.6-luna"))
             self.assertFalse(data.exists())
         self.assertEqual("DEGRADED", health["status"])
         self.assertEqual("effective_config", health["root_model_source"])
         self.assertIn("authoritative", " ".join(health["reasons"]))
+
+    def test_non_luna_config_without_a_task_observation_is_not_called_the_active_root(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            data = Path(raw) / "absent-data-root"
+            health = _health(data, effective=_effective(model="gpt-5.6-terra"))
+        reasons = " ".join(health["reasons"])
+        self.assertEqual("DEGRADED", health["status"])
+        self.assertEqual("UNKNOWN", health["current_task_root_state"])
+        self.assertNotIn("Active root is", reasons)
+        self.assertIn("supporting configuration", reasons)
 
     def test_runtime_change_invalidates_ready_without_a_paid_probe(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             data = Path(raw)
             _write_evidence(data, receipt_version="0.87.0", receipt_build="desktop-87")
             with mock.patch.object(check_hooks.subprocess, "run", side_effect=AssertionError("no paid probe")):
-                health = check_hooks._routing_health(_effective(), PLUGIN_VERSION, data)
+                health = _health(data)
         self.assertEqual("DEGRADED", health["status"])
         self.assertIn("runtime", " ".join(health["reasons"]))
 
@@ -185,19 +230,21 @@ class RoutingHealthTests(unittest.TestCase):
             with self.subTest(version=version, build=build), tempfile.TemporaryDirectory() as raw:
                 data = Path(raw)
                 _write_evidence(data, runtime_version=version, runtime_build=build)
-                health = check_hooks._routing_health(_effective(), PLUGIN_VERSION, data)
+                health = _health(data)
                 self.assertEqual("READY", health["status"])
 
-    def test_fully_unavailable_runtime_identity_is_explicit_but_can_be_ready(self) -> None:
+    def test_fully_unavailable_runtime_identity_is_explicit_and_degraded(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             data = Path(raw)
             _write_evidence(data, runtime_version=None, runtime_build=None, host_type=None)
-            health = check_hooks._routing_health(_effective(), PLUGIN_VERSION, data)
-        self.assertEqual("READY", health["status"])
+            health = _health(data)
+        self.assertEqual("DEGRADED", health["status"])
+        self.assertIn("runtime identity unavailable; capability compatibility unproven", " ".join(health["reasons"]).lower())
         self.assertEqual(
             "unavailable from current Codex hook surface",
             health["runtime_identity"],
         )
+        self.assertEqual("UNPROVEN", health["current_runtime_capability_state"])
 
     def test_current_observable_runtime_missing_from_receipt_is_degraded(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
@@ -207,16 +254,75 @@ class RoutingHealthTests(unittest.TestCase):
             receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
             receipt["runtime_version"] = None
             receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
-            health = check_hooks._routing_health(_effective(), PLUGIN_VERSION, data)
+            health = _health(data)
         self.assertEqual("DEGRADED", health["status"])
         self.assertIn("not bound", " ".join(health["reasons"]))
+
+    def test_unrelated_luna_summary_cannot_override_current_non_luna_task(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            data = Path(raw)
+            _write_evidence(data, root_model="gpt-5.6-sol")
+            global_observation = json.loads((data / "root-observation-v1.json").read_text(encoding="utf-8"))
+            global_observation.update({
+                "session_id": "unrelated-task",
+                "turn_id": "newer-luna-turn",
+                "root_model": "gpt-5.6-luna",
+                "runtime_version": None,
+                "runtime_build": None,
+                "host_type": None,
+                "timestamp": NOW,
+            })
+            (data / "root-observation-v1.json").write_text(json.dumps(global_observation), encoding="utf-8")
+            health = _health(data)
+        self.assertEqual("DEGRADED", health["status"])
+        self.assertEqual("gpt-5.6-sol", health["root_model"])
+        self.assertEqual("DEGRADED_NON_LUNA", health["current_task_root_state"])
+
+    def test_global_summary_without_current_task_context_never_claims_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            data = Path(raw)
+            _write_evidence(data)
+            with mock.patch.dict(os.environ, {}, clear=True):
+                health = check_hooks._routing_health(
+                    _effective(), PLUGIN_VERSION, data, plugin_identity=PLUGIN_IDENTITY
+                )
+        self.assertEqual("DEGRADED", health["status"])
+        self.assertIn("task context", " ".join(health["reasons"]).lower())
+
+    def test_receipt_from_an_incompatible_plugin_candidate_is_historical_only(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            data = Path(raw)
+            _write_evidence(data, receipt_plugin_identity="sha256:different-candidate")
+            health = _health(data)
+        self.assertEqual("DEGRADED", health["status"])
+        self.assertEqual("ESCALATION PREVIOUSLY OBSERVED", health["historical_escalation_state"])
+        self.assertEqual("INCOMPATIBLE", health["current_runtime_capability_state"])
+        self.assertIn("plugin", " ".join(health["reasons"]).lower())
+
+    def test_stale_receipt_is_retained_as_history_but_cannot_make_ready(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            data = Path(raw)
+            _write_evidence(data, receipt_timestamp=NOW - (31 * 24 * 60 * 60))
+            with mock.patch.object(check_hooks.time, "time", return_value=NOW):
+                health = _health(data)
+        self.assertEqual("DEGRADED", health["status"])
+        self.assertEqual("ESCALATION PREVIOUSLY OBSERVED", health["historical_escalation_state"])
+        self.assertEqual("STALE", health["current_runtime_capability_state"])
+
+    def test_matching_host_type_cannot_mask_a_versioned_runtime_change(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            data = Path(raw)
+            _write_evidence(data, receipt_version="0.87.0", receipt_build="desktop-87")
+            health = _health(data)
+        self.assertEqual("DEGRADED", health["status"])
+        self.assertEqual("INCOMPATIBLE", health["current_runtime_capability_state"])
 
     def test_unavailable_precedes_receipt_and_root_health(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             data = Path(raw)
             _write_evidence(data)
             effective = _effective(agents_enabled=False)
-            health = check_hooks._routing_health(effective, PLUGIN_VERSION, data)
+            health = _health(data, effective=effective)
         self.assertEqual("UNAVAILABLE", health["status"])
 
 

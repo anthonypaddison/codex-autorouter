@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import queue
+import re
 import subprocess
 import threading
 import time
@@ -19,7 +21,18 @@ CHECKER_ROOT = Path(__file__).resolve().parents[1]
 CAPABILITY_SCHEMA_VERSION = 1
 CAPABILITY_SIGNATURE = "direct-model-spawn-v1"
 ROOT_OBSERVATION_FILE = "root-observation-v1.json"
+ROOT_OBSERVATIONS_DIRECTORY = "root-observations-v1"
 CAPABILITY_FILE = "capability-v1.json"
+CAPABILITY_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
+PLUGIN_IDENTITY_FILES = (
+    ".codex-plugin/plugin.json",
+    "hooks/hooks.json",
+    "scripts/check_hooks.py",
+    "scripts/hook_launcher.py",
+    "skills/route-gpt-5-6-work/SKILL.md",
+    "skills/route-gpt-5-6-work/scripts/router_hook.py",
+    "skills/route-gpt-5-6-work/scripts/spawn_compat.py",
+)
 
 
 def _send(process: subprocess.Popen[str], message: dict[str, Any]) -> None:
@@ -116,76 +129,207 @@ def _read_json_object(path: Path) -> tuple[dict[str, Any] | None, str | None]:
     return value, None
 
 
-def _routing_health(effective: dict[str, Any], plugin_version: str, data_root: Path) -> dict[str, Any]:
+def _plugin_identity(root: Path = CHECKER_ROOT) -> str | None:
+    digest = hashlib.sha256()
+    try:
+        for relative in PLUGIN_IDENTITY_FILES:
+            path = root / relative
+            if path.is_symlink() or not path.is_file():
+                return None
+            digest.update(relative.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+            digest.update(b"\0")
+    except OSError:
+        return None
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _task_observation_path(data_root: Path, session_id: str) -> Path | None:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", session_id):
+        return None
+    return data_root / ROOT_OBSERVATIONS_DIRECTORY / f"{session_id}.json"
+
+
+def _timestamp(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)) and value >= 0:
+        return int(value)
+    if isinstance(value, str) and value.isdigit():
+        return int(value)
+    return None
+
+
+def _routing_health(
+    effective: dict[str, Any],
+    plugin_version: str,
+    data_root: Path,
+    *,
+    plugin_identity: str | None = None,
+    current_session_id: str | None = None,
+) -> dict[str, Any]:
     """Evaluate saved hook evidence without creating files or paid child work."""
-    observation, observation_error = _read_json_object(data_root / ROOT_OBSERVATION_FILE)
+    global_observation, global_observation_error = _read_json_object(data_root / ROOT_OBSERVATION_FILE)
+    session_id = str(
+        current_session_id
+        or os.environ.get("CODEX_SESSION_ID")
+        or os.environ.get("CODEX_THREAD_ID")
+        or ""
+    )
+    observation: dict[str, Any] | None = None
+    observation_error: str | None = None
+    if session_id:
+        task_path = _task_observation_path(data_root, session_id)
+        if task_path is None:
+            observation_error = "invalid_session_identity"
+        else:
+            observation, observation_error = _read_json_object(task_path)
+        if observation is None and observation_error is None and global_observation is not None:
+            if str(global_observation.get("session_id") or "") == session_id:
+                observation = global_observation
+                observation_error = global_observation_error
+    else:
+        observation = global_observation
+        observation_error = global_observation_error
     receipt, receipt_error = _read_json_object(data_root / CAPABILITY_FILE)
+    current_plugin_identity = plugin_identity or _plugin_identity()
     config_model = effective.get("model")
-    observed_model = observation.get("root_model") if observation else None
+    observed_model = observation.get("root_model") if observation and session_id else None
     root_model = observed_model if isinstance(observed_model, str) and observed_model else config_model
     root_source = "hook_observation" if isinstance(observed_model, str) and observed_model else "effective_config"
     reasons: list[str] = []
+    current_task_root_state = "UNKNOWN"
+    historical_escalation_state = "NO ESCALATION RECEIPT"
+    current_runtime_capability_state = "NO_EVIDENCE"
+    observation_compatible = observation is not None
+
+    receipt_child_model = receipt.get("observed_child_model") if receipt else None
+    if receipt is not None and receipt_child_model in {"gpt-5.6-terra", "gpt-5.6-sol"} and _timestamp(receipt.get("timestamp")) is not None:
+        historical_escalation_state = "ESCALATION PREVIOUSLY OBSERVED"
 
     if not effective.get("available"):
         status = "UNAVAILABLE"
         reasons.append("The supported plugin hook and direct-child routing path is not available in effective configuration.")
     else:
         status = "DEGRADED"
+        if not session_id:
+            reasons.append("Authoritative current task context is unavailable; a global root summary cannot establish task readiness.")
         if observation_error:
             reasons.append(f"Authoritative root observation is unreadable ({observation_error}).")
         if observation is None:
-            reasons.append("No authoritative UserPromptSubmit.model observation is available for an actual turn.")
+            reasons.append("No authoritative UserPromptSubmit.model observation is available for the current task.")
         else:
             if observation.get("schema_version") != CAPABILITY_SCHEMA_VERSION:
                 reasons.append("Root observation schema does not match this health checker.")
+                observation_compatible = False
             if observation.get("plugin_version") != plugin_version:
                 reasons.append("Root observation belongs to a different plugin version.")
-            if not observation.get("timestamp"):
+                observation_compatible = False
+            if not current_plugin_identity or observation.get("plugin_identity") != current_plugin_identity:
+                reasons.append("Root observation belongs to a different or unidentifiable plugin candidate.")
+                observation_compatible = False
+            if session_id and observation.get("session_id") != session_id:
+                reasons.append("Root observation belongs to a different task.")
+                observation_compatible = False
+            if not observation.get("turn_id"):
+                reasons.append("Root observation has no authoritative turn identity.")
+                observation_compatible = False
+            if _timestamp(observation.get("timestamp")) is None:
                 reasons.append("Root observation has no timestamp.")
+                observation_compatible = False
 
         if not isinstance(root_model, str) or not root_model:
             reasons.append("The effective root model is unknown.")
         elif not root_model.lower().endswith("luna"):
-            reasons.append(
-                f"Active root is {root_model}, not Luna; credit-saving behaviour will be substantially reduced for that turn."
-            )
+            if observation is not None and session_id:
+                current_task_root_state = "DEGRADED_NON_LUNA"
+                reasons.append(
+                    f"Active root is {root_model}, not Luna; credit-saving behaviour will be substantially reduced for that turn."
+                )
+            else:
+                reasons.append(
+                    f"The supporting configuration reports {root_model}, not Luna, but cannot establish the current task's active root."
+                )
+        elif observation is not None and session_id:
+            current_task_root_state = "CHEAP_ROOT"
 
         if receipt_error:
             reasons.append(f"Capability receipt is unreadable ({receipt_error}).")
         if receipt is None:
             reasons.append("No successful Terra/Sol escalation receipt exists; no automatic paid probe was performed.")
         else:
+            receipt_compatible = observation_compatible
             if receipt.get("schema_version") != CAPABILITY_SCHEMA_VERSION:
                 reasons.append("Capability receipt schema does not match this health checker.")
+                receipt_compatible = False
             if receipt.get("capability_signature") != CAPABILITY_SIGNATURE:
                 reasons.append("Capability receipt signature does not match the supported direct-spawn adapter.")
+                receipt_compatible = False
             if receipt.get("plugin_version") != plugin_version:
                 reasons.append("Capability receipt belongs to a different plugin version.")
+                receipt_compatible = False
+            if not current_plugin_identity or receipt.get("plugin_identity") != current_plugin_identity:
+                reasons.append("Capability receipt belongs to a different or unidentifiable plugin candidate.")
+                receipt_compatible = False
             if receipt.get("observed_child_model") not in {"gpt-5.6-terra", "gpt-5.6-sol"}:
                 reasons.append("Capability receipt does not attest a Terra or Sol child.")
-            if not receipt.get("effort_intent") or not receipt.get("timestamp"):
+                receipt_compatible = False
+            receipt_timestamp = _timestamp(receipt.get("timestamp"))
+            if not receipt.get("effort_intent") or receipt_timestamp is None:
                 reasons.append("Capability receipt lacks effort intent or timestamp evidence.")
+                receipt_compatible = False
+            else:
+                receipt_age = int(time.time()) - receipt_timestamp
+                if receipt_age > CAPABILITY_MAX_AGE_SECONDS:
+                    reasons.append("Capability receipt is stale and cannot establish present runtime compatibility.")
+                    current_runtime_capability_state = "STALE"
+                    receipt_compatible = False
+                elif receipt_age < -300:
+                    reasons.append("Capability receipt timestamp is in the future and cannot establish present compatibility.")
+                    receipt_compatible = False
 
-        if observation is not None and receipt is not None:
-            for field, label in (
-                ("runtime_version", "Codex runtime version"),
-                ("runtime_build", "Codex runtime build"),
-                ("host_type", "Codex host type"),
-            ):
-                current_value = observation.get(field)
-                receipt_value = receipt.get(field)
-                current_observable = isinstance(current_value, str) and bool(current_value)
-                receipt_observable = isinstance(receipt_value, str) and bool(receipt_value)
-                if current_observable and not receipt_observable:
-                    reasons.append(f"{label} is currently observable but was not bound by the capability receipt.")
-                elif current_observable and receipt_observable and current_value != receipt_value:
-                    reasons.append(f"{label} changed after the last successful escalation receipt.")
-            current_platform = observation.get("platform")
-            receipt_platform = receipt.get("platform")
-            if current_platform and not receipt_platform:
-                reasons.append("Current platform was not bound by the capability receipt.")
-            elif current_platform and receipt_platform and current_platform != receipt_platform:
-                reasons.append("Capability receipt platform does not match the current hook observation.")
+            current_versioned = {
+                field: observation.get(field)
+                for field in ("runtime_version", "runtime_build")
+                if observation is not None and isinstance(observation.get(field), str) and observation.get(field)
+            }
+            if not current_versioned:
+                reasons.append("Runtime identity unavailable; capability compatibility unproven.")
+                if current_runtime_capability_state != "STALE":
+                    current_runtime_capability_state = "UNPROVEN"
+                receipt_compatible = False
+            else:
+                for field, label in (
+                    ("runtime_version", "Codex runtime version"),
+                    ("runtime_build", "Codex runtime build"),
+                ):
+                    current_value = current_versioned.get(field)
+                    if current_value:
+                        receipt_value = receipt.get(field)
+                        if not isinstance(receipt_value, str) or not receipt_value:
+                            reasons.append(f"{label} is currently observable but was not bound by the capability receipt.")
+                            receipt_compatible = False
+                        elif current_value != receipt_value:
+                            reasons.append(f"{label} changed after the last successful escalation receipt.")
+                            receipt_compatible = False
+
+            if observation is not None:
+                for field, label in (("host_type", "Codex host type"), ("platform", "Current platform")):
+                    current_value = observation.get(field)
+                    if isinstance(current_value, str) and current_value:
+                        receipt_value = receipt.get(field)
+                        if not isinstance(receipt_value, str) or not receipt_value:
+                            reasons.append(f"{label} was not bound by the capability receipt.")
+                            receipt_compatible = False
+                        elif current_value != receipt_value:
+                            reasons.append(f"Capability receipt {field.replace('_', ' ')} does not match the current hook observation.")
+                            receipt_compatible = False
+
+            if receipt_compatible:
+                current_runtime_capability_state = "CURRENT RUNTIME ESCALATION CAPABLE"
+            elif current_runtime_capability_state not in {"STALE", "UNPROVEN"}:
+                current_runtime_capability_state = "INCOMPATIBLE"
 
         if not reasons:
             status = "READY"
@@ -193,7 +337,6 @@ def _routing_health(effective: dict[str, Any], plugin_version: str, data_root: P
     identity_values = (
         observation.get("runtime_version") if observation else None,
         observation.get("runtime_build") if observation else None,
-        observation.get("host_type") if observation else None,
     )
     observable_identity_count = sum(isinstance(value, str) and bool(value) for value in identity_values)
     runtime_identity = (
@@ -211,6 +354,13 @@ def _routing_health(effective: dict[str, Any], plugin_version: str, data_root: P
         "root_model_source": root_source,
         "config_model": config_model,
         "reasons": reasons,
+        "current_session_id": session_id or None,
+        "observation_session_id": observation.get("session_id") if observation else None,
+        "observation_turn_id": observation.get("turn_id") if observation else None,
+        "plugin_identity": current_plugin_identity,
+        "current_task_root_state": current_task_root_state,
+        "historical_escalation_state": historical_escalation_state,
+        "current_runtime_capability_state": current_runtime_capability_state,
         "observation_present": observation is not None,
         "capability_receipt_present": receipt is not None,
         "runtime_identity": runtime_identity,
@@ -278,7 +428,13 @@ def inspect(cwd: Path, plugin_prefix: str) -> dict[str, Any]:
     )
     effective["available"] = supported_path_available
     data_home = Path(os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))).expanduser()
-    health = _routing_health(effective, str(skill_summary.get("version") or ""), data_home / plugin_prefix)
+    health = _routing_health(
+        effective,
+        str(skill_summary.get("version") or ""),
+        data_home / plugin_prefix,
+        plugin_identity=_plugin_identity(),
+        current_session_id=os.environ.get("CODEX_SESSION_ID") or os.environ.get("CODEX_THREAD_ID"),
+    )
     return {
         "plugin": plugin_prefix,
         "cwd_checked": bool(entry.get("cwd")),
@@ -287,7 +443,7 @@ def inspect(cwd: Path, plugin_prefix: str) -> dict[str, Any]:
         "root_model": health["root_model"],
         "root_model_source": health["root_model_source"],
         "reasons": health["reasons"],
-        "readiness_scope": "OBSERVED_ROOT_AND_OBSERVABLE_IDENTITY_CAPABILITY",
+        "readiness_scope": "CURRENT_TASK_ROOT_AND_VERSIONED_RUNTIME_CAPABILITY",
         "live_delegation_required": health["status"] != "READY",
         "hooks": [
             {

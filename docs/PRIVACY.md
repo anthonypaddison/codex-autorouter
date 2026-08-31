@@ -2,6 +2,8 @@
 
 Plugin hooks keep one JSON ledger per routed turn under `${PLUGIN_DATA}/router-state-v2`. The directory and files are user-private where the host filesystem supports POSIX modes.
 
+Health evidence under `CODEX_HOME/gpt-5-6-router` contains a latest global root summary, one latest root observation per opaque task/session ID, and the latest capability receipt. Root observations contain task and turn identifiers, model, plugin identity, observable runtime identity, platform, and timestamp. Capability receipts additionally contain the correlated child agent and turn identifiers, requested/observed child model, effort evidence, and route purpose. They contain no prompt text, assistant response, or tool output. Historical receipts are retained even when they are identity-null, incompatible, or older than the 30-day readiness window.
+
 Ledgers contain opaque session and turn identifiers; the selected route and orchestration plan; task-profile categories and signal names; custom-agent identifiers, lifecycle status, and model/configuration attestation; mutation and verification counters; violations; timestamps; and routing-council recommendations when used. They do not contain prompt text, assistant responses, tool output, prompt hashes, or other prompt-derived digests.
 
 The persistent routing preference file contains only a schema version and one enum value: `token-saver`, `balanced`, or `max-quality`. It contains no prompt, task, model transcript, account, or usage data. The hook launcher may also create one empty `.gpt56-stale-hook-reported` marker in plugin data after a missing-cache failure so that the diagnostic is emitted only once.
