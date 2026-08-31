@@ -183,7 +183,7 @@ Small tasks stay in one agent. Larger tasks may split into a few independent pie
 - It does not change your Fast/Standard preference.
 - It never changes or claims to have configured your root model.
 - It never spends credits on an automatic readiness probe.
-- It does not store your prompt text or a hash of it in its routing records.
+- New routing records do not store your prompt text or a hash of it. Affected historical ledgers may retain legacy prompt-derived event keys until normal retention or an explicit purge removes them; see the [privacy guide](docs/PRIVACY.md).
 
 ## Update or remove Autorouter
 

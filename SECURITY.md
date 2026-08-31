@@ -8,7 +8,7 @@ If the private reporting button is absent or cannot be tested by the publisher, 
 
 ## Security model
 
-- Router ledgers contain opaque task identifiers and routing metadata, never prompt contents or prompt-derived hashes.
+- New router ledgers contain opaque task and event identifiers plus routing metadata, never prompt contents or prompt-derived hashes. Affected historical ledgers can retain legacy prompt-derived event keys until normal retention or an explicit owner-checked purge removes them; see `docs/PRIVACY.md`.
 - Plugin hooks run only after Codex hook trust and can be disabled by managed policy.
 - The activator writes only six allowlisted custom-agent filenames under `CODEX_HOME/agents`.
 - Activation state is private, checksummed, journaled, and recovered before another lifecycle operation.

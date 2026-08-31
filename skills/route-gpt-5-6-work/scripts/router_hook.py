@@ -98,6 +98,10 @@ STATE_MARKER_SCHEMA = 1
 MAX_CHILD_PROMPT_OBSERVATIONS = 64
 STATE_MARKER_OWNER = "gpt-5-6-router"
 NONCE = re.compile(r"[0-9a-f]{64}")
+PROMPT_EVENT_IDENTITY_SCHEMA = "opaque-event-v1"
+OPAQUE_LIFECYCLE_EVENT_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:-]{7,199}")
+OPAQUE_PROMPT_EVENT_KEY = re.compile(r"(?:event-[0-9]{6,}|resolved:ambiguity-[0-9]{6,}|child-turn-context:[A-Za-z0-9_.:-]+)")
+LEGACY_PROMPT_EVENT_HASH = re.compile(r"[0-9a-f]{24}")
 ROUTES = {
     "current": {"model": "current", "effort": "current", "delegate": False},
     "gpt56_luna_worker": {"model": "gpt-5.6-luna", "effort": "low", "delegate": True},
@@ -640,6 +644,7 @@ def _model_evidence_consistent(agent: dict[str, Any]) -> bool:
     if isinstance(prompt_observations, list) and (
         not prompt_observations
         or agent.get("prompt_evidence_overflow")
+        or any(not _current_prompt_event_identity(item) for item in prompt_observations)
         or any(str(item.get("model") or "") != requested_model for item in prompt_observations)
         or (
             requested_effort
@@ -669,18 +674,86 @@ def _child_turn_ids(agent: dict[str, Any]) -> list[str]:
     return turns[:MAX_CHILD_PROMPT_OBSERVATIONS]
 
 
-def _child_prompt_event_key(data: dict[str, Any]) -> str:
-    material = json.dumps(
-        {
-            "turn_id": str(data.get("turn_id") or ""),
-            "model": str(data.get("model") or ""),
-            "effort": str(data.get("model_reasoning_effort") or data.get("reasoning_effort") or ""),
-            "prompt": str(data.get("prompt") or ""),
-        },
-        sort_keys=True,
-        separators=(",", ":"),
+def _current_prompt_event_identity(observation: Any) -> bool:
+    return bool(
+        isinstance(observation, dict)
+        and observation.get("event_identity_schema") == PROMPT_EVENT_IDENTITY_SCHEMA
+        and OPAQUE_PROMPT_EVENT_KEY.fullmatch(str(observation.get("event_key") or ""))
     )
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()[:24]
+
+
+def _prompt_event_identity_violation(agent_id: str, agent: dict[str, Any]) -> str | None:
+    observations = agent.get("prompt_observations")
+    if not isinstance(observations, list) or not observations:
+        return None
+    if any(
+        isinstance(item, dict)
+        and LEGACY_PROMPT_EVENT_HASH.fullmatch(str(item.get("event_key") or ""))
+        and item.get("event_identity_schema") != PROMPT_EVENT_IDENTITY_SCHEMA
+        for item in observations
+    ):
+        return f"legacy_prompt_event_identity:{agent_id}"
+    if any(not _current_prompt_event_identity(item) for item in observations):
+        return f"invalid_prompt_event_identity:{agent_id}"
+    return None
+
+
+def _lifecycle_event_id(data: dict[str, Any]) -> str | None:
+    for field in ("hook_event_id", "event_id"):
+        value = str(data.get(field) or "")
+        if OPAQUE_LIFECYCLE_EVENT_ID.fullmatch(value):
+            return value
+    return None
+
+
+def _next_prompt_event_key(state: dict[str, Any]) -> str:
+    sequence = int(state.get("prompt_event_sequence") or 0) + 1
+    state["prompt_event_sequence"] = sequence
+    return f"event-{sequence:06d}"
+
+
+def _prompt_event_metadata(data: dict[str, Any]) -> dict[str, str | None]:
+    return {
+        "turn_id": str(data.get("turn_id") or "") or None,
+        "model": str(data.get("model") or "") or None,
+        "effort": str(data.get("model_reasoning_effort") or data.get("reasoning_effort") or "") or None,
+        "agent_id": str(data.get("agent_id") or "") or None,
+    }
+
+
+def _record_prompt_event_replay(
+    state: dict[str, Any], data: dict[str, Any], lifecycle_event_id: str,
+) -> bool:
+    expected = _prompt_event_metadata(data)
+    records: list[tuple[dict[str, Any], dict[str, Any] | None]] = []
+    for agent in state.get("agents", {}).values():
+        for observation in agent.get("prompt_observations", []):
+            if isinstance(observation, dict):
+                records.append((observation, agent))
+    for field in ("child_prompt_ambiguities", "unmatched_child_prompts"):
+        for record in state.get(field, []):
+            if isinstance(record, dict):
+                records.append((record, None))
+    matches = [item for item in records if item[0].get("lifecycle_event_id") == lifecycle_event_id]
+    if not matches:
+        return False
+    for record, agent in matches:
+        actual = {
+            "turn_id": record.get("turn_id"),
+            "model": record.get("model", record.get("observed_model")),
+            "effort": record.get("effort", record.get("observed_effort")),
+            "agent_id": record.get("agent_id"),
+        }
+        if actual == expected:
+            if agent is not None:
+                agent["duplicate_prompt_events"] = int(agent.get("duplicate_prompt_events") or 0) + 1
+            else:
+                record["duplicate_events"] = int(record.get("duplicate_events") or 0) + 1
+            return True
+    violation = f"conflicting_child_prompt_event:{lifecycle_event_id}"
+    if violation not in state.setdefault("violations", []):
+        state["violations"].append(violation)
+    return True
 
 
 def _next_ambiguity_key(state: dict[str, Any]) -> str:
@@ -746,16 +819,21 @@ def _bind_resolved_ambiguity(
         else:
             turn_ids.append(event_turn)
     observations = agent.setdefault("prompt_observations", [])
-    event_key = f"resolved:{record['ambiguity_key']}"
+    event_key = str(record.get("event_key") or f"resolved:{record['ambiguity_key']}")
     if not any(item.get("event_key") == event_key for item in observations):
         if len(observations) >= MAX_CHILD_PROMPT_OBSERVATIONS:
             agent["prompt_evidence_overflow"] = True
         else:
             observations.append({
                 "event_key": event_key,
+                "event_identity_schema": PROMPT_EVENT_IDENTITY_SCHEMA,
+                "lifecycle_event_id": record.get("lifecycle_event_id"),
                 "turn_id": event_turn or None,
                 "model": observed_model or None,
                 "effort": observed_effort or None,
+                "agent_id": record.get("agent_id"),
+                "bound_agent_id": agent_id,
+                "source": "resolved_ambiguity",
             })
     agent.update({
         "observed_model": observed_model or None,
@@ -840,6 +918,11 @@ def _record_child_model_mismatch(state: dict[str, Any], agent_id: str, source: s
 
 def _record_capability(state: dict[str, Any], agent_id: str) -> bool:
     agent = state.get("agents", {}).get(agent_id, {})
+    identity_violation = _prompt_event_identity_violation(agent_id, agent)
+    if identity_violation:
+        if identity_violation not in state.setdefault("violations", []):
+            state["violations"].append(identity_violation)
+        return False
     role = str(agent.get("type") or "")
     requested_model = str(agent.get("requested_model") or "")
     observed_model = str(agent.get("observed_model") or "")
@@ -1847,9 +1930,14 @@ def _record_child_prompt(data: dict[str, Any]) -> bool:
     if scope is None:
         return False
     state, active = scope
+    lifecycle_event_id = _lifecycle_event_id(data)
+    if lifecycle_event_id and _record_prompt_event_replay(state, data, lifecycle_event_id):
+        _write_existing_state(data, state)
+        return True
     observed_model = str(data.get("model") or "")
     observed_effort = str(data.get("model_reasoning_effort") or data.get("reasoning_effort") or "")
     event_turn = str(data.get("turn_id") or "")
+    event_key = _next_prompt_event_key(state)
     previously_bound = [
         (agent_id, agent) for agent_id, agent in active if event_turn and event_turn in _child_turn_ids(agent)
     ]
@@ -1871,6 +1959,10 @@ def _record_child_prompt(data: dict[str, Any]) -> bool:
     if len(candidates) != 1:
         turn_id = str(data.get("turn_id") or "") or None
         record = {
+            "event_key": event_key,
+            "event_identity_schema": PROMPT_EVENT_IDENTITY_SCHEMA,
+            "lifecycle_event_id": lifecycle_event_id,
+            "agent_id": str(data.get("agent_id") or "") or None,
             "turn_id": turn_id,
             "observed_model": observed_model or None,
             "observed_effort": observed_effort or None,
@@ -1907,17 +1999,19 @@ def _record_child_prompt(data: dict[str, Any]) -> bool:
         else:
             turn_ids.append(event_turn)
     observations = agent.setdefault("prompt_observations", [])
-    event_key = _child_prompt_event_key(data)
-    if not any(item.get("event_key") == event_key for item in observations):
-        if len(observations) >= MAX_CHILD_PROMPT_OBSERVATIONS:
-            agent["prompt_evidence_overflow"] = True
-        else:
-            observations.append({
-                "event_key": event_key,
-                "turn_id": event_turn or None,
-                "model": observed_model or None,
-                "effort": observed_effort or None,
-            })
+    if len(observations) >= MAX_CHILD_PROMPT_OBSERVATIONS:
+        agent["prompt_evidence_overflow"] = True
+    else:
+        observations.append({
+            "event_key": event_key,
+            "event_identity_schema": PROMPT_EVENT_IDENTITY_SCHEMA,
+            "lifecycle_event_id": lifecycle_event_id,
+            "turn_id": event_turn or None,
+            "model": observed_model or None,
+            "effort": observed_effort or None,
+            "agent_id": str(data.get("agent_id") or "") or None,
+            "bound_agent_id": agent_id,
+        })
     agent.update({
         "observed_model": observed_model or None,
         "observed_effort": observed_effort or None,
@@ -2519,9 +2613,13 @@ def _bind_child_transcript_evidence(
     })
     existing_observations.append({
         "event_key": f"child-turn-context:{agent_id}:{child_turn_id}",
+        "event_identity_schema": PROMPT_EVENT_IDENTITY_SCHEMA,
+        "lifecycle_event_id": None,
         "turn_id": child_turn_id,
         "model": observed_model,
         "effort": observed_effort,
+        "agent_id": agent_id,
+        "bound_agent_id": agent_id,
         "source": "child_turn_context",
     })
     agent["model_evidence_consistent"] = _model_evidence_consistent(agent)
@@ -3121,6 +3219,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             "prompt_observed_effort": None,
             "prompt_observations": [],
             "prompt_evidence_overflow": False,
+            "duplicate_prompt_events": 0,
             "child_turn_id": None,
             "child_turn_ids": [],
             "stop_observed_model": None,
@@ -3422,7 +3521,8 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
                     problems.append("execute with the exact routing-council selected role")
         if any(item.startswith((
             "unexpected_agent:", "worker_cap_exceeded:", "ordering_violation:", "advisor_mutation:",
-            "child_model_mismatch:", "unmatched_child_prompt:",
+            "child_model_mismatch:", "unmatched_child_prompt:", "conflicting_child_prompt_event:",
+            "legacy_prompt_event_identity:", "invalid_prompt_event_identity:",
         )) for item in state["violations"]) or _has_unresolved_child_prompt_ambiguity(state):
             problems.append(
                 "resolve unexpected-agent, child-model, worker-cap, orchestration-order, or advisor-mutation violations"

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -1211,12 +1212,16 @@ class RouterTests(unittest.TestCase):
             "agent_id": "terra", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
         })
         first = {
-            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "child-a",
+            "hook_event_name": "UserPromptSubmit", "hook_event_id": "hook-event-child-a",
+            "session_id": session, "turn_id": "child-a",
             "model": "gpt-5.6-terra", "model_reasoning_effort": "medium", "prompt": "First instruction.",
         }
         router_hook.handle(first)
         router_hook.handle(first)
-        router_hook.handle({**first, "turn_id": "child-b", "prompt": "Second instruction."})
+        router_hook.handle({
+            **first, "hook_event_id": "hook-event-child-b", "turn_id": "child-b",
+            "prompt": "Second instruction.",
+        })
         child = self._ledger(session, "parent")["agents"]["terra"]
         self.assertEqual(["child-a", "child-b"], child["child_turn_ids"])
         self.assertEqual(2, len(child["prompt_observations"]))
@@ -1654,6 +1659,155 @@ class RouterTests(unittest.TestCase):
         self.assertEqual("gpt-5.6-luna", observation["root_model"])
         self.assertEqual(2, len(ledger["child_prompt_ambiguities"]))
         self.assertTrue(all(len(item["candidate_agent_ids"]) == 2 for item in ledger["child_prompt_ambiguities"]))
+        self.assertEqual(
+            ["event-000001", "event-000002"],
+            [item.get("event_key") for item in ledger["child_prompt_ambiguities"]],
+        )
+        self.assertEqual(
+            {"opaque-event-v1"},
+            {item.get("event_identity_schema") for item in ledger["child_prompt_ambiguities"]},
+        )
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+
+    def test_distinct_identical_child_prompts_receive_opaque_non_content_event_identities(self) -> None:
+        session = "opaque-distinct-prompts"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "parent",
+            "model": "gpt-5.6-luna",
+            "prompt": "Add pagination to this endpoint and include targeted tests.",
+        })
+        router_hook.handle({
+            "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "parent",
+            "agent_id": "terra-child", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+        })
+        for suffix in ("a", "b"):
+            router_hook.handle({
+                "hook_event_name": "UserPromptSubmit", "hook_event_id": f"hook-event-{suffix}",
+                "session_id": session, "turn_id": f"child-{suffix}", "agent_id": "terra-child",
+                "model": "gpt-5.6-terra", "model_reasoning_effort": "medium",
+                "prompt": "SYNTHETIC identical private child prompt",
+            })
+
+        observations = self._ledger(session, "parent")["agents"]["terra-child"]["prompt_observations"]
+        self.assertEqual(["event-000001", "event-000002"], [item["event_key"] for item in observations])
+        self.assertEqual({"opaque-event-v1"}, {item["event_identity_schema"] for item in observations})
+        self.assertEqual(
+            ["hook-event-a", "hook-event-b"],
+            [item["lifecycle_event_id"] for item in observations],
+        )
+
+    def test_authoritative_child_prompt_replay_is_idempotent_without_prompt_comparison(self) -> None:
+        session = "opaque-prompt-replay"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "parent",
+            "model": "gpt-5.6-luna",
+            "prompt": "Add pagination to this endpoint and include targeted tests.",
+        })
+        router_hook.handle({
+            "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "parent",
+            "agent_id": "terra-child", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+        })
+        event = {
+            "hook_event_name": "UserPromptSubmit", "hook_event_id": "hook-event-replayed",
+            "session_id": session, "turn_id": "child",
+            "model": "gpt-5.6-terra", "model_reasoning_effort": "medium",
+        }
+        router_hook.handle({**event, "prompt": "SYNTHETIC private prompt alpha"})
+        router_hook.handle({**event, "prompt": "SYNTHETIC private prompt beta"})
+
+        ledger = self._ledger(session, "parent")
+        observations = ledger["agents"]["terra-child"]["prompt_observations"]
+        self.assertEqual(1, len(observations))
+        self.assertEqual("event-000001", observations[0]["event_key"])
+        self.assertEqual("hook-event-replayed", observations[0]["lifecycle_event_id"])
+        self.assertEqual(1, ledger["agents"]["terra-child"]["duplicate_prompt_events"])
+
+    def test_generated_ledger_persists_no_user_content_or_content_derived_digest(self) -> None:
+        session = "ledger-privacy-audit"
+        root_prompt = "SYNTHETIC ROOT PRIVATE 5f6136e7"
+        child_prompt = "SYNTHETIC CHILD PRIVATE 9174bfea"
+        assistant_content = (
+            "Evidence: SYNTHETIC ASSISTANT PRIVATE a893cf2e\n"
+            "Verification: complete\nUncertainty: none"
+        )
+        tool_output = "SYNTHETIC TOOL OUTPUT PRIVATE 4473a9bd"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "parent",
+            "model": "gpt-5.6-luna", "prompt": root_prompt,
+        })
+        router_hook.handle({
+            "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "parent",
+            "agent_id": "terra-child", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+        })
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "hook_event_id": "privacy-event-0001",
+            "session_id": session, "turn_id": "child", "agent_id": "terra-child",
+            "model": "gpt-5.6-terra", "model_reasoning_effort": "medium", "prompt": child_prompt,
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": session, "turn_id": "parent",
+            "tool_name": "exec", "tool_input": {"command": "pwd"},
+            "tool_response": {"exit_code": 0, "output": tool_output},
+        })
+        router_hook.handle({
+            "hook_event_name": "SubagentStop", "session_id": session, "turn_id": "child",
+            "agent_id": "terra-child", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+            "last_assistant_message": assistant_content,
+        })
+
+        serialized = json.dumps(self._ledger(session, "parent"), sort_keys=True, separators=(",", ":"))
+        for content in (root_prompt, child_prompt, assistant_content, tool_output):
+            with self.subTest(content=content.split()[1]):
+                self.assertNotIn(content, serialized)
+                digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+                self.assertNotIn(digest, serialized)
+                self.assertNotIn(digest[:24], serialized)
+        legacy_material = json.dumps({
+            "effort": "medium",
+            "model": "gpt-5.6-terra",
+            "prompt": child_prompt,
+            "turn_id": "child",
+        }, sort_keys=True, separators=(",", ":"))
+        self.assertNotIn(hashlib.sha256(legacy_material.encode("utf-8")).hexdigest()[:24], serialized)
+
+    def test_legacy_prompt_hash_event_cannot_establish_current_capability_proof(self) -> None:
+        session = "legacy-prompt-event"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "parent",
+            "model": "gpt-5.6-luna",
+            "prompt": "Add pagination to this endpoint and include targeted tests.",
+        })
+        router_hook.handle({
+            "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "parent",
+            "agent_id": "terra-child", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+        })
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "child",
+            "agent_id": "terra-child", "model": "gpt-5.6-terra",
+            "model_reasoning_effort": "medium", "prompt": "Complete the bounded child task.",
+        })
+        path = Path(self.temp.name) / f"{session}--parent.json"
+        legacy = json.loads(path.read_text(encoding="utf-8"))
+        observation = legacy["agents"]["terra-child"]["prompt_observations"][0]
+        observation.clear()
+        observation.update({
+            "event_key": "0123456789abcdef01234567",
+            "turn_id": "child",
+            "model": "gpt-5.6-terra",
+            "effort": "medium",
+        })
+        path.write_text(json.dumps(legacy), encoding="utf-8")
+
+        self._stop_terra_child(session, "child", "terra-child")
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": "parent",
+            "stop_hook_active": False,
+        })
+
+        ledger = self._ledger(session, "parent")
+        self.assertEqual("FAILED_OPEN", ledger["status"])
+        self.assertIn("legacy_prompt_event_identity:terra-child", ledger["violations"])
+        self.assertFalse(ledger["agents"]["terra-child"]["receipt_recorded"])
         self.assertFalse(router_hook.CAPABILITY_PATH.exists())
 
     def test_authoritative_stop_resolves_one_ambiguity_and_allows_truthful_completion(self) -> None:
