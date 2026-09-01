@@ -235,6 +235,21 @@ class RouterTests(unittest.TestCase):
             }})
         return records
 
+    @staticmethod
+    def _transcript_mutation_records(turn: str, call_id: str = "mutation-hook-1") -> list[dict]:
+        metadata = {"turn_id": turn}
+        return [
+            {"payload": {
+                "type": "custom_tool_call", "name": "exec", "call_id": call_id,
+                "input": "const r = await tools.apply_patch(`patch`); text(r);",
+                "internal_chat_message_metadata_passthrough": metadata,
+            }},
+            {"payload": {
+                "type": "custom_tool_call_output", "call_id": call_id, "output": "Done",
+                "internal_chat_message_metadata_passthrough": metadata,
+            }},
+        ]
+
     def _ledger(self, session: str, turn: str) -> dict:
         return json.loads((Path(self.temp.name) / f"{session}--{turn}.json").read_text(encoding="utf-8"))
 
@@ -3091,6 +3106,36 @@ class RouterTests(unittest.TestCase):
         self.assertFalse(router_hook._response_succeeded(failed))
         self.assertFalse(router_hook._response_succeeded("Script completed\nOutput:\nnot JSON"))
 
+    def test_response_status_handles_non_scalar_status_with_bounded_semantics(self) -> None:
+        self.assertTrue(router_hook._response_status({"status": {"exit_code": 0}}))
+        self.assertIsNone(router_hook._response_status({"status": {"label": "success"}}))
+        self.assertIsNone(router_hook._response_status({"status": ["success"]}))
+        self.assertIsNone(router_hook._response_status({"note": '{"status":"success"}'}))
+        self.assertIsNone(router_hook._response_status({"note": {"status": "success"}}))
+        self.assertIsNone(router_hook._response_status({"note": {"exit_code": 0}}))
+        self.assertTrue(router_hook._response_status({"result": {"status": "success"}}))
+        self.assertIsNone(router_hook._response_status({"status": 0}))
+        self.assertIsNone(router_hook._response_status({
+            "output": "x" * (router_hook.RESPONSE_STATUS_MAX_SCALAR_BYTES + 1),
+        }))
+
+        cyclic: dict[str, object] = {}
+        cyclic["result"] = cyclic
+        self.assertIsNone(router_hook._response_status(cyclic))
+
+        pathological: dict[str, object] = {}
+        cursor = pathological
+        for _ in range(64):
+            child: dict[str, object] = {}
+            cursor["status"] = child
+            cursor = child
+        cursor["exit_code"] = 0
+        self.assertIsNone(router_hook._response_status(pathological))
+
+        self.assertIsNone(router_hook._response_status({
+            "status": [{"detail": index} for index in range(5000)],
+        }))
+
     def test_verification_command_allowlist_rejects_ceremonial_checks(self) -> None:
         self.assertFalse(router_hook._is_verification("echo check"))
         self.assertFalse(router_hook._is_verification("printf build"))
@@ -3129,12 +3174,13 @@ class RouterTests(unittest.TestCase):
                 })
                 router_hook.handle({
                     "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
-                    "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
+                    "tool_name": "apply_patch", "tool_use_id": "mutation-hook-1",
+                    "tool_input": {"command": "patch"}, "tool_response": {},
                 })
                 transcript = Path(self.temp.name) / f"{session}.jsonl"
                 self._write_large_jsonl(
                     transcript,
-                    self._transcript_verification_records(turn),
+                    self._transcript_mutation_records(turn) + self._transcript_verification_records(turn),
                     position=position,
                 )
 
@@ -3249,11 +3295,14 @@ class RouterTests(unittest.TestCase):
         })
         router_hook.handle({
             "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
-            "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
+            "tool_name": "apply_patch", "tool_use_id": "mutation-hook-1",
+            "tool_input": {"command": "patch"}, "tool_response": {},
         })
-        records = self._transcript_verification_records(turn, include_output=False)
+        records = self._transcript_mutation_records(turn) + self._transcript_verification_records(
+            turn, include_output=False,
+        )
         transcript = Path(self.temp.name) / f"{session}.jsonl"
-        transcript.write_text(json.dumps(records[0]) + "\n", encoding="utf-8")
+        transcript.write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
 
         router_hook.handle({
             "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
@@ -3417,12 +3466,13 @@ class RouterTests(unittest.TestCase):
         })
         router_hook.handle({
             "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
-            "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
+            "tool_name": "apply_patch", "tool_use_id": "mutation-hook-1",
+            "tool_input": {"command": "patch"}, "tool_response": {},
         })
-        records = self._transcript_verification_records(turn)
+        records = self._transcript_mutation_records(turn) + self._transcript_verification_records(turn)
         transcript = Path(self.temp.name) / f"{session}.jsonl"
         transcript.write_text(
-            "\n".join(json.dumps(record) for record in [records[0], records[1], records[1]]) + "\n",
+            "\n".join(json.dumps(record) for record in [*records, records[-1]]) + "\n",
             encoding="utf-8",
         )
 
@@ -3550,13 +3600,14 @@ class RouterTests(unittest.TestCase):
         })
         router_hook.handle({
             "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
-            "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
+            "tool_name": "apply_patch", "tool_use_id": "mutation-hook-1",
+            "tool_input": {"command": "patch"}, "tool_response": {},
         })
         metadata = {"turn_id": turn}
         transcript_dir = router_hook.CODEX_HOME / "sessions" / "2026" / "07" / "14"
         transcript_dir.mkdir(parents=True)
         transcript = transcript_dir / f"rollout-{session}.jsonl"
-        records = [
+        records = self._transcript_mutation_records(turn) + [
             {"payload": {
                 "type": "custom_tool_call", "name": "exec", "call_id": "verify-custom",
                 "input": (
@@ -3582,6 +3633,254 @@ class RouterTests(unittest.TestCase):
         self.assertEqual("COMPLETE", state["status"])
         self.assertEqual(state["mutation_generation"], state["verified_generation"])
         self.assertEqual("transcript_exit_status", state["verification_observability"])
+
+    def test_transcript_success_without_mutation_generation_proof_stays_incomplete(self) -> None:
+        session = "verification-generation-unproven"
+        turn = "t1"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo.",
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+            "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
+        })
+        transcript = Path(self.temp.name) / f"{session}.jsonl"
+        transcript.write_text(
+            "\n".join(json.dumps(record) for record in self._transcript_verification_records(turn)) + "\n",
+            encoding="utf-8",
+        )
+
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
+            "stop_hook_active": False, "transcript_path": str(transcript),
+        })
+
+        ledger = self._ledger(session, turn)
+        self.assertEqual("FAILED_OPEN", ledger["status"])
+        self.assertEqual(-1, ledger["verified_generation"])
+        self.assertEqual("INCOMPLETE", ledger["transcript_reconciliation"]["verification"]["status"])
+
+    def test_transcript_success_does_not_infer_current_call_id_from_call_count(self) -> None:
+        session = "verification-generation-current-id-missing"
+        turn = "t1"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo.",
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+            "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
+        })
+        transcript = Path(self.temp.name) / f"{session}.jsonl"
+        records = self._transcript_mutation_records(turn) + self._transcript_verification_records(turn)
+        transcript.write_text(
+            "\n".join(json.dumps(record) for record in records) + "\n",
+            encoding="utf-8",
+        )
+
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
+            "stop_hook_active": False, "transcript_path": str(transcript),
+        })
+
+        ledger = self._ledger(session, turn)
+        self.assertEqual("FAILED_OPEN", ledger["status"])
+        self.assertEqual(-1, ledger["verified_generation"])
+        self.assertEqual("INCOMPLETE", ledger["transcript_reconciliation"]["verification"]["status"])
+
+    def test_legacy_generation_replay_requires_an_exact_turn_complete_bijection(self) -> None:
+        session = "verification-generation-legacy-bijection"
+        turn = "t1"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo.",
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+            "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
+        })
+        state = self._ledger(session, turn)
+        state.pop("mutation_generation_provenance")
+        state.pop("mutation_generation_provenance_complete")
+        context = router_hook._verification_scan_context()
+        for record in self._transcript_mutation_records(turn) + self._transcript_verification_records(turn):
+            router_hook._consume_verification_record(record, state, context)
+
+        outcome = router_hook._apply_verification_scan(state, context)
+
+        self.assertEqual("FOUND", outcome)
+        self.assertEqual(state["mutation_generation"], state["verified_generation"])
+
+    def test_transcript_success_requires_exact_mutation_call_id_provenance(self) -> None:
+        session = "verification-generation-call-id"
+        turn = "t1"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo.",
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+            "tool_name": "apply_patch", "tool_use_id": "mutation-hook-1",
+            "tool_input": {"command": "patch"}, "tool_response": {},
+        })
+        metadata = {"turn_id": turn}
+        mutation_records = [
+            {"payload": {
+                "type": "custom_tool_call", "name": "exec", "call_id": "different-mutation-call",
+                "input": "const r = await tools.apply_patch(`patch`); text(r);",
+                "internal_chat_message_metadata_passthrough": metadata,
+            }},
+            {"payload": {
+                "type": "custom_tool_call_output", "call_id": "different-mutation-call", "output": "Done",
+                "internal_chat_message_metadata_passthrough": metadata,
+            }},
+        ]
+        transcript = Path(self.temp.name) / f"{session}.jsonl"
+        transcript.write_text(
+            "\n".join(json.dumps(record) for record in (
+                mutation_records + self._transcript_verification_records(turn)
+            )) + "\n",
+            encoding="utf-8",
+        )
+
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
+            "stop_hook_active": False, "transcript_path": str(transcript),
+        })
+
+        ledger = self._ledger(session, turn)
+        self.assertEqual("FAILED_OPEN", ledger["status"])
+        self.assertEqual(-1, ledger["verified_generation"])
+        self.assertEqual("INCOMPLETE", ledger["transcript_reconciliation"]["verification"]["status"])
+
+    def test_transcript_success_settles_exact_mutation_call_id_generation(self) -> None:
+        session = "verification-generation-bound"
+        turn = "t1"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo.",
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+            "tool_name": "apply_patch", "tool_use_id": "mutation-hook-1",
+            "tool_input": {"command": "patch"}, "tool_response": {},
+        })
+        metadata = {"turn_id": turn}
+        mutation_records = [
+            {"payload": {
+                "type": "custom_tool_call", "name": "exec", "call_id": "mutation-hook-1",
+                "input": "const r = await tools.apply_patch(`patch`); text(r);",
+                "internal_chat_message_metadata_passthrough": metadata,
+            }},
+            {"payload": {
+                "type": "custom_tool_call_output", "call_id": "mutation-hook-1", "output": "Done",
+                "internal_chat_message_metadata_passthrough": metadata,
+            }},
+        ]
+        transcript = Path(self.temp.name) / f"{session}.jsonl"
+        transcript.write_text(
+            "\n".join(json.dumps(record) for record in (
+                mutation_records + self._transcript_verification_records(turn)
+            )) + "\n",
+            encoding="utf-8",
+        )
+
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
+            "stop_hook_active": False, "transcript_path": str(transcript),
+        })
+
+        ledger = self._ledger(session, turn)
+        self.assertEqual("COMPLETE", ledger["status"])
+        self.assertEqual(1, ledger["verified_generation"])
+        self.assertEqual("FOUND", ledger["transcript_reconciliation"]["verification"]["status"])
+
+    def test_transcript_success_rejects_unmapped_extra_mutation_call(self) -> None:
+        session = "verification-generation-extra-call"
+        turn = "t1"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo.",
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+            "tool_name": "apply_patch", "tool_use_id": "mutation-hook-1",
+            "tool_input": {"command": "patch"}, "tool_response": {},
+        })
+        records = (
+            self._transcript_mutation_records(turn)
+            + self._transcript_mutation_records(turn, "mutation-unmapped")
+            + self._transcript_verification_records(turn)
+        )
+        transcript = Path(self.temp.name) / f"{session}.jsonl"
+        transcript.write_text(
+            "\n".join(json.dumps(record) for record in records) + "\n",
+            encoding="utf-8",
+        )
+
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
+            "stop_hook_active": False, "transcript_path": str(transcript),
+        })
+
+        ledger = self._ledger(session, turn)
+        self.assertEqual("FAILED_OPEN", ledger["status"])
+        self.assertEqual(-1, ledger["verified_generation"])
+        self.assertEqual("INCOMPLETE", ledger["transcript_reconciliation"]["verification"]["status"])
+
+    def test_transcript_success_before_later_bound_mutation_remains_debt(self) -> None:
+        session = "verification-generation-later-mutation"
+        turn = "t1"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo.",
+        })
+        for generation in (1, 2):
+            router_hook.handle({
+                "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+                "tool_name": "apply_patch", "tool_use_id": f"mutation-hook-{generation}",
+                "tool_input": {"command": f"patch {generation}"}, "tool_response": {},
+            })
+        metadata = {"turn_id": turn}
+        first_mutation = [
+            {"payload": {
+                "type": "custom_tool_call", "name": "exec", "call_id": "mutation-hook-1",
+                "input": "const r = await tools.apply_patch(`patch 1`); text(r);",
+                "internal_chat_message_metadata_passthrough": metadata,
+            }},
+            {"payload": {
+                "type": "custom_tool_call_output", "call_id": "mutation-hook-1", "output": "Done",
+                "internal_chat_message_metadata_passthrough": metadata,
+            }},
+        ]
+        second_mutation = [
+            {"payload": {
+                "type": "custom_tool_call", "name": "exec", "call_id": "mutation-hook-2",
+                "input": "const r = await tools.apply_patch(`patch 2`); text(r);",
+                "internal_chat_message_metadata_passthrough": metadata,
+            }},
+            {"payload": {
+                "type": "custom_tool_call_output", "call_id": "mutation-hook-2", "output": "Done",
+                "internal_chat_message_metadata_passthrough": metadata,
+            }},
+        ]
+        transcript = Path(self.temp.name) / f"{session}.jsonl"
+        transcript.write_text(
+            "\n".join(json.dumps(record) for record in (
+                first_mutation + self._transcript_verification_records(turn) + second_mutation
+            )) + "\n",
+            encoding="utf-8",
+        )
+
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
+            "stop_hook_active": False, "transcript_path": str(transcript),
+        })
+
+        ledger = self._ledger(session, turn)
+        self.assertEqual("FAILED_OPEN", ledger["status"])
+        self.assertEqual(-1, ledger["verified_generation"])
 
     def test_nested_exec_verification_settles_the_latest_mutation(self) -> None:
         router_hook.handle({
@@ -3626,7 +3925,8 @@ class RouterTests(unittest.TestCase):
         })
         router_hook.handle({
             "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
-            "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
+            "tool_name": "apply_patch", "tool_use_id": "patch-call",
+            "tool_input": {"command": "patch"}, "tool_response": {},
         })
         metadata = {"turn_id": turn}
         transcript = Path(self.temp.name) / "verification-parent.jsonl"
@@ -3678,7 +3978,8 @@ class RouterTests(unittest.TestCase):
         })
         router_hook.handle({
             "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
-            "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
+            "tool_name": "apply_patch", "tool_use_id": "mutation-hook-1",
+            "tool_input": {"command": "patch"}, "tool_response": {},
         })
         metadata = {"turn_id": turn}
         command = (
@@ -3690,7 +3991,7 @@ class RouterTests(unittest.TestCase):
         self.assertFalse(router_hook._is_mutation("exec", command))
         self.assertTrue(router_hook._is_verification(command))
         transcript = Path(self.temp.name) / "verification-version-comparison.jsonl"
-        records = [
+        records = self._transcript_mutation_records(turn) + [
             {"payload": {
                 "type": "custom_tool_call", "name": "exec", "call_id": "verify-version",
                 "input": command, "internal_chat_message_metadata_passthrough": metadata,
@@ -4255,7 +4556,8 @@ class RouterTests(unittest.TestCase):
         })
         router_hook.handle({
             "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
-            "tool_name": "apply_patch", "tool_input": {}, "tool_response": {},
+            "tool_name": "apply_patch", "tool_use_id": "mutation-hook-1",
+            "tool_input": {}, "tool_response": {},
         })
         router_hook.handle({
             "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
@@ -4265,7 +4567,8 @@ class RouterTests(unittest.TestCase):
         })
         metadata = {"turn_id": turn}
         transcript = Path(self.temp.name) / "nested-verification.jsonl"
-        transcript.write_text("\n".join(json.dumps(item) for item in [
+        transcript.write_text("\n".join(json.dumps(item) for item in (
+            self._transcript_mutation_records(turn) + [
             {"payload": {
                 "type": "function_call", "name": "functions.exec", "call_id": "verify-1",
                 "arguments": json.dumps({"source": "const r = await tools.exec_command({cmd: 'python -m unittest'}); text(r.output)"}),
@@ -4276,7 +4579,7 @@ class RouterTests(unittest.TestCase):
                 "output": json.dumps({"exit_code": 0, "output": "OK"}),
                 "internal_chat_message_metadata_passthrough": metadata,
             }},
-        ]), encoding="utf-8")
+        ])), encoding="utf-8")
         result = router_hook.handle({
             "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
             "stop_hook_active": False, "transcript_path": str(transcript),

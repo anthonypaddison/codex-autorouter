@@ -101,6 +101,9 @@ TRANSCRIPT_MAX_RETAINED_TEXT_BYTES = 256 * 1024
 TRANSCRIPT_MAX_CALLS = 256
 TRANSCRIPT_MAX_AGENTS = 64
 TRANSCRIPT_MAX_KEY_BYTES = 512
+RESPONSE_STATUS_MAX_DEPTH = 20
+RESPONSE_STATUS_MAX_ITEMS = 4096
+RESPONSE_STATUS_MAX_SCALAR_BYTES = 2 * 1024 * 1024
 STATE_MARKER_OWNER = "gpt-5-6-router"
 NONCE = re.compile(r"[0-9a-f]{64}")
 PROMPT_EVENT_IDENTITY_SCHEMA = "opaque-event-v1"
@@ -2262,31 +2265,87 @@ def _command_candidates(command: str) -> list[str]:
 
 def _response_status(response: Any) -> bool | None:
     evidence: list[bool] = []
+    visited_items = 0
+    retained_scalar_bytes = 0
+    incomplete = False
+    active_containers: set[int] = set()
 
-    def visit(value: Any, depth: int = 0) -> None:
-        if depth > 20:
+    def visit(
+        value: Any,
+        depth: int = 0,
+        *,
+        allow_encoded_result: bool = True,
+        semantic_status_location: bool = True,
+    ) -> None:
+        nonlocal incomplete, retained_scalar_bytes, visited_items
+        if incomplete:
+            return
+        visited_items += 1
+        if depth > RESPONSE_STATUS_MAX_DEPTH or visited_items > RESPONSE_STATUS_MAX_ITEMS:
+            incomplete = True
             return
         if isinstance(value, dict):
-            for key, child in value.items():
-                if key in {"exit_code", "exitCode"}:
-                    evidence.append(child in (0, "0"))
-                elif key == "isError":
-                    evidence.append(child is False)
-                elif key == "status" and child in {"success", "completed", "ok", "failed", "error"}:
-                    evidence.append(child in {"success", "completed", "ok"})
-                else:
-                    visit(child, depth + 1)
+            identity = id(value)
+            if identity in active_containers or len(value) > RESPONSE_STATUS_MAX_ITEMS:
+                incomplete = True
+                return
+            active_containers.add(identity)
+            try:
+                for key, child in value.items():
+                    if (
+                        semantic_status_location
+                        and key in {"exit_code", "exitCode"}
+                        and isinstance(child, (int, str))
+                        and not isinstance(child, bool)
+                    ):
+                        evidence.append(child in (0, "0"))
+                    elif semantic_status_location and key == "isError" and isinstance(child, bool):
+                        evidence.append(child is False)
+                    elif semantic_status_location and key == "status" and isinstance(child, str):
+                        retained_scalar_bytes += len(child.encode("utf-8", errors="replace"))
+                        if retained_scalar_bytes > RESPONSE_STATUS_MAX_SCALAR_BYTES:
+                            incomplete = True
+                            return
+                        if child in {"success", "completed", "ok", "failed", "error"}:
+                            evidence.append(child in {"success", "completed", "ok"})
+                    else:
+                        visit(
+                            child,
+                            depth + 1,
+                            allow_encoded_result=key in {"content", "data", "output", "result", "text"},
+                            semantic_status_location=(
+                                key in {"content", "data", "output", "result", "text"}
+                                or (semantic_status_location and key == "status")
+                            ),
+                        )
+            finally:
+                active_containers.discard(identity)
         elif isinstance(value, list):
-            for child in value:
-                visit(child, depth + 1)
+            identity = id(value)
+            if identity in active_containers or len(value) > RESPONSE_STATUS_MAX_ITEMS:
+                incomplete = True
+                return
+            active_containers.add(identity)
+            try:
+                for child in value:
+                    visit(
+                        child,
+                        depth + 1,
+                        allow_encoded_result=allow_encoded_result,
+                        semantic_status_location=semantic_status_location,
+                    )
+            finally:
+                active_containers.discard(identity)
         elif isinstance(value, str):
             candidate = value.strip()
-            if len(candidate) > 2 * 1024 * 1024:
+            retained_scalar_bytes += len(candidate.encode("utf-8", errors="replace"))
+            if retained_scalar_bytes > RESPONSE_STATUS_MAX_SCALAR_BYTES:
+                incomplete = True
                 return
             json_candidate = candidate
             if candidate.startswith("Script completed") and "\nOutput:\n" in candidate:
                 json_candidate = candidate.rsplit("\nOutput:\n", 1)[1].strip()
-            if json_candidate[:1] in {"{", "["}:
+            if allow_encoded_result and json_candidate[:1] in {"{", "["}:
                 try:
                     decoded = json.loads(json_candidate)
                 except json.JSONDecodeError:
@@ -2294,7 +2353,7 @@ def _response_status(response: Any) -> bool | None:
                 visit(decoded, depth + 1)
 
     visit(response)
-    return all(evidence) if evidence else None
+    return all(evidence) if evidence and not incomplete else None
 
 
 def _response_succeeded(response: Any) -> bool:
@@ -2443,6 +2502,19 @@ def _verification_satisfies(state: dict[str, Any], kind: str) -> bool:
     )
 
 
+def _hook_tool_call_id(data: dict[str, Any]) -> str | None:
+    for key in ("tool_use_id", "call_id"):
+        value = data.get(key)
+        if not isinstance(value, str):
+            continue
+        if (
+            len(value.encode("utf-8", errors="replace")) <= TRANSCRIPT_MAX_KEY_BYTES
+            and OPAQUE_LIFECYCLE_EVENT_ID.fullmatch(value)
+        ):
+            return value
+    return None
+
+
 def _effective_verification(state: dict[str, Any]) -> str:
     if state.get("mutation_surface") == "documentation_only":
         return "successful post-mutation git diff --check"
@@ -2457,6 +2529,11 @@ def _ensure_verification_state(state: dict[str, Any]) -> None:
     state.setdefault("mutation_surface", "none")
     state.setdefault("observed_verification", None)
     state.setdefault("verification_requirement", _effective_verification(state))
+    state.setdefault("mutation_generation_provenance", [])
+    state.setdefault(
+        "mutation_generation_provenance_complete",
+        state.get("mutation_generation", 0) == 0,
+    )
 
 
 def _structured_return(message: str) -> bool:
@@ -2853,6 +2930,15 @@ def _verification_scan_context() -> dict[str, Any]:
     }
 
 
+def _transcript_turn_bound(payload: dict[str, Any], state: dict[str, Any]) -> bool:
+    metadata = payload.get("internal_chat_message_metadata_passthrough")
+    return bool(
+        isinstance(metadata, dict)
+        and metadata.get("turn_id")
+        and str(metadata.get("turn_id")) == str(state.get("turn_id"))
+    )
+
+
 def _consume_verification_record(
     record: dict[str, Any], state: dict[str, Any], context: dict[str, Any],
 ) -> bool:
@@ -2865,6 +2951,7 @@ def _consume_verification_record(
     if call is not None and call[0]:
         call_id, tool, command = call
         if _is_mutation(tool, command) or _verification_kind(command) is not None:
+            turn_bound = _transcript_turn_bound(payload, state)
             call_id = _bounded_transcript_key(call_id)
             command_bytes = len(command.encode("utf-8", errors="replace"))
             prior = context["calls"].get(call_id)
@@ -2876,7 +2963,7 @@ def _consume_verification_record(
             calls = context["calls"]
             if call_id not in calls and len(calls) >= TRANSCRIPT_MAX_CALLS:
                 raise _TranscriptIncomplete
-            calls[call_id] = (sequence, tool, command)
+            calls[call_id] = (sequence, tool, command, turn_bound)
             return True
     if payload.get("type") in {"custom_tool_call_output", "function_call_output"}:
         call_id = _bounded_transcript_key(payload.get("call_id"))
@@ -2901,15 +2988,70 @@ def _apply_verification_scan(state: dict[str, Any], context: dict[str, Any]) -> 
     recovered_attempts = 0
     recovered_failures = 0
     successful_call_ids: list[str] = []
-    for call_sequence, tool, command in calls.values():
-        if _is_mutation(tool, command):
+    mutation_calls: dict[str, tuple[int, str, str, bool]] = {}
+    for call_id, (call_sequence, tool, command, turn_bound) in calls.items():
+        if turn_bound and _is_mutation(tool, command):
+            output = outputs.get(call_id)
+            if output is not None and output[1] is False:
+                continue
+            mutation_calls[call_id] = (call_sequence, tool, command, turn_bound)
             last_mutation_sequence = max(last_mutation_sequence, call_sequence)
             paths, surface = _mutation_evidence({"tool_input": command}, tool, command)
             _merge_mutation_surface(state, paths, surface)
+
+    generation = int(state.get("mutation_generation") or 0)
+    provenance = state.get("mutation_generation_provenance")
+    provenance_complete = bool(state.get("mutation_generation_provenance_complete"))
+    provenance_declared = any(
+        key in state
+        for key in ("mutation_generation_provenance", "mutation_generation_provenance_complete")
+    )
+
+    def generation_is_bound(verification_sequence: int) -> bool:
+        if generation <= 0:
+            return True
+        if provenance_declared:
+            if not isinstance(provenance, list) or not provenance or not provenance_complete:
+                return False
+            if len(provenance) != generation:
+                return False
+            expected_generations = list(range(1, generation + 1))
+            observed_generations: list[int] = []
+            observed_call_ids: list[str] = []
+            for item in provenance:
+                if not isinstance(item, dict):
+                    return False
+                try:
+                    observed_generations.append(int(item.get("generation")))
+                except (TypeError, ValueError):
+                    return False
+                observed_call_ids.append(str(item.get("call_id") or ""))
+            if (
+                observed_generations != expected_generations
+                or any(not call_id for call_id in observed_call_ids)
+                or len(set(observed_call_ids)) != len(observed_call_ids)
+                or set(observed_call_ids) != set(mutation_calls)
+            ):
+                return False
+            return all(
+                call_id in mutation_calls
+                and mutation_calls[call_id][0] < verification_sequence
+                for call_id in observed_call_ids
+            )
+
+        # Legacy ledgers did not retain tool-call identities. A complete exact-turn
+        # transcript can still establish a one-to-one ordered mapping only when the
+        # unique mutation-producing calls have exactly the recorded cardinality.
+        return len(mutation_calls) == generation and all(
+            call_sequence < verification_sequence
+            for call_sequence, _tool, _command, _turn_bound in mutation_calls.values()
+        )
+
+    generation_binding_incomplete = False
     found = False
-    for call_id, (call_sequence, _tool, command) in calls.items():
+    for call_id, (call_sequence, _tool, command, turn_bound) in calls.items():
         kind = _verification_kind(command)
-        if kind is None or call_id not in outputs:
+        if kind is None or call_id not in outputs or not turn_bound:
             continue
         output_sequence, status = outputs[call_id]
         if status is None:
@@ -2924,10 +3066,13 @@ def _apply_verification_scan(state: dict[str, Any], context: dict[str, Any]) -> 
             and output_sequence > call_sequence
             and _verification_satisfies(state, kind)
         ):
-            successful_verification_sequence = max(successful_verification_sequence, output_sequence)
-            successful_verification_kind = kind
-            successful_call_ids.append(call_id)
-    if context["candidate_incomplete"]:
+            if generation_is_bound(call_sequence):
+                successful_verification_sequence = max(successful_verification_sequence, output_sequence)
+                successful_verification_kind = kind
+                successful_call_ids.append(call_id)
+            else:
+                generation_binding_incomplete = True
+    if context["candidate_incomplete"] or generation_binding_incomplete:
         return "INCOMPLETE"
     if successful_verification_sequence >= 0:
         state["verified_generation"] = state.get("mutation_generation", 0)
@@ -3341,6 +3486,8 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             "service_tier_inheritance_verified": True,
             "mutations": 0,
             "mutation_generation": 0,
+            "mutation_generation_provenance": [],
+            "mutation_generation_provenance_complete": True,
             "changed_files": [],
             "mutation_surface": "none",
             "verification_attempts": 0,
@@ -3540,6 +3687,22 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         if mutation:
             state["mutations"] += 1
             state["mutation_generation"] = state.get("mutation_generation", 0) + 1
+            generation = int(state["mutation_generation"])
+            call_id = _hook_tool_call_id(data)
+            provenance = state.setdefault("mutation_generation_provenance", [])
+            existing_call_ids = {
+                str(item.get("call_id") or "")
+                for item in provenance
+                if isinstance(item, dict)
+            }
+            if (
+                call_id
+                and call_id not in existing_call_ids
+                and len(provenance) < TRANSCRIPT_MAX_CALLS
+            ):
+                provenance.append({"generation": generation, "call_id": call_id})
+            else:
+                state["mutation_generation_provenance_complete"] = False
             paths, surface = _mutation_evidence(data, tool, command)
             _merge_mutation_surface(state, paths, surface)
             state["verification_requirement"] = _effective_verification(state)
