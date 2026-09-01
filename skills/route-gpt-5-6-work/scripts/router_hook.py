@@ -96,6 +96,11 @@ ROUTING_PROFILES = {
 STATE_VERSION = 4
 STATE_MARKER_SCHEMA = 1
 MAX_CHILD_PROMPT_OBSERVATIONS = 64
+TRANSCRIPT_MAX_LINE_BYTES = 16 * 1024 * 1024
+TRANSCRIPT_MAX_RETAINED_TEXT_BYTES = 256 * 1024
+TRANSCRIPT_MAX_CALLS = 256
+TRANSCRIPT_MAX_AGENTS = 64
+TRANSCRIPT_MAX_KEY_BYTES = 512
 STATE_MARKER_OWNER = "gpt-5-6-router"
 NONCE = re.compile(r"[0-9a-f]{64}")
 PROMPT_EVENT_IDENTITY_SCHEMA = "opaque-event-v1"
@@ -2507,6 +2512,103 @@ def _text_values(value: Any):
             yield from _text_values(child)
 
 
+class _TranscriptIncomplete(Exception):
+    """The transcript was valid JSONL but bounded reconciliation could not finish."""
+
+
+def _transcript_outcome(status: str, records_scanned: int = 0, bytes_scanned: int = 0) -> dict[str, Any]:
+    return {
+        "status": status,
+        "records_scanned": records_scanned,
+        "bytes_scanned": bytes_scanned,
+    }
+
+
+def _scan_jsonl_transcript(path: Path, visitor: Any) -> dict[str, Any]:
+    """Scan one JSONL transcript with bounded I/O and descriptor validation."""
+    records_scanned = 0
+    bytes_scanned = 0
+    found = False
+    descriptor: int | None = None
+    try:
+        before = os.lstat(path)
+    except FileNotFoundError:
+        return _transcript_outcome("PATH_REJECTED")
+    except OSError:
+        return _transcript_outcome("IO_ERROR")
+    if (
+        stat.S_ISLNK(before.st_mode)
+        or not stat.S_ISREG(before.st_mode)
+        or int(getattr(before, "st_nlink", 1)) != 1
+        or (hasattr(os, "getuid") and int(before.st_uid) != int(os.getuid()))
+    ):
+        return _transcript_outcome("PATH_REJECTED")
+    flags = os.O_RDONLY
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or int(getattr(opened, "st_nlink", 1)) != 1
+            or opened.st_dev != before.st_dev
+            or opened.st_ino != before.st_ino
+            or (hasattr(os, "getuid") and int(opened.st_uid) != int(os.getuid()))
+        ):
+            return _transcript_outcome("PATH_REJECTED")
+        with os.fdopen(descriptor, "rb", closefd=True) as stream:
+            descriptor = None
+            while True:
+                line = stream.readline(TRANSCRIPT_MAX_LINE_BYTES + 1)
+                if not line:
+                    break
+                bytes_scanned += len(line)
+                if len(line) > TRANSCRIPT_MAX_LINE_BYTES:
+                    return _transcript_outcome("LINE_TOO_LARGE", records_scanned, bytes_scanned)
+                try:
+                    record = json.loads(line)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    return _transcript_outcome("MALFORMED", records_scanned, bytes_scanned)
+                if not isinstance(record, dict):
+                    return _transcript_outcome("MALFORMED", records_scanned, bytes_scanned)
+                records_scanned += 1
+                try:
+                    found = bool(visitor(record)) or found
+                except _TranscriptIncomplete:
+                    return _transcript_outcome("INCOMPLETE", records_scanned, bytes_scanned)
+    except OSError:
+        return _transcript_outcome("IO_ERROR", records_scanned, bytes_scanned)
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+    return _transcript_outcome("FOUND" if found else "NOT_FOUND", records_scanned, bytes_scanned)
+
+
+def _bounded_text(value: Any) -> str:
+    """Extract transient text for one relevant record without retaining unbounded content."""
+    parts: list[str] = []
+    retained = 0
+    for text in _text_values(value):
+        retained += len(text.encode("utf-8", errors="replace"))
+        if retained > TRANSCRIPT_MAX_RETAINED_TEXT_BYTES:
+            raise _TranscriptIncomplete
+        parts.append(text)
+    return "\n".join(parts)
+
+
+def _bounded_transcript_key(value: Any) -> str:
+    key = str(value or "")
+    if len(key.encode("utf-8", errors="replace")) > TRANSCRIPT_MAX_KEY_BYTES:
+        raise _TranscriptIncomplete
+    return key
+
+
 def _attest_child(parent_transcript: Path, agent_id: str, expected: dict[str, Any]) -> dict[str, Any]:
     attestation = {
         "model": None,
@@ -2518,8 +2620,12 @@ def _attest_child(parent_transcript: Path, agent_id: str, expected: dict[str, An
         "mutation_seen": False,
         "recursive_spawn_seen": False,
         "source": "child_turn_context",
+        "reconciliation_status": "NOT_FOUND",
+        "records_scanned": 0,
+        "bytes_scanned": 0,
     }
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", agent_id):
+        attestation["reconciliation_status"] = "PATH_REJECTED"
         return attestation
     candidates = sorted(
         path for path in parent_transcript.parent.glob(f"*{agent_id}.jsonl")
@@ -2527,51 +2633,62 @@ def _attest_child(parent_transcript: Path, agent_id: str, expected: dict[str, An
     )[:2]
     attestation["candidate_count"] = len(candidates)
     if len(candidates) != 1:
+        if len(candidates) > 1:
+            attestation["reconciliation_status"] = "INCOMPLETE"
         return attestation
-    for candidate in candidates:
-        try:
-            if candidate.is_symlink() or not candidate.is_file() or candidate.stat().st_size > 8 * 1024 * 1024:
-                continue
-            contexts: list[tuple[str, str, str]] = []
-            malformed = False
-            for line in candidate.read_text(encoding="utf-8", errors="replace").splitlines():
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    malformed = True
-                    break
-                payload = record.get("payload", {})
-                if not isinstance(payload, dict):
-                    malformed = True
-                    break
-                if record.get("type") == "turn_context" or payload.get("type") == "turn_context":
-                    contexts.append((
-                        str(payload.get("model") or ""),
-                        str(payload.get("effort") or ""),
-                        str(payload.get("turn_id") or ""),
-                    ))
-                record_type = str(record.get("type") or payload.get("type") or "")
-                if record_type in {"custom_tool_call", "function_call"}:
-                    joined = "\n".join(_text_values(record))
-                    if re.search(r"\b(apply_patch|Edit|Write|mcp__[^\s]*(?:create|update|write|delete|apply))\b", joined, re.I):
-                        attestation["mutation_seen"] = True
-                    if re.search(r"\bspawn_agent\b", joined):
-                        attestation["recursive_spawn_seen"] = True
-            if malformed:
-                return attestation
-            distinct_contexts = set(contexts)
-            if len(distinct_contexts) == 1:
-                model, effort, turn_id = distinct_contexts.pop()
-                attestation["model"] = model or None
-                attestation["effort"] = effort or None
-                attestation["turn_id"] = turn_id or None
-                attestation["matched"] = model == expected["model"] and effort == expected["effort"]
-            elif contexts:
+    candidate = candidates[0]
+    contexts: set[tuple[str, str, str]] = set()
+    mutation_seen = False
+    recursive_spawn_seen = False
+
+    def visit(record: dict[str, Any]) -> bool:
+        nonlocal mutation_seen, recursive_spawn_seen
+        payload = record.get("payload", {})
+        if not isinstance(payload, dict):
+            raise _TranscriptIncomplete
+        relevant = False
+        if record.get("type") == "turn_context" or payload.get("type") == "turn_context":
+            context = (
+                _bounded_transcript_key(payload.get("model")),
+                _bounded_transcript_key(payload.get("effort")),
+                _bounded_transcript_key(payload.get("turn_id")),
+            )
+            if context not in contexts and len(contexts) < 2:
+                contexts.add(context)
+            if context not in contexts or len(contexts) > 1:
                 attestation["contradictory"] = True
-            if contexts:
-                return attestation
-        except OSError:
-            continue
+            relevant = True
+        record_type = str(record.get("type") or payload.get("type") or "")
+        if record_type in {"custom_tool_call", "function_call"}:
+            joined = _bounded_text(record)
+            if re.search(r"\b(apply_patch|Edit|Write|mcp__[^\s]*(?:create|update|write|delete|apply))\b", joined, re.I):
+                mutation_seen = True
+                relevant = True
+            if re.search(r"\bspawn_agent\b", joined):
+                recursive_spawn_seen = True
+                relevant = True
+        return relevant
+
+    outcome = _scan_jsonl_transcript(candidate, visit)
+    attestation.update({
+        "reconciliation_status": outcome["status"],
+        "records_scanned": outcome["records_scanned"],
+        "bytes_scanned": outcome["bytes_scanned"],
+        "mutation_seen": mutation_seen if outcome["status"] in {"FOUND", "NOT_FOUND"} else False,
+        "recursive_spawn_seen": recursive_spawn_seen if outcome["status"] in {"FOUND", "NOT_FOUND"} else False,
+    })
+    if outcome["status"] not in {"FOUND", "NOT_FOUND"}:
+        return attestation
+    if len(contexts) == 1:
+        model, effort, turn_id = next(iter(contexts))
+        attestation["model"] = model or None
+        attestation["effort"] = effort or None
+        attestation["turn_id"] = turn_id or None
+        attestation["matched"] = model == expected["model"] and effort == expected["effort"]
+        attestation["reconciliation_status"] = "FOUND"
+    elif contexts:
+        attestation["contradictory"] = True
+        attestation["reconciliation_status"] = "INCOMPLETE"
     return attestation
 
 
@@ -2716,36 +2833,68 @@ def _transcript_path(data: dict[str, Any]) -> Path | None:
         return None
 
 
-def _reconcile_verification_transcript(data: dict[str, Any], state: dict[str, Any]) -> None:
-    """Recover observable command results omitted from PostToolUse events.
+def _set_reconciliation_status(
+    state: dict[str, Any], channel: str, status: str, outcome: dict[str, Any],
+) -> None:
+    state.setdefault("transcript_reconciliation", {})[channel] = {
+        "status": status,
+        "records_scanned": int(outcome.get("records_scanned") or 0),
+        "bytes_scanned": int(outcome.get("bytes_scanned") or 0),
+    }
 
-    Only machine-readable exit status is accepted. Human completion prose and
-    bare command output never settle the gate.
-    """
-    path = _transcript_path(data)
-    if path is None:
-        return
-    try:
-        if path.is_symlink() or not path.is_file() or path.stat().st_size > 8 * 1024 * 1024:
-            return
-        records = [json.loads(line) for line in path.read_text(encoding="utf-8", errors="replace").splitlines()]
-    except (json.JSONDecodeError, OSError):
-        return
 
-    calls: dict[str, tuple[int, str, str]] = {}
-    outputs: dict[str, tuple[int, Any]] = {}
-    for sequence, record in enumerate(records):
-        payload = record.get("payload", {})
-        if not isinstance(payload, dict) or not _transcript_turn_matches(payload, state):
-            continue
-        call = _transcript_tool_call(payload)
-        if call is not None and call[0]:
-            calls[call[0]] = (sequence, call[1], call[2])
-        if payload.get("type") in {"custom_tool_call_output", "function_call_output"}:
-            call_id = str(payload.get("call_id") or "")
-            if call_id:
-                outputs[call_id] = (sequence, payload.get("output"))
+def _verification_scan_context() -> dict[str, Any]:
+    return {
+        "sequence": 0,
+        "calls": {},
+        "outputs": {},
+        "candidate_incomplete": False,
+        "retained_text_bytes": 0,
+    }
 
+
+def _consume_verification_record(
+    record: dict[str, Any], state: dict[str, Any], context: dict[str, Any],
+) -> bool:
+    sequence = int(context["sequence"])
+    context["sequence"] = sequence + 1
+    payload = record.get("payload", {})
+    if not isinstance(payload, dict) or not _transcript_turn_matches(payload, state):
+        return False
+    call = _transcript_tool_call(payload)
+    if call is not None and call[0]:
+        call_id, tool, command = call
+        if _is_mutation(tool, command) or _verification_kind(command) is not None:
+            call_id = _bounded_transcript_key(call_id)
+            command_bytes = len(command.encode("utf-8", errors="replace"))
+            prior = context["calls"].get(call_id)
+            prior_bytes = len(prior[2].encode("utf-8", errors="replace")) if prior else 0
+            retained = int(context["retained_text_bytes"]) - prior_bytes + command_bytes
+            if retained > TRANSCRIPT_MAX_RETAINED_TEXT_BYTES:
+                raise _TranscriptIncomplete
+            context["retained_text_bytes"] = retained
+            calls = context["calls"]
+            if call_id not in calls and len(calls) >= TRANSCRIPT_MAX_CALLS:
+                raise _TranscriptIncomplete
+            calls[call_id] = (sequence, tool, command)
+            return True
+    if payload.get("type") in {"custom_tool_call_output", "function_call_output"}:
+        call_id = _bounded_transcript_key(payload.get("call_id"))
+        if call_id and call_id in context["calls"]:
+            outputs = context["outputs"]
+            if call_id not in outputs and len(outputs) >= TRANSCRIPT_MAX_CALLS:
+                raise _TranscriptIncomplete
+            status = _response_status(payload.get("output"))
+            outputs[call_id] = (sequence, status)
+            if _verification_kind(context["calls"][call_id][2]) is not None and status is None:
+                context["candidate_incomplete"] = True
+            return status is not None
+    return False
+
+
+def _apply_verification_scan(state: dict[str, Any], context: dict[str, Any]) -> str:
+    calls = context["calls"]
+    outputs = context["outputs"]
     last_mutation_sequence = -1
     successful_verification_sequence = -1
     successful_verification_kind: str | None = None
@@ -2757,14 +2906,16 @@ def _reconcile_verification_transcript(data: dict[str, Any], state: dict[str, An
             last_mutation_sequence = max(last_mutation_sequence, call_sequence)
             paths, surface = _mutation_evidence({"tool_input": command}, tool, command)
             _merge_mutation_surface(state, paths, surface)
+    found = False
     for call_id, (call_sequence, _tool, command) in calls.items():
         kind = _verification_kind(command)
         if kind is None or call_id not in outputs:
             continue
-        output_sequence, output = outputs[call_id]
-        status = _response_status(output)
-        if status is not None:
-            recovered_attempts += 1
+        output_sequence, status = outputs[call_id]
+        if status is None:
+            continue
+        found = True
+        recovered_attempts += 1
         if status is False:
             recovered_failures += 1
         if (
@@ -2776,7 +2927,8 @@ def _reconcile_verification_transcript(data: dict[str, Any], state: dict[str, An
             successful_verification_sequence = max(successful_verification_sequence, output_sequence)
             successful_verification_kind = kind
             successful_call_ids.append(call_id)
-
+    if context["candidate_incomplete"]:
+        return "INCOMPLETE"
     if successful_verification_sequence >= 0:
         state["verified_generation"] = state.get("mutation_generation", 0)
         state["verification_successes"] = max(state.get("verification_successes", 0), 1)
@@ -2791,10 +2943,42 @@ def _reconcile_verification_transcript(data: dict[str, Any], state: dict[str, An
     if recovered_failures:
         state["verification_failures"] = max(state.get("verification_failures", 0), recovered_failures)
     state["verification_requirement"] = _effective_verification(state)
+    return "FOUND" if found else "NOT_FOUND"
 
 
-def _reconcile_subagent_transcript(data: dict[str, Any], state: dict[str, Any]) -> None:
-    """Compatibility fallback for releases that skip SubagentStart/Stop hooks."""
+def _decoded_transcript_objects(payload: dict[str, Any]):
+    retained = 0
+    for text in _text_values(payload):
+        candidate = text.strip()
+        if not (
+            candidate.startswith("<subagent_notification>")
+            or (
+                candidate.startswith("{")
+                and ("\"agent_path\"" in candidate or "\"agent_id\"" in candidate)
+            )
+        ):
+            continue
+        retained += len(text.encode("utf-8", errors="replace"))
+        if retained > TRANSCRIPT_MAX_RETAINED_TEXT_BYTES:
+            raise _TranscriptIncomplete
+        match = re.fullmatch(r"<subagent_notification>(.*)</subagent_notification>", candidate, re.S)
+        if match:
+            candidate = match.group(1)
+        try:
+            value = json.loads(candidate)
+        except json.JSONDecodeError:
+            if match and candidate.endswith("}}}"):
+                try:
+                    value = json.loads(candidate[:-1])
+                except json.JSONDecodeError:
+                    continue
+            else:
+                continue
+        if isinstance(value, dict):
+            yield value
+
+
+def _subagent_scan_context(state: dict[str, Any]) -> dict[str, Any] | None:
     plan = state["decision"]["orchestration"]
     historical_plans = [
         item.get("orchestration", {})
@@ -2807,156 +2991,162 @@ def _reconcile_subagent_transcript(data: dict[str, Any], state: dict[str, Any]) 
         for candidate in valid_plans
         for role in candidate.get("allowed_agents", [])
     }
-    lifetime_worker_cap = sum(max(0, int(candidate.get("max_workers", 0))) for candidate in valid_plans)
     if not allowed:
-        return
-    path = _transcript_path(data)
-    if path is None:
-        return
-    try:
-        if not path.is_file() or path.stat().st_size > 8 * 1024 * 1024:
-            return
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return
-
-    spawn_count = 0
-    inheriting_spawns = 0
-    pending_types: list[str] = []
-    agent_roles: dict[str, str] = {
+        return None
+    agent_roles = {
         str(agent_id): str(agent.get("type") or "")
         for agent_id, agent in state.get("agents", {}).items()
         if str(agent_id) and str(agent.get("type") or "")
     }
-    spawn_calls: dict[str, str] = {}
-    agent_paths: dict[str, str] = {}
-    completed_ids: set[str] = set()
-    structured_ids: set[str] = set()
+    if len(agent_roles) > TRANSCRIPT_MAX_AGENTS:
+        raise _TranscriptIncomplete
+    return {
+        "plan": plan,
+        "valid_plans": valid_plans,
+        "allowed": allowed,
+        "lifetime_worker_cap": sum(max(0, int(candidate.get("max_workers", 0))) for candidate in valid_plans),
+        "spawn_count": 0,
+        "inheriting_spawns": 0,
+        "pending_types": [],
+        "agent_roles": agent_roles,
+        "spawn_calls": {},
+        "agent_paths": {},
+        "completed_ids": set(),
+        "structured_ids": set(),
+    }
 
-    def decoded_objects(payload: dict[str, Any]):
-        for text in _text_values(payload):
-            candidate = text.strip()
-            match = re.fullmatch(r"<subagent_notification>(.*)</subagent_notification>", candidate, re.S)
-            if match:
-                candidate = match.group(1)
-            try:
-                value = json.loads(candidate)
-            except json.JSONDecodeError:
-                # Older Codex notifications carried one surplus closing brace
-                # inside the host-owned wrapper. Accept only that exact legacy
-                # defect; never scan arbitrary surrounding tool text.
-                if match and candidate.endswith("}}}"):
-                    try:
-                        value = json.loads(candidate[:-1])
-                    except json.JSONDecodeError:
-                        continue
-                else:
-                    continue
-            if isinstance(value, dict):
-                yield value
 
-    for line in lines:
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        payload = record.get("payload", {})
-        if not isinstance(payload, dict) or not _transcript_turn_matches(payload, state):
-            continue
-        collaboration_spawn = _collaboration_spawn(payload)
-        if collaboration_spawn is not None:
-            role, call_id, tier_overridden = collaboration_spawn
-            completed_role_counts: dict[str, int] = {}
-            for completed_id in completed_ids:
-                completed_role = agent_roles.get(completed_id, "")
-                completed_role_counts[completed_role] = completed_role_counts.get(completed_role, 0) + 1
-            spawn_calls[call_id] = role
-            spawn_count += 1
-            if not tier_overridden:
-                inheriting_spawns += 1
-            if role not in state["subagents_started"]:
-                state["subagents_started"].append(role)
-            if role not in allowed:
-                state["violations"].append(f"unexpected_agent:{role}")
-            if spawn_count > lifetime_worker_cap:
-                state["violations"].append(f"worker_cap_exceeded:{lifetime_worker_cap}")
-            staged_plan = next((candidate for candidate in valid_plans if candidate.get("mode") == "evidence_then_owner" and role == candidate.get("synthesis_role")), None)
-            if staged_plan and completed_role_counts.get("gpt56_terra_worker", 0) < 2:
-                state["violations"].append(f"ordering_violation:{staged_plan['mode']}:{role}")
-            continue
-        if payload.get("type") == "sub_agent_activity":
-            call_id = str(payload.get("event_id") or "")
-            agent_id = str(payload.get("agent_thread_id") or "")
-            role = spawn_calls.get(call_id)
-            if role and agent_id:
-                agent_roles[agent_id] = role
-                path_name = str(payload.get("agent_path") or "")
-                if path_name:
-                    agent_paths[path_name] = agent_id
-            continue
-        texts = list(_text_values(payload))
-        joined = "\n".join(texts)
+def _subagent_completed_role_counts(context: dict[str, Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for completed_id in context["completed_ids"]:
+        role = context["agent_roles"].get(completed_id, "")
+        counts[role] = counts.get(role, 0) + 1
+    return counts
+
+
+def _record_scanned_spawn(state: dict[str, Any], context: dict[str, Any], role: str, tier_overridden: bool) -> None:
+    context["spawn_count"] += 1
+    if context["spawn_count"] > TRANSCRIPT_MAX_CALLS:
+        raise _TranscriptIncomplete
+    if not tier_overridden:
+        context["inheriting_spawns"] += 1
+    if role not in state["subagents_started"]:
+        state["subagents_started"].append(role)
+    if role not in context["allowed"]:
+        state["violations"].append(f"unexpected_agent:{role}")
+    if context["spawn_count"] > context["lifetime_worker_cap"]:
+        state["violations"].append(f"worker_cap_exceeded:{context['lifetime_worker_cap']}")
+    staged = next((
+        candidate for candidate in context["valid_plans"]
+        if candidate.get("mode") == "evidence_then_owner" and role == candidate.get("synthesis_role")
+    ), None)
+    if staged and _subagent_completed_role_counts(context).get("gpt56_terra_worker", 0) < 2:
+        state["violations"].append(f"ordering_violation:{staged['mode']}:{role}")
+
+
+def _consume_subagent_record(
+    record: dict[str, Any], state: dict[str, Any], context: dict[str, Any],
+) -> bool:
+    payload = record.get("payload", {})
+    if not isinstance(payload, dict) or not _transcript_turn_matches(payload, state):
+        return False
+    collaboration_spawn = _collaboration_spawn(payload)
+    if collaboration_spawn is not None:
+        role, call_id, tier_overridden = collaboration_spawn
+        call_id = _bounded_transcript_key(call_id)
+        if call_id not in context["spawn_calls"] and len(context["spawn_calls"]) >= TRANSCRIPT_MAX_CALLS:
+            raise _TranscriptIncomplete
+        context["spawn_calls"][call_id] = role
+        _record_scanned_spawn(state, context, role, tier_overridden)
+        return True
+    if payload.get("type") == "sub_agent_activity":
+        call_id = _bounded_transcript_key(payload.get("event_id"))
+        agent_id = _bounded_transcript_key(payload.get("agent_thread_id"))
+        role = context["spawn_calls"].get(call_id)
+        if role and agent_id:
+            if agent_id not in context["agent_roles"] and len(context["agent_roles"]) >= TRANSCRIPT_MAX_AGENTS:
+                raise _TranscriptIncomplete
+            context["agent_roles"][agent_id] = role
+            path_name = _bounded_transcript_key(payload.get("agent_path"))
+            if path_name:
+                if path_name not in context["agent_paths"] and len(context["agent_paths"]) >= TRANSCRIPT_MAX_AGENTS:
+                    raise _TranscriptIncomplete
+                context["agent_paths"][path_name] = agent_id
+            return True
+        return False
+    payload_type = str(payload.get("type") or "")
+    if payload_type not in {"custom_tool_call", "function_call_output", "message", "agent_message"}:
+        return False
+    if payload_type == "custom_tool_call":
+        if not any("spawn_agent" in text for text in _text_values(payload)):
+            return False
+        joined = _bounded_text(payload)
         transcript_role = spawn_compat.role_from_text(joined)
-        if payload.get("type") == "custom_tool_call" and "spawn_agent" in joined and transcript_role:
-            role = transcript_role
-            completed_role_counts: dict[str, int] = {}
-            for completed_id in completed_ids:
-                completed_role = agent_roles.get(completed_id, "")
-                completed_role_counts[completed_role] = completed_role_counts.get(completed_role, 0) + 1
-            staged_plan = next((candidate for candidate in valid_plans if candidate.get("mode") == "evidence_then_owner" and role == candidate.get("synthesis_role")), None)
-            ordering_violation = bool(staged_plan and completed_role_counts.get("gpt56_terra_worker", 0) < 2)
-            pending_types.append(role)
-            spawn_count += 1
-            if not re.search(r"\bservice_tier\s*:", joined):
-                inheriting_spawns += 1
-            if role not in state["subagents_started"]:
-                state["subagents_started"].append(role)
-            if role not in allowed:
-                state["violations"].append(f"unexpected_agent:{role}")
-            if spawn_count > lifetime_worker_cap:
-                state["violations"].append(f"worker_cap_exceeded:{lifetime_worker_cap}")
-            if ordering_violation:
-                state["violations"].append(f"ordering_violation:{staged_plan['mode']}:{role}")
-            continue
-        if payload.get("type") == "function_call_output":
-            for value in decoded_objects(payload):
-                agent_id = str(value.get("agent_id") or "")
-                if pending_types and agent_id:
-                    role = pending_types.pop(0)
-                    agent_roles.setdefault(agent_id, role)
-            continue
-        author = str(payload.get("author") or "")
-        if payload.get("type") == "agent_message" and author in agent_paths:
-            agent_id = agent_paths[author]
-            completed_ids.add(agent_id)
-            if _structured_return(joined):
-                structured_ids.add(agent_id)
-        if payload.get("type") in {"message", "agent_message"}:
-            for value in decoded_objects(payload):
-                agent_id = str(value.get("agent_path") or value.get("agent_id") or "")
-                status = value.get("status")
-                message = status.get("completed") if isinstance(status, dict) else None
-                if pending_types and agent_id:
-                    role = pending_types.pop(0)
-                    agent_roles.setdefault(agent_id, role)
-                if agent_id in agent_roles and isinstance(message, str):
-                    completed_ids.add(agent_id)
-                    if _structured_return(message):
-                        structured_ids.add(agent_id)
+    else:
+        joined = ""
+        transcript_role = None
+    if payload_type == "custom_tool_call" and transcript_role:
+        context["pending_types"].append(transcript_role)
+        if len(context["pending_types"]) > TRANSCRIPT_MAX_CALLS:
+            raise _TranscriptIncomplete
+        _record_scanned_spawn(
+            state, context, transcript_role, bool(re.search(r"\bservice_tier\s*:", joined)),
+        )
+        return True
+    if payload_type == "function_call_output":
+        if not context["pending_types"]:
+            return False
+        found = False
+        for value in _decoded_transcript_objects(payload):
+            agent_id = _bounded_transcript_key(value.get("agent_id"))
+            if context["pending_types"] and agent_id:
+                role = context["pending_types"].pop(0)
+                if agent_id not in context["agent_roles"] and len(context["agent_roles"]) >= TRANSCRIPT_MAX_AGENTS:
+                    raise _TranscriptIncomplete
+                context["agent_roles"].setdefault(agent_id, role)
+                found = True
+        return found
+    found = False
+    author = _bounded_transcript_key(payload.get("author"))
+    if payload_type == "agent_message" and author in context["agent_paths"]:
+        joined = _bounded_text(payload)
+        agent_id = context["agent_paths"][author]
+        context["completed_ids"].add(agent_id)
+        if _structured_return(joined):
+            context["structured_ids"].add(agent_id)
+        found = True
+    for value in _decoded_transcript_objects(payload):
+        agent_id = _bounded_transcript_key(value.get("agent_path") or value.get("agent_id"))
+        status = value.get("status")
+        message = status.get("completed") if isinstance(status, dict) else None
+        if context["pending_types"] and agent_id:
+            role = context["pending_types"].pop(0)
+            if agent_id not in context["agent_roles"] and len(context["agent_roles"]) >= TRANSCRIPT_MAX_AGENTS:
+                raise _TranscriptIncomplete
+            context["agent_roles"].setdefault(agent_id, role)
+        if agent_id in context["agent_roles"] and isinstance(message, str):
+            context["completed_ids"].add(agent_id)
+            if _structured_return(message):
+                context["structured_ids"].add(agent_id)
+            found = True
+    return found
 
-    if spawn_count > 0:
-        if inheriting_spawns != spawn_count:
+
+def _apply_subagent_scan(state: dict[str, Any], path: Path, context: dict[str, Any]) -> str:
+    if context["spawn_count"] > 0:
+        if context["inheriting_spawns"] != context["spawn_count"]:
             state["service_tier_inheritance_verified"] = False
         else:
             state.setdefault("service_tier_inheritance_verified", True)
     state.setdefault("agent_ids", [])
     state.setdefault("agents", {})
     state.setdefault("agent_attestations", {})
-    for agent_id, role in sorted(agent_roles.items()):
+    children = state.setdefault("transcript_reconciliation", {}).setdefault("children", {})
+    for agent_id, role in sorted(context["agent_roles"].items()):
         if agent_id not in state["agent_ids"]:
             state["agent_ids"].append(agent_id)
         existing = state["agents"].get(agent_id, {})
-        transcript_complete = agent_id in completed_ids and agent_id in structured_ids
+        transcript_complete = agent_id in context["completed_ids"] and agent_id in context["structured_ids"]
         state["agents"][agent_id] = {
             **existing,
             "type": role,
@@ -2964,24 +3154,89 @@ def _reconcile_subagent_transcript(data: dict[str, Any], state: dict[str, Any]) 
             "completion_structured": True if transcript_complete else bool(existing.get("completion_structured")),
             "completion_source": "transcript" if transcript_complete else existing.get("completion_source"),
         }
-        if plan["mode"] == "routing_council" and existing.get("phase") == "execution":
-            plan["execution_agent_id"] = agent_id
+        if context["plan"]["mode"] == "routing_council" and existing.get("phase") == "execution":
+            context["plan"]["execution_agent_id"] = agent_id
         if role in ROUTES:
-            transcript_attestation = _attest_child(path, agent_id, ROUTES[role])
-            if int(transcript_attestation.get("candidate_count") or 0) > 0:
-                state["agent_attestations"][agent_id] = transcript_attestation
-            if transcript_attestation.get("model") is not None:
-                _bind_child_transcript_evidence(state, agent_id, transcript_attestation)
-        if agent_id in completed_ids and agent_id in structured_ids and role not in state["subagents_completed"]:
+            attestation = _attest_child(path, agent_id, ROUTES[role])
+            children[agent_id] = {
+                "status": attestation["reconciliation_status"],
+                "records_scanned": attestation["records_scanned"],
+                "bytes_scanned": attestation["bytes_scanned"],
+            }
+            if int(attestation.get("candidate_count") or 0) > 0:
+                state["agent_attestations"][agent_id] = attestation
+            if attestation.get("model") is not None:
+                _bind_child_transcript_evidence(state, agent_id, attestation)
+        if agent_id in context["completed_ids"] and agent_id in context["structured_ids"] and role not in state["subagents_completed"]:
             state["subagents_completed"].append(role)
         if (
             _completion_is_trustworthy(state["agents"][agent_id])
             and state.get("agent_attestations", {}).get(agent_id, {}).get("matched")
+            and _record_capability(state, agent_id)
         ):
-            if _record_capability(state, agent_id):
-                state.setdefault("telemetry", {})["child_completion_attested"] = True
-    if completed_ids and structured_ids:
+            state.setdefault("telemetry", {})["child_completion_attested"] = True
+    if context["completed_ids"] and context["structured_ids"]:
         state.setdefault("reconciled_from_transcript", True)
+    return "FOUND" if context["spawn_count"] or context["completed_ids"] else "NOT_FOUND"
+
+
+def _reconcile_root_transcript(
+    data: dict[str, Any], state: dict[str, Any], *, subagents: bool, verification: bool,
+) -> None:
+    path = _transcript_path(data)
+    requested = [name for name, enabled in (("subagents", subagents), ("verification", verification)) if enabled]
+    if path is None:
+        outcome = _transcript_outcome("PATH_REJECTED")
+        for channel in requested:
+            _set_reconciliation_status(state, channel, "PATH_REJECTED", outcome)
+        return
+    working = json.loads(json.dumps(state))
+    verification_context = _verification_scan_context() if verification else None
+    try:
+        subagent_context = _subagent_scan_context(working) if subagents else None
+    except _TranscriptIncomplete:
+        outcome = _transcript_outcome("INCOMPLETE")
+        for channel in requested:
+            _set_reconciliation_status(state, channel, "INCOMPLETE", outcome)
+        return
+
+    def visit(record: dict[str, Any]) -> bool:
+        found = False
+        if verification_context is not None:
+            found = _consume_verification_record(record, working, verification_context) or found
+        if subagent_context is not None:
+            found = _consume_subagent_record(record, working, subagent_context) or found
+        return found
+
+    outcome = _scan_jsonl_transcript(path, visit)
+    if outcome["status"] not in {"FOUND", "NOT_FOUND"}:
+        for channel in requested:
+            _set_reconciliation_status(state, channel, outcome["status"], outcome)
+        return
+    verification_status = (
+        _apply_verification_scan(working, verification_context)
+        if verification_context is not None else None
+    )
+    subagent_status = (
+        _apply_subagent_scan(working, path, subagent_context)
+        if subagent_context is not None else "NOT_FOUND" if subagents else None
+    )
+    state.clear()
+    state.update(working)
+    if verification_status is not None:
+        _set_reconciliation_status(state, "verification", verification_status, outcome)
+    if subagent_status is not None:
+        _set_reconciliation_status(state, "subagents", subagent_status, outcome)
+
+
+def _reconcile_verification_transcript(data: dict[str, Any], state: dict[str, Any]) -> None:
+    """Recover observable command results omitted from PostToolUse events."""
+    _reconcile_root_transcript(data, state, subagents=False, verification=True)
+
+
+def _reconcile_subagent_transcript(data: dict[str, Any], state: dict[str, Any]) -> None:
+    """Compatibility fallback for releases that skip SubagentStart/Stop hooks."""
+    _reconcile_root_transcript(data, state, subagents=True, verification=False)
 
 
 def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
@@ -3096,6 +3351,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             "verified_generation": -1,
             "observed_verification": None,
             "verification_requirement": str(decision.get("verification") or "evidence check"),
+            "transcript_reconciliation": {},
             "continuations": 0,
             "violations": [],
             "escalations": [],
@@ -3495,8 +3751,12 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             return {"continue": True}
         state["parent_stop_observed"] = True
         state["status"] = "VERIFYING"
-        _reconcile_subagent_transcript(data, state)
-        _reconcile_verification_transcript(data, state)
+        _reconcile_root_transcript(
+            data,
+            state,
+            subagents=bool(decision["orchestration"].get("allowed_agents")),
+            verification=True,
+        )
         state["verification_requirement"] = _effective_verification(state)
         problems: list[str] = []
         plan = decision["orchestration"]

@@ -9,9 +9,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tracemalloc
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest import mock
 
 import router_hook
 
@@ -182,6 +184,56 @@ class RouterTests(unittest.TestCase):
             }), encoding="utf-8")
         transcript.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
         return transcript
+
+    def _write_large_jsonl(
+        self,
+        path: Path,
+        records: list[dict],
+        position: str = "middle",
+        minimum_size: int = (8 * 1024 * 1024) + 128 * 1024,
+    ) -> None:
+        encoded = [json.dumps(record, separators=(",", ":")).encode("utf-8") + b"\n" for record in records]
+        padding = json.dumps(
+            {"payload": {"type": "synthetic_padding", "padding": "x" * 65536}},
+            separators=(",", ":"),
+        ).encode("utf-8") + b"\n"
+        padding_count = max(1, (minimum_size - sum(map(len, encoded)) + len(padding) - 1) // len(padding))
+        if position == "early":
+            before, after = 0, padding_count
+        elif position == "middle":
+            before, after = padding_count // 2, padding_count - (padding_count // 2)
+        elif position == "late":
+            before, after = padding_count, 0
+        else:
+            raise ValueError(position)
+        with path.open("wb") as stream:
+            for _ in range(before):
+                stream.write(padding)
+            for record in encoded:
+                stream.write(record)
+            for _ in range(after):
+                stream.write(padding)
+
+    @staticmethod
+    def _transcript_verification_records(turn: str, exit_code: int = 0, include_output: bool = True) -> list[dict]:
+        metadata = {"turn_id": turn}
+        records = [{"payload": {
+            "type": "custom_tool_call", "name": "exec", "call_id": "verify-large",
+            "input": (
+                'const r = await tools.exec_command({cmd:"python3 -m unittest -q"}); '
+                'text(JSON.stringify({exit_code:r.exit_code,output:r.output}));'
+            ),
+            "internal_chat_message_metadata_passthrough": metadata,
+        }}]
+        if include_output:
+            records.append({"payload": {
+                "type": "custom_tool_call_output", "call_id": "verify-large",
+                "output": [{"type": "input_text", "text": json.dumps({
+                    "exit_code": exit_code, "output": "synthetic verification result",
+                })}],
+                "internal_chat_message_metadata_passthrough": metadata,
+            }})
+        return records
 
     def _ledger(self, session: str, turn: str) -> dict:
         return json.loads((Path(self.temp.name) / f"{session}--{turn}.json").read_text(encoding="utf-8"))
@@ -3065,6 +3117,429 @@ class RouterTests(unittest.TestCase):
         self.assertFalse(router_hook._is_verification("git diff --check; true"))
         self.assertFalse(router_hook._is_verification("git diff --check | cat"))
         self.assertTrue(router_hook._is_verification("rg -n Python README.md && git diff --check && git status --short"))
+
+    def test_large_verification_evidence_reconciles_at_early_middle_and_late_positions(self) -> None:
+        for position in ("early", "middle", "late"):
+            with self.subTest(position=position):
+                session = f"large-verification-{position}"
+                turn = "t1"
+                router_hook.handle({
+                    "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+                    "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo.",
+                })
+                router_hook.handle({
+                    "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+                    "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
+                })
+                transcript = Path(self.temp.name) / f"{session}.jsonl"
+                self._write_large_jsonl(
+                    transcript,
+                    self._transcript_verification_records(turn),
+                    position=position,
+                )
+
+                router_hook.handle({
+                    "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
+                    "stop_hook_active": False, "transcript_path": str(transcript),
+                })
+
+                ledger = self._ledger(session, turn)
+                self.assertGreater(transcript.stat().st_size, 8 * 1024 * 1024)
+                self.assertEqual("COMPLETE", ledger["status"])
+                self.assertEqual("FOUND", ledger["transcript_reconciliation"]["verification"]["status"])
+                self.assertEqual(ledger["mutation_generation"], ledger["verified_generation"])
+
+    def test_large_verification_failure_is_found_without_passing_the_gate(self) -> None:
+        session = "large-verification-failed"
+        turn = "t1"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo.",
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+            "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
+        })
+        transcript = Path(self.temp.name) / f"{session}.jsonl"
+        self._write_large_jsonl(transcript, self._transcript_verification_records(turn, exit_code=1))
+
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
+            "stop_hook_active": False, "transcript_path": str(transcript),
+        })
+
+        ledger = self._ledger(session, turn)
+        self.assertEqual("FOUND", ledger["transcript_reconciliation"]["verification"]["status"])
+        self.assertEqual(-1, ledger["verified_generation"])
+        self.assertEqual(1, ledger["verification_failures"])
+
+    def test_not_found_is_distinct_from_malformed_and_incomplete_reconciliation(self) -> None:
+        outcomes = {}
+        for label in ("not-found", "malformed", "incomplete"):
+            session = f"reconciliation-{label}"
+            turn = "t1"
+            router_hook.handle({
+                "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+                "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo.",
+            })
+            router_hook.handle({
+                "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+                "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
+            })
+            transcript = Path(self.temp.name) / f"{session}.jsonl"
+            if label == "not-found":
+                self._write_large_jsonl(transcript, [])
+            elif label == "malformed":
+                transcript.write_bytes(b'{"payload":\n')
+            else:
+                records = []
+                metadata = {"turn_id": turn}
+                for index in range(257):
+                    records.append({"payload": {
+                        "type": "custom_tool_call", "name": "exec", "call_id": f"verify-{index}",
+                        "input": (
+                            'const r = await tools.exec_command({cmd:"python3 -m unittest -q"}); '
+                            'text(JSON.stringify({exit_code:r.exit_code,output:r.output}));'
+                        ),
+                        "internal_chat_message_metadata_passthrough": metadata,
+                    }})
+                transcript.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
+            router_hook.handle({
+                "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
+                "stop_hook_active": False, "transcript_path": str(transcript),
+            })
+            outcomes[label] = self._ledger(session, turn)["transcript_reconciliation"]["verification"]["status"]
+
+        self.assertEqual("NOT_FOUND", outcomes["not-found"])
+        self.assertEqual("MALFORMED", outcomes["malformed"])
+        self.assertEqual("INCOMPLETE", outcomes["incomplete"])
+        self.assertEqual(3, len(set(outcomes.values())))
+
+    def test_malformed_candidate_result_is_incomplete_not_absent(self) -> None:
+        session = "malformed-verification-result"
+        turn = "t1"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo.",
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+            "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
+        })
+        records = self._transcript_verification_records(turn)
+        records[1]["payload"]["output"] = "{not-valid-json"
+        transcript = Path(self.temp.name) / f"{session}.jsonl"
+        transcript.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
+
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
+            "stop_hook_active": False, "transcript_path": str(transcript),
+        })
+
+        ledger = self._ledger(session, turn)
+        self.assertEqual("INCOMPLETE", ledger["transcript_reconciliation"]["verification"]["status"])
+        self.assertEqual(-1, ledger["verified_generation"])
+
+    def test_appended_verification_result_is_found_idempotently_after_not_found(self) -> None:
+        session = "appended-verification-result"
+        turn = "t1"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo.",
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+            "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
+        })
+        records = self._transcript_verification_records(turn, include_output=False)
+        transcript = Path(self.temp.name) / f"{session}.jsonl"
+        transcript.write_text(json.dumps(records[0]) + "\n", encoding="utf-8")
+
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
+            "stop_hook_active": False, "transcript_path": str(transcript),
+        })
+        self.assertEqual(
+            "NOT_FOUND", self._ledger(session, turn)["transcript_reconciliation"]["verification"]["status"],
+        )
+
+        output = self._transcript_verification_records(turn)[1]
+        with transcript.open("a", encoding="utf-8") as stream:
+            stream.write(json.dumps(output) + "\n")
+        for _ in range(2):
+            router_hook.handle({
+                "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
+                "stop_hook_active": False, "late_child_recheck": True,
+                "transcript_path": str(transcript),
+            })
+
+        ledger = self._ledger(session, turn)
+        self.assertEqual("FOUND", ledger["transcript_reconciliation"]["verification"]["status"])
+        self.assertEqual(1, ledger["verification_successes"])
+        self.assertEqual(["verify-large"], ledger["reconciled_verification_call_ids"])
+
+    def test_oversized_single_line_is_rejected_during_bounded_io(self) -> None:
+        transcript = Path(self.temp.name) / "single-oversized-line.jsonl"
+        with transcript.open("wb") as stream:
+            for _ in range(64):
+                stream.write(b"x" * (1024 * 1024))
+        tracemalloc.start()
+        outcome = router_hook._scan_jsonl_transcript(transcript, lambda _record: False)
+        _current, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+        self.assertEqual("LINE_TOO_LARGE", outcome["status"])
+        self.assertEqual(0, outcome["records_scanned"])
+        self.assertLess(peak, 48 * 1024 * 1024)
+
+    def test_complete_json_line_is_parsed_before_small_authoritative_fields_are_extracted(self) -> None:
+        transcript = Path(self.temp.name) / "complete-large-record.jsonl"
+        record = {
+            "payload": {
+                "type": "custom_tool_call_output",
+                "call_id": "large-output",
+                "output": {"padding": "x" * (512 * 1024), "exit_code": 0},
+            },
+        }
+        transcript.write_text(json.dumps(record) + "\n", encoding="utf-8")
+        observed = []
+
+        outcome = router_hook._scan_jsonl_transcript(
+            transcript,
+            lambda item: observed.append(router_hook._response_status(item["payload"]["output"])) or True,
+        )
+
+        self.assertEqual("FOUND", outcome["status"])
+        self.assertEqual([True], observed)
+        self.assertGreater(transcript.stat().st_size, router_hook.TRANSCRIPT_MAX_RETAINED_TEXT_BYTES)
+
+    def test_unsafe_scan_outcomes_do_not_become_not_found_or_partial_proof(self) -> None:
+        session = "unsafe-scan-outcomes"
+        turn = "t1"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo.",
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+            "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
+        })
+        transcript = Path(self.temp.name) / f"{session}.jsonl"
+        transcript.write_text('{}\n', encoding="utf-8")
+        for status in ("INCOMPLETE", "MALFORMED", "LINE_TOO_LARGE", "IO_ERROR"):
+            with self.subTest(status=status):
+                state = self._ledger(session, turn)
+                outcome = {"status": status, "records_scanned": 1, "bytes_scanned": 10}
+                with mock.patch.object(router_hook, "_scan_jsonl_transcript", return_value=outcome):
+                    router_hook._reconcile_root_transcript(
+                        {"transcript_path": str(transcript)}, state, subagents=False, verification=True,
+                    )
+                self.assertEqual(status, state["transcript_reconciliation"]["verification"]["status"])
+                self.assertNotEqual("NOT_FOUND", state["transcript_reconciliation"]["verification"]["status"])
+                self.assertEqual(-1, state["verified_generation"])
+                self.assertEqual([], state.get("reconciled_verification_call_ids", []))
+
+    def test_streaming_memory_does_not_scale_with_total_transcript_size(self) -> None:
+        peaks = []
+        for size_mib in (16, 32, 64):
+            transcript = Path(self.temp.name) / f"memory-{size_mib}.jsonl"
+            self._write_large_jsonl(transcript, [], minimum_size=size_mib * 1024 * 1024)
+            tracemalloc.start()
+            outcome = router_hook._scan_jsonl_transcript(transcript, lambda _record: False)
+            _current, peak = tracemalloc.get_traced_memory()
+            tracemalloc.stop()
+            self.assertEqual("NOT_FOUND", outcome["status"])
+            peaks.append(peak)
+
+        self.assertLess(max(peaks), 16 * 1024 * 1024)
+        self.assertLess(max(peaks) - min(peaks), 4 * 1024 * 1024)
+
+    def test_descriptor_identity_mismatch_is_path_rejected(self) -> None:
+        transcript = Path(self.temp.name) / "descriptor-target.jsonl"
+        other = Path(self.temp.name) / "descriptor-other.jsonl"
+        transcript.write_text('{}\n', encoding="utf-8")
+        other.write_text('{}\n', encoding="utf-8")
+        with mock.patch.object(router_hook.os, "lstat", return_value=other.stat()):
+            outcome = router_hook._scan_jsonl_transcript(transcript, lambda _record: False)
+        self.assertEqual("PATH_REJECTED", outcome["status"])
+
+    def test_hard_link_descriptor_is_path_rejected(self) -> None:
+        transcript = Path(self.temp.name) / "descriptor-original.jsonl"
+        linked = Path(self.temp.name) / "descriptor-linked.jsonl"
+        transcript.write_text('{}\n', encoding="utf-8")
+        os.link(transcript, linked)
+
+        outcome = router_hook._scan_jsonl_transcript(linked, lambda _record: False)
+
+        self.assertEqual("PATH_REJECTED", outcome["status"])
+
+    def test_open_error_is_io_error_not_not_found(self) -> None:
+        transcript = Path(self.temp.name) / "descriptor-io-error.jsonl"
+        transcript.write_text('{}\n', encoding="utf-8")
+        with mock.patch.object(router_hook.os, "open", side_effect=PermissionError("denied")):
+            outcome = router_hook._scan_jsonl_transcript(transcript, lambda _record: False)
+
+        self.assertEqual("IO_ERROR", outcome["status"])
+
+    def test_malformed_after_valid_verification_does_not_partially_establish_proof(self) -> None:
+        session = "malformed-after-valid"
+        turn = "t1"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo.",
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+            "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
+        })
+        transcript = Path(self.temp.name) / f"{session}.jsonl"
+        records = self._transcript_verification_records(turn)
+        transcript.write_bytes(
+            b"\n".join(json.dumps(record).encode("utf-8") for record in records) + b"\n{malformed\n"
+        )
+
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
+            "stop_hook_active": False, "transcript_path": str(transcript),
+        })
+
+        ledger = self._ledger(session, turn)
+        self.assertEqual("MALFORMED", ledger["transcript_reconciliation"]["verification"]["status"])
+        self.assertEqual(-1, ledger["verified_generation"])
+        self.assertEqual([], ledger.get("reconciled_verification_call_ids", []))
+
+    def test_duplicate_verification_result_is_applied_once(self) -> None:
+        session = "duplicate-verification-result"
+        turn = "t1"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+            "model": "gpt-5.6-sol", "model_reasoning_effort": "high", "prompt": "Fix the typo.",
+        })
+        router_hook.handle({
+            "hook_event_name": "PostToolUse", "session_id": session, "turn_id": turn,
+            "tool_name": "apply_patch", "tool_input": {"command": "patch"}, "tool_response": {},
+        })
+        records = self._transcript_verification_records(turn)
+        transcript = Path(self.temp.name) / f"{session}.jsonl"
+        transcript.write_text(
+            "\n".join(json.dumps(record) for record in [records[0], records[1], records[1]]) + "\n",
+            encoding="utf-8",
+        )
+
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
+            "stop_hook_active": False, "transcript_path": str(transcript),
+        })
+
+        ledger = self._ledger(session, turn)
+        self.assertEqual("FOUND", ledger["transcript_reconciliation"]["verification"]["status"])
+        self.assertEqual(1, ledger["verification_successes"])
+        self.assertEqual(["verify-large"], ledger["reconciled_verification_call_ids"])
+
+    def test_large_spawn_and_completion_evidence_reconciles(self) -> None:
+        session = "large-spawn-completion"
+        turn = "t1"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+            "model": "gpt-5.6-terra", "model_reasoning_effort": "medium",
+            "prompt": "Research two independent APIs in parallel and recommend an architecture.",
+        })
+        call_id = "call-large"
+        agent_id = "large-child"
+        agent_path = "/root/large-worker"
+        metadata = {"turn_id": turn}
+        records = [
+            {"payload": {
+                "type": "function_call", "name": "spawn_agent", "namespace": "collaboration",
+                "call_id": call_id,
+                "arguments": json.dumps({
+                    "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+                    "fork_turns": "none", "task_name": "large-worker",
+                    "message": "Self-contained bounded task with acceptance checks.",
+                }),
+                "internal_chat_message_metadata_passthrough": metadata,
+            }},
+            {"payload": {
+                "type": "sub_agent_activity", "event_id": call_id, "kind": "started",
+                "agent_thread_id": agent_id, "agent_path": agent_path,
+                "internal_chat_message_metadata_passthrough": metadata,
+            }},
+            {"payload": {
+                "type": "agent_message", "author": agent_path,
+                "content": [{"type": "input_text", "text": (
+                    "Evidence: bounded result\nVerification: objective check passed\nUncertainty: none"
+                )}],
+                "internal_chat_message_metadata_passthrough": metadata,
+            }},
+        ]
+        transcript = Path(self.temp.name) / f"{session}.jsonl"
+        self._write_large_jsonl(transcript, records, position="late")
+        child = Path(self.temp.name) / f"rollout-{agent_id}.jsonl"
+        child.write_text(json.dumps({
+            "type": "turn_context", "payload": {
+                "turn_id": "child-turn", "model": "gpt-5.6-terra", "effort": "medium",
+            },
+        }) + "\n", encoding="utf-8")
+
+        router_hook.handle({
+            "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
+            "stop_hook_active": False, "transcript_path": str(transcript),
+        })
+
+        ledger = self._ledger(session, turn)
+        self.assertGreater(transcript.stat().st_size, 8 * 1024 * 1024)
+        self.assertEqual("FOUND", ledger["transcript_reconciliation"]["subagents"]["status"])
+        self.assertEqual(["gpt56_terra_worker"], ledger["subagents_completed"])
+        self.assertTrue(ledger["agent_attestations"][agent_id]["matched"])
+
+    def test_large_child_transcript_attests_and_writes_receipt(self) -> None:
+        session = "large-child-receipt"
+        turn = "t1"
+        runtime = {
+            "runtime_version": "codex-1.2.3", "runtime_build": "desktop-456", "host_type": "Desktop",
+        }
+        router_hook.handle({
+            **runtime,
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": turn,
+            "model": "gpt-5.6-luna", "model_reasoning_effort": "low",
+            "prompt": "Add pagination to this endpoint and include targeted tests.",
+        })
+        parent = Path(self.temp.name) / f"{session}.jsonl"
+        parent.write_text("", encoding="utf-8")
+        agent_id = "terra-large"
+        router_hook.handle({
+            **runtime,
+            "hook_event_name": "SubagentStart", "session_id": session, "turn_id": turn,
+            "agent_id": agent_id, "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+            "transcript_path": str(parent),
+        })
+        child = Path(self.temp.name) / f"rollout-{agent_id}.jsonl"
+        self._write_large_jsonl(child, [{
+            "type": "turn_context", "payload": {
+                "turn_id": "child-turn", "model": "gpt-5.6-terra", "effort": "medium",
+            },
+        }], position="middle")
+
+        router_hook.handle({
+            **runtime,
+            "hook_event_name": "SubagentStop", "session_id": session, "turn_id": "child-turn",
+            "agent_id": agent_id, "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+            "last_assistant_message": "Evidence: trace\nVerification: regression test passed\nUncertainty: none",
+            "transcript_path": str(parent),
+        })
+        router_hook.handle({
+            **runtime,
+            "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
+            "stop_hook_active": False, "transcript_path": str(parent),
+        })
+
+        ledger = self._ledger(session, turn)
+        attestation = ledger["agent_attestations"][agent_id]
+        self.assertGreater(child.stat().st_size, 8 * 1024 * 1024)
+        self.assertEqual("FOUND", attestation["reconciliation_status"])
+        self.assertTrue(attestation["matched"])
+        receipt = json.loads(router_hook.CAPABILITY_PATH.read_text(encoding="utf-8"))
+        self.assertEqual("gpt-5.6-terra", receipt["observed_child_model"])
 
     def test_transcript_custom_validator_settles_the_latest_mutation(self) -> None:
         session = "transcript-custom-validator"
