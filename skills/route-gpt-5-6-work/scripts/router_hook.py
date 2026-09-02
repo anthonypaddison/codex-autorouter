@@ -16,7 +16,7 @@ import sys
 import tempfile
 import time
 import platform
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -101,6 +101,12 @@ TRANSCRIPT_MAX_RETAINED_TEXT_BYTES = 256 * 1024
 TRANSCRIPT_MAX_CALLS = 256
 TRANSCRIPT_MAX_AGENTS = 64
 TRANSCRIPT_MAX_KEY_BYTES = 512
+TRANSCRIPT_MAX_SEARCH_DIRECTORIES = 4096
+TRANSCRIPT_MAX_SEARCH_ENTRIES = 65536
+_TRANSCRIPT_DIRECTORY_FDS = (
+    os.open in os.supports_dir_fd and os.lstat in os.supports_dir_fd
+    and os.scandir in os.supports_fd and hasattr(os, "O_NOFOLLOW")
+)
 RESPONSE_STATUS_MAX_DEPTH = 20
 RESPONSE_STATUS_MAX_ITEMS = 4096
 RESPONSE_STATUS_MAX_SCALAR_BYTES = 2 * 1024 * 1024
@@ -2601,14 +2607,16 @@ def _transcript_outcome(status: str, records_scanned: int = 0, bytes_scanned: in
     }
 
 
-def _scan_jsonl_transcript(path: Path, visitor: Any) -> dict[str, Any]:
+def _scan_jsonl_transcript(path: Path, visitor: Any, *, directory_fd: int | None = None) -> dict[str, Any]:
     """Scan one JSONL transcript with bounded I/O and descriptor validation."""
     records_scanned = 0
     bytes_scanned = 0
     found = False
     descriptor: int | None = None
+    target = path if directory_fd is None else path.name
+    options = {} if directory_fd is None else {"dir_fd": directory_fd}
     try:
-        before = os.lstat(path)
+        before = os.lstat(target, **options)
     except FileNotFoundError:
         return _transcript_outcome("PATH_REJECTED")
     except OSError:
@@ -2626,7 +2634,7 @@ def _scan_jsonl_transcript(path: Path, visitor: Any) -> dict[str, Any]:
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     try:
-        descriptor = os.open(path, flags)
+        descriptor = os.open(target, flags, **options)
         opened = os.fstat(descriptor)
         if (
             not stat.S_ISREG(opened.st_mode)
@@ -2686,7 +2694,113 @@ def _bounded_transcript_key(value: Any) -> str:
     return key
 
 
+class _ChildDiscoveryError(Exception):
+    def __init__(self, status: str):
+        self.status = status
+
+
+@contextmanager
+def _transcript_directory(path: Path, parent_fd: int | None = None):
+    """Never traverse linked directories; anchor opens to descriptors where supported."""
+    target = path if parent_fd is None else path.name
+    options = {} if parent_fd is None else {"dir_fd": parent_fd}
+    before = os.lstat(target, **options)
+    if (
+        not stat.S_ISDIR(before.st_mode)
+        or getattr(before, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        or (hasattr(os, "getuid") and before.st_uid != os.getuid())
+        or path.resolve(strict=True) != path
+    ):
+        raise _ChildDiscoveryError("PATH_REJECTED")
+    descriptor = None
+    try:
+        if _TRANSCRIPT_DIRECTORY_FDS:
+            flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_CLOEXEC", 0)
+            descriptor = os.open(target, flags, **options)
+            opened = os.fstat(descriptor)
+            if not stat.S_ISDIR(opened.st_mode) or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino):
+                raise _ChildDiscoveryError("PATH_REJECTED")
+        yield descriptor
+        after = os.lstat(target, **options)
+        if (after.st_dev, after.st_ino) != (before.st_dev, before.st_ino) or path.resolve(strict=True) != path:
+            raise _ChildDiscoveryError("PATH_REJECTED")
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _discover_child_transcript(agent_id: str) -> tuple[str, list[Path]]:
+    """Return only transient exact candidates after a complete, bounded authorised search."""
+    if not isinstance(agent_id, str) or not re.fullmatch(
+        r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", agent_id,
+    ):
+        return "PATH_REJECTED", []
+    candidates: list[Path] = []
+    directories = entries = 0
+    levels = (r"[0-9]{4}", r"(?:0[1-9]|1[0-2])", r"(?:0[1-9]|[12][0-9]|3[01])")
+    filename = re.compile(
+        r"rollout-[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])"
+        r"T(?:[01][0-9]|2[0-3])-[0-5][0-9]-[0-5][0-9]-" + re.escape(agent_id) + r"\.jsonl"
+    )
+
+    def visit(path: Path, depth: int, parent_fd: int | None) -> None:
+        nonlocal directories, entries
+        directories += 1
+        if directories > TRANSCRIPT_MAX_SEARCH_DIRECTORIES:
+            raise _ChildDiscoveryError("INCOMPLETE")
+        with _transcript_directory(path, parent_fd) as descriptor:
+            with os.scandir(path if descriptor is None else descriptor) as stream:
+                for entry in stream:
+                    entries += 1
+                    if entries > TRANSCRIPT_MAX_SEARCH_ENTRIES:
+                        raise _ChildDiscoveryError("INCOMPLETE")
+                    if depth < 3 and re.fullmatch(levels[depth], entry.name):
+                        visit(path / entry.name, depth + 1, descriptor)
+                    elif depth == 3 and filename.fullmatch(entry.name):
+                        candidates.append(path / entry.name)
+                        if len(candidates) == 2:
+                            raise _ChildDiscoveryError("INCOMPLETE")
+
+    try:
+        home = CODEX_HOME.resolve(strict=True)
+        with _transcript_directory(home) as descriptor:
+            for name, depth in (("sessions", 0), ("archived_sessions", 3)):
+                root = home / name
+                try:
+                    os.lstat(root if descriptor is None else name, **({} if descriptor is None else {"dir_fd": descriptor}))
+                except FileNotFoundError:
+                    continue  # An absent supported root is not an interrupted traversal.
+                visit(root, depth, descriptor)
+        return ("FOUND" if candidates else "NOT_FOUND"), candidates
+    except _ChildDiscoveryError as error:
+        return error.status, candidates
+    except (OSError, RuntimeError):
+        return "IO_ERROR", candidates
+
+
+def _scan_discovered_child(candidate: Path, visitor: Any) -> dict[str, Any]:
+    """Reopen the authorised directory chain safely before the unchanged file gate."""
+    try:
+        home = CODEX_HOME.resolve(strict=True)
+        relative = candidate.relative_to(home)
+        if relative.parts[0] not in {"sessions", "archived_sessions"}:
+            return _transcript_outcome("PATH_REJECTED")
+        with ExitStack() as stack:
+            path = home
+            descriptor = stack.enter_context(_transcript_directory(path))
+            for part in relative.parts[:-1]:
+                path = path / part
+                descriptor = stack.enter_context(_transcript_directory(path, descriptor))
+            outcome = _scan_jsonl_transcript(candidate, visitor, directory_fd=descriptor)
+        return outcome
+    except (_ChildDiscoveryError, ValueError) as error:
+        return _transcript_outcome(getattr(error, "status", "PATH_REJECTED"))
+    except (OSError, RuntimeError):
+        return _transcript_outcome("IO_ERROR")
+
+
 def _attest_child(parent_transcript: Path, agent_id: str, expected: dict[str, Any]) -> dict[str, Any]:
+    """The parent path is not a search root; parent identity comes from the root ledger."""
     attestation = {
         "model": None,
         "effort": None,
@@ -2701,29 +2815,36 @@ def _attest_child(parent_transcript: Path, agent_id: str, expected: dict[str, An
         "records_scanned": 0,
         "bytes_scanned": 0,
     }
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,200}", agent_id):
-        attestation["reconciliation_status"] = "PATH_REJECTED"
-        return attestation
-    candidates = sorted(
-        path for path in parent_transcript.parent.glob(f"*{agent_id}.jsonl")
-        if path.name.endswith(f"{agent_id}.jsonl")
-    )[:2]
+    status, candidates = _discover_child_transcript(agent_id)
+    attestation["reconciliation_status"] = status
     attestation["candidate_count"] = len(candidates)
-    if len(candidates) != 1:
-        if len(candidates) > 1:
-            attestation["reconciliation_status"] = "INCOMPLETE"
+    if status != "FOUND":
+        return attestation
+    parent_session_id = expected.get("parent_session_id")
+    if not isinstance(parent_session_id, str) or not parent_session_id:
+        attestation["reconciliation_status"] = "INCOMPLETE"
         return attestation
     candidate = candidates[0]
     contexts: set[tuple[str, str, str]] = set()
     mutation_seen = False
     recursive_spawn_seen = False
+    identity_seen = False
 
     def visit(record: dict[str, Any]) -> bool:
-        nonlocal mutation_seen, recursive_spawn_seen
+        nonlocal mutation_seen, recursive_spawn_seen, identity_seen
         payload = record.get("payload", {})
         if not isinstance(payload, dict):
             raise _TranscriptIncomplete
         relevant = False
+        if record.get("type") == "session_meta":
+            identity_seen = True
+            source = payload.get("source")
+            subagent = source.get("subagent") if isinstance(source, dict) else None
+            spawn = subagent.get("thread_spawn") if isinstance(subagent, dict) else None
+            parent_id = spawn.get("parent_thread_id") if isinstance(spawn, dict) else None
+            if payload.get("id") != agent_id or parent_id != parent_session_id:
+                attestation["contradictory"] = True
+            relevant = True
         if record.get("type") == "turn_context" or payload.get("type") == "turn_context":
             context = (
                 _bounded_transcript_key(payload.get("model")),
@@ -2746,7 +2867,7 @@ def _attest_child(parent_transcript: Path, agent_id: str, expected: dict[str, An
                 relevant = True
         return relevant
 
-    outcome = _scan_jsonl_transcript(candidate, visit)
+    outcome = _scan_discovered_child(candidate, visit)
     attestation.update({
         "reconciliation_status": outcome["status"],
         "records_scanned": outcome["records_scanned"],
@@ -2756,8 +2877,14 @@ def _attest_child(parent_transcript: Path, agent_id: str, expected: dict[str, An
     })
     if outcome["status"] not in {"FOUND", "NOT_FOUND"}:
         return attestation
+    if not identity_seen or not contexts or attestation["contradictory"]:
+        attestation["reconciliation_status"] = "INCOMPLETE"
+        return attestation
     if len(contexts) == 1:
         model, effort, turn_id = next(iter(contexts))
+        if not turn_id:
+            attestation["reconciliation_status"] = "INCOMPLETE"
+            return attestation
         attestation["model"] = model or None
         attestation["effort"] = effort or None
         attestation["turn_id"] = turn_id or None
@@ -3302,7 +3429,9 @@ def _apply_subagent_scan(state: dict[str, Any], path: Path, context: dict[str, A
         if context["plan"]["mode"] == "routing_council" and existing.get("phase") == "execution":
             context["plan"]["execution_agent_id"] = agent_id
         if role in ROUTES:
-            attestation = _attest_child(path, agent_id, ROUTES[role])
+            attestation = _attest_child(path, agent_id, {
+                **ROUTES[role], "parent_session_id": state.get("session_id"),
+            })
             children[agent_id] = {
                 "status": attestation["reconciliation_status"],
                 "records_scanned": attestation["records_scanned"],

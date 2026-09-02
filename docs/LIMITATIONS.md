@@ -38,6 +38,8 @@ Lifecycle input exposes the child model but not a guaranteed live reasoning-effo
 
 ## Transcript compatibility is best effort
 
+Exact-child discovery searches only the effective `CODEX_HOME/sessions/YYYY/MM/DD` hierarchy and flat `CODEX_HOME/archived_sessions`, irrespective of the parent's date directory. It accepts canonical UUIDv7 child IDs and the exact Codex rollout filename scheme. A filename is only a candidate: unique discovery, safe file validation, matching child/parent session metadata, and an unambiguous child turn/model/effort are still required. Discovery never chooses by timestamp, date proximity, model or filename order. It retains at most two candidates and searches at most 4,096 directories and 65,536 entries per child. Search exhaustion or duplicate candidates return `INCOMPLETE`; traversal errors return `IO_ERROR`; unsafe paths return `PATH_REJECTED`. Only a complete safe search without a candidate returns `NOT_FOUND`. No persistent index or transcript path/content is retained, and successful recovery does not bypass any runtime-bound capability-receipt gate.
+
 Codex documents transcript format as unstable. Transcript reconciliation is bounded compatibility support, not correctness-authoritative attestation. Autorouter descriptor-validates and incrementally scans regular, singly-linked, owner-matched JSONL files; it accepts complete JSON records up to 16 MiB and retains at most 256 KiB of relevant decoded text, 256 calls, and 64 agents per scan. Whole-transcript size is not a rejection condition. Linked paths, malformed JSONL, oversized individual lines, I/O failures, and bounded-summary exhaustion remain explicit conservative outcomes and cannot establish evidence. Autorouter accepts only paired exact-turn tool calls with bounded, schema-located machine status. A recovered success must follow every mutation and bind one-to-one to the recorded mutation generation through opaque call identities where available; incomplete historical provenance remains conservative. Otherwise Autorouter fails open to root-owned verification.
 
 ## Terminal hooks cannot safely hard-block on affected Codex builds
@@ -51,6 +53,8 @@ Some Codex builds replay a `Stop` or `SubagentStop` block reason as a persisted 
 `allow_managed_hooks_only`, feature requirements, marketplace restrictions, or disabled multi-agent support can force advisory or managed-blocked operation. The plugin never bypasses organizational policy.
 
 ## Supported surfaces and real-host coverage
+
+Current Codex automation-triggered turns do not dispatch Autorouter executable plugin hooks and are outside Autorouter routing coverage. Their root model is configured by the Codex host/task, not Autorouter. Automation activity must therefore be excluded from Autorouter-attributable routing and savings claims. No unsupported workaround is provided; this boundary can be revisited if Codex exposes first-class automation hook execution.
 
 Full plugin mode targets Codex Desktop and CLI. Codex IDE extensions do not currently support plugins; IDE use is therefore limited to the standalone skill's explicit `ADVISORY` mode without hook enforcement. CI can exercise macOS, Linux, and Windows semantics, but public stable release still requires native acceptance on supported Desktop and CLI hosts, including hook trust and filesystem behavior.
 

@@ -121,6 +121,287 @@ PRODUCT_CASES = [
 ]
 
 
+class ChildDiscoveryTests(unittest.TestCase):
+    CHILD = "00000000-0000-7000-8000-000000000001"
+    PARENT = "00000000-0000-7000-8000-000000000002"
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.home = Path(self.temp.name).resolve()
+        patcher = mock.patch.object(router_hook, "CODEX_HOME", self.home)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.parent = self.home / "sessions/2026/08/29" / f"rollout-2026-08-29T12-00-00-{self.PARENT}.jsonl"
+        self.parent.parent.mkdir(parents=True)
+        self.parent.write_text("", encoding="utf-8")
+        self.expected = {"model": "gpt-5.6-terra", "effort": "medium", "parent_session_id": self.PARENT}
+
+    def _records(self) -> list[dict]:
+        return [
+            {"type": "session_meta", "payload": {
+                "id": self.CHILD,
+                "source": {"subagent": {"thread_spawn": {"parent_thread_id": self.PARENT}}},
+            }},
+            {"type": "turn_context", "payload": {
+                "turn_id": "00000000-0000-7000-8000-000000000003",
+                "model": "gpt-5.6-terra", "effort": "medium",
+            }},
+        ]
+
+    def _child(self, directory: str = "sessions/2026/08/31", records: list[dict] | None = None) -> Path:
+        path = self.home / directory / f"rollout-2026-08-31T12-00-00-{self.CHILD}.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("".join(json.dumps(r) + "\n" for r in (self._records() if records is None else records)), encoding="utf-8")
+        return path
+
+    def _attest(self, agent_id: str | None = None) -> dict:
+        return router_hook._attest_child(self.parent, self.CHILD if agent_id is None else agent_id, self.expected)
+
+    def test_cross_date_exact_child_is_discovered_and_attested(self) -> None:
+        self._child()
+        result = self._attest()
+        self.assertEqual("FOUND", result["reconciliation_status"])
+        self.assertTrue(result["matched"])
+        self.assertEqual("00000000-0000-7000-8000-000000000003", result["turn_id"])
+
+    def test_same_date_exact_child_remains_attested(self) -> None:
+        self._child("sessions/2026/08/29")
+        self.assertTrue(self._attest()["matched"])
+
+    def test_flat_archived_exact_child_is_discovered(self) -> None:
+        self._child("archived_sessions")
+        self.assertTrue(self._attest()["matched"])
+
+    def test_complete_search_with_no_candidate_is_not_found(self) -> None:
+        self.assertEqual("NOT_FOUND", self._attest()["reconciliation_status"])
+
+    def test_duplicate_across_roots_cannot_select_same_date_or_first(self) -> None:
+        self._child("sessions/2026/08/29")
+        self._child("archived_sessions")
+        result = self._attest()
+        self.assertEqual("INCOMPLETE", result["reconciliation_status"])
+        self.assertFalse(result["matched"])
+        self.assertEqual(2, result["candidate_count"])
+
+    def test_invalid_ids_are_rejected_before_any_enumeration(self) -> None:
+        for value in ("", "../child", "*", "child", self.CHILD.upper().replace("0000", "ABCD", 1),
+                      self.CHILD.replace("-7000-", "-4000-"), self.CHILD[:-1], self.CHILD + "x"):
+            with self.subTest(value=value), mock.patch.object(router_hook.os, "scandir", side_effect=AssertionError("invalid ID enumerated")):
+                self.assertEqual("PATH_REJECTED", self._attest(value)["reconciliation_status"])
+
+    def test_only_supported_filename_and_hierarchy_are_searched(self) -> None:
+        child = self._child("sessions/2026/08/29")
+        child.rename(child.with_name(f"arbitrary-{self.CHILD}.jsonl"))
+        self._child("sessions/2026/08/31/nested")
+        self._child("archived_sessions/nested")
+        self.assertEqual("NOT_FOUND", self._attest()["reconciliation_status"])
+
+    def test_host_supplied_parent_does_not_authorise_its_directory(self) -> None:
+        child = self._child("project")
+        self.parent = child.parent / "parent.jsonl"
+        self.assertEqual("NOT_FOUND", self._attest()["reconciliation_status"])
+
+    def test_search_exhaustion_is_not_absence_even_after_a_candidate(self) -> None:
+        self._child("sessions/2026/08/29")
+        for name, limit in (("TRANSCRIPT_MAX_SEARCH_DIRECTORIES", 1), ("TRANSCRIPT_MAX_SEARCH_ENTRIES", 0)):
+            with self.subTest(budget=name), mock.patch.object(router_hook, name, limit, create=True):
+                result = self._attest()
+                self.assertEqual("INCOMPLETE", result["reconciliation_status"])
+                self.assertFalse(result["matched"])
+
+    def test_enumeration_error_is_not_absence(self) -> None:
+        with mock.patch.object(router_hook.os, "scandir", side_effect=PermissionError("unreadable")):
+            self.assertEqual("IO_ERROR", self._attest()["reconciliation_status"])
+
+    def test_interrupted_enumeration_is_not_absence(self) -> None:
+        class Interrupted:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def __iter__(self):
+                raise OSError("interrupted traversal")
+
+        with mock.patch.object(router_hook.os, "scandir", return_value=Interrupted()):
+            self.assertEqual("IO_ERROR", self._attest()["reconciliation_status"])
+
+    def test_symlinked_directory_is_rejected_without_following(self) -> None:
+        target = self.home / "outside"
+        target.mkdir()
+        try:
+            (self.home / "sessions/2026/08/31").symlink_to(target, target_is_directory=True)
+        except OSError:
+            self.skipTest("symlinks unavailable")
+        self.assertEqual("PATH_REJECTED", self._attest()["reconciliation_status"])
+
+    def test_symlink_candidate_is_rejected(self) -> None:
+        child = self._child("sessions/2026/08/29")
+        target = child.with_name("unrelated.jsonl")
+        child.rename(target)
+        try:
+            child.symlink_to(target)
+        except OSError:
+            self.skipTest("symlinks unavailable")
+        result = self._attest()
+        self.assertEqual("PATH_REJECTED", result["reconciliation_status"])
+        self.assertFalse(result["matched"])
+
+    def test_hardlink_candidate_is_rejected(self) -> None:
+        child = self._child("sessions/2026/08/29")
+        os.link(child, child.with_name("hardlink.jsonl"))
+        self.assertEqual("PATH_REJECTED", self._attest()["reconciliation_status"])
+
+    def test_candidate_descriptor_replacement_is_rejected(self) -> None:
+        self._child("sessions/2026/08/29")
+        original = os.fstat
+
+        def replaced(fd):
+            result = original(fd)
+            if not router_hook.stat.S_ISREG(result.st_mode):
+                return result
+            values = list(result)
+            values[1] += 1
+            return os.stat_result(values)
+
+        with mock.patch.object(router_hook.os, "fstat", side_effect=replaced):
+            self.assertEqual("PATH_REJECTED", self._attest()["reconciliation_status"])
+
+    def test_filename_does_not_prove_child_or_parent_identity(self) -> None:
+        for field in ("id", "parent_thread_id"):
+            records = self._records()
+            if field == "id":
+                records[0]["payload"]["id"] = self.PARENT
+            else:
+                records[0]["payload"]["source"]["subagent"]["thread_spawn"][field] = self.CHILD
+            self._child("sessions/2026/08/29", records)
+            result = self._attest()
+            with self.subTest(field=field):
+                self.assertFalse(result["matched"])
+                self.assertTrue(result["contradictory"])
+                self.assertEqual("INCOMPLETE", result["reconciliation_status"])
+
+    def test_missing_identity_or_turn_cannot_attest(self) -> None:
+        for missing in ("session_meta", "turn_id", "parent_session_id"):
+            records = self._records()
+            expected = dict(self.expected)
+            if missing == "session_meta":
+                records.pop(0)
+            elif missing == "turn_id":
+                records[1]["payload"].pop("turn_id")
+            else:
+                expected.pop("parent_session_id")
+            self._child("sessions/2026/08/29", records)
+            with self.subTest(missing=missing):
+                result = router_hook._attest_child(self.parent, self.CHILD, expected)
+                self.assertFalse(result["matched"])
+                self.assertEqual("INCOMPLETE", result["reconciliation_status"])
+
+    def test_late_contradictory_identity_cannot_partially_attest(self) -> None:
+        records = self._records()
+        records.append({"type": "session_meta", "payload": {"id": self.PARENT}})
+        self._child("sessions/2026/08/29", records)
+        self.assertFalse(self._attest()["matched"])
+
+    def test_large_cross_date_child_uses_streaming_scanner(self) -> None:
+        child = self._child()
+        with child.open("ab") as stream:
+            for _ in range(130):
+                stream.write(json.dumps({"payload": {"padding": "x" * 65536}}).encode() + b"\n")
+        result = self._attest()
+        self.assertGreater(child.stat().st_size, 8 * 1024 * 1024)
+        self.assertTrue(result["matched"])
+        self.assertEqual(child.stat().st_size, result["bytes_scanned"])
+
+    def test_late_malformed_cross_date_record_cannot_partially_attest(self) -> None:
+        child = self._child()
+        with child.open("ab") as stream:
+            stream.write(b'{broken\n')
+        result = self._attest()
+        self.assertFalse(result["matched"])
+        self.assertEqual("MALFORMED", result["reconciliation_status"])
+
+    def test_oversized_cross_date_line_cannot_partially_attest(self) -> None:
+        child = self._child()
+        with child.open("ab") as stream:
+            stream.write(b" " * (router_hook.TRANSCRIPT_MAX_LINE_BYTES + 1))
+        result = self._attest()
+        self.assertFalse(result["matched"])
+        self.assertEqual("LINE_TOO_LARGE", result["reconciliation_status"])
+
+    def test_metadata_without_turn_context_is_incomplete(self) -> None:
+        self._child(records=self._records()[:1])
+        result = self._attest()
+        self.assertEqual("INCOMPLETE", result["reconciliation_status"])
+        self.assertFalse(result["matched"])
+
+    def test_exact_budget_boundary_can_complete_but_later_root_exhaustion_cannot(self) -> None:
+        self._child("sessions/2026/08/29")
+        with mock.patch.object(router_hook, "TRANSCRIPT_MAX_SEARCH_DIRECTORIES", 4), mock.patch.object(
+            router_hook, "TRANSCRIPT_MAX_SEARCH_ENTRIES", 5,
+        ):
+            self.assertTrue(self._attest()["matched"])
+            (self.home / "archived_sessions").mkdir()
+            result = self._attest()
+            self.assertEqual("INCOMPLETE", result["reconciliation_status"])
+            self.assertEqual(1, result["candidate_count"])
+            self.assertFalse(result["matched"])
+
+    def test_path_validated_platform_fallback_keeps_cross_date_and_link_guards(self) -> None:
+        self._child()
+        with mock.patch.object(router_hook, "_TRANSCRIPT_DIRECTORY_FDS", False):
+            self.assertTrue(self._attest()["matched"])
+            outside = self.home / "outside"
+            outside.mkdir()
+            try:
+                (self.home / "archived_sessions").symlink_to(outside, target_is_directory=True)
+            except OSError:
+                self.skipTest("symlinks unavailable")
+            self.assertEqual("PATH_REJECTED", self._attest()["reconciliation_status"])
+
+    def test_directory_replacement_between_discovery_and_scan_cannot_escape(self) -> None:
+        child = self._child()
+        outside = self.home / "outside"
+        outside.mkdir()
+        shutil.copyfile(child, outside / child.name)
+        original = router_hook._scan_discovered_child
+
+        def replace_directory(candidate, visitor):
+            moved = child.parent.with_name("saved-directory")
+            child.parent.rename(moved)
+            try:
+                try:
+                    child.parent.symlink_to(outside, target_is_directory=True)
+                except OSError:
+                    self.skipTest("symlinks unavailable")
+                return original(candidate, visitor)
+            finally:
+                if child.parent.is_symlink():
+                    child.parent.unlink()
+                moved.rename(child.parent)
+
+        with mock.patch.object(router_hook, "_scan_discovered_child", side_effect=replace_directory):
+            result = self._attest()
+        self.assertEqual("PATH_REJECTED", result["reconciliation_status"])
+        self.assertFalse(result["matched"])
+
+    def test_directory_descriptor_mismatch_is_rejected(self) -> None:
+        if not router_hook._TRANSCRIPT_DIRECTORY_FDS:
+            self.skipTest("directory descriptors unavailable")
+        self._child()
+        original = os.fstat
+
+        def changed(fd):
+            values = list(original(fd))
+            values[1] += 1
+            return os.stat_result(values)
+
+        with mock.patch.object(router_hook.os, "fstat", side_effect=changed):
+            self.assertEqual("PATH_REJECTED", self._attest()["reconciliation_status"])
+
+
 class RouterTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -140,6 +421,21 @@ class RouterTests(unittest.TestCase):
         self.config_temp.cleanup()
         self.temp.cleanup()
 
+    def _write_child_transcript(
+        self, session: str, agent_id: str, model: str, effort: str,
+        turn_id: str = "child-turn", extra: list[dict] | None = None,
+    ) -> Path:
+        child = router_hook.CODEX_HOME / "sessions/2026/08/31" / f"rollout-2026-08-31T12-00-00-{agent_id}.jsonl"
+        child.parent.mkdir(parents=True, exist_ok=True)
+        records = [
+            {"type": "session_meta", "payload": {
+                "id": agent_id, "source": {"subagent": {"thread_spawn": {"parent_thread_id": session}}},
+            }},
+            {"type": "turn_context", "payload": {"turn_id": turn_id, "model": model, "effort": effort}},
+        ] + (extra or [])
+        child.write_text("".join(json.dumps(item) + "\n" for item in records), encoding="utf-8")
+        return child
+
     def _complete_transcript_plan(self, session: str, prompt: str, roles: list[str]) -> tuple[dict, dict]:
         router_hook.handle({
             "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "t1",
@@ -148,7 +444,7 @@ class RouterTests(unittest.TestCase):
         transcript = Path(self.temp.name) / f"{session}-parent.jsonl"
         records = []
         for index, role in enumerate(roles):
-            agent_id = f"{session}-{index}"
+            agent_id = f"00000000-0000-7000-8000-{index:012d}"
             records.extend([
                 {"payload": {"type": "custom_tool_call", "input": f'tools.multi_agent_v1__spawn_agent({{agent_type:"{role}",message:"unit-{index}"}})'}},
                 {"payload": {"type": "function_call_output", "output": json.dumps({"agent_id": agent_id})}},
@@ -158,9 +454,7 @@ class RouterTests(unittest.TestCase):
                 )}},
             ])
             spec = router_hook.ROUTES[role]
-            (Path(self.temp.name) / f"rollout-{agent_id}.jsonl").write_text(json.dumps({
-                "type": "turn_context", "payload": {"model": spec["model"], "effort": spec["effort"]}
-            }), encoding="utf-8")
+            self._write_child_transcript(session, agent_id, spec["model"], spec["effort"])
         transcript.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
         result = router_hook.handle({
             "hook_event_name": "Stop", "session_id": session, "turn_id": "t1",
@@ -179,9 +473,7 @@ class RouterTests(unittest.TestCase):
                 {"payload": {"type": "message", "content": f'<subagent_notification>{{"agent_path":"{agent_id}","status":{{"completed":{json.dumps(message)}}}}}</subagent_notification>'}},
             ])
             spec = router_hook.ROUTES[role]
-            (Path(self.temp.name) / f"rollout-{agent_id}.jsonl").write_text(json.dumps({
-                "type": "turn_context", "payload": {"model": spec["model"], "effort": spec["effort"]}
-            }), encoding="utf-8")
+            self._write_child_transcript(session, agent_id, spec["model"], spec["effort"])
         transcript.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
         return transcript
 
@@ -1522,7 +1814,7 @@ class RouterTests(unittest.TestCase):
             **base,
             "hook_event_name": "SubagentStart",
             "turn_id": "parent",
-            "agent_id": "terra-child",
+            "agent_id": "00000000-0000-7000-8000-000000000011",
             "model": "gpt-5.6-terra",
             "reasoning_effort": "medium",
         })
@@ -1530,17 +1822,14 @@ class RouterTests(unittest.TestCase):
             **base,
             "hook_event_name": "SubagentStop",
             "turn_id": "child-turn",
-            "agent_id": "terra-child",
+            "agent_id": "00000000-0000-7000-8000-000000000011",
             "model": "gpt-5.6-terra",
             "reasoning_effort": "medium",
             "last_assistant_message": "Evidence: done\nVerification: tests passed\nUncertainty: none",
         })
         parent = Path(self.temp.name) / f"{session}-parent.jsonl"
         parent.write_text("", encoding="utf-8")
-        (Path(self.temp.name) / "rollout-terra-child.jsonl").write_text(json.dumps({
-            "type": "turn_context",
-            "payload": {"turn_id": "child-turn", "model": "gpt-5.6-terra", "effort": "medium"},
-        }), encoding="utf-8")
+        self._write_child_transcript(session, "00000000-0000-7000-8000-000000000011", "gpt-5.6-terra", "medium")
 
         router_hook.handle({
             **base,
@@ -1551,8 +1840,8 @@ class RouterTests(unittest.TestCase):
         })
 
         receipt = json.loads(router_hook.CAPABILITY_PATH.read_text(encoding="utf-8"))
-        child = self._ledger(session, "parent")["agents"]["terra-child"]
-        self.assertEqual("terra-child", receipt["agent_id"])
+        child = self._ledger(session, "parent")["agents"]["00000000-0000-7000-8000-000000000011"]
+        self.assertEqual("00000000-0000-7000-8000-000000000011", receipt["agent_id"])
         self.assertEqual("child-turn", receipt["child_turn_id"])
         self.assertEqual("gpt-5.6-terra", receipt["observed_child_model"])
         self.assertEqual("medium", receipt["observed_effort"])
@@ -1568,19 +1857,16 @@ class RouterTests(unittest.TestCase):
         })
         router_hook.handle({
             "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "parent",
-            "agent_id": "terra-child", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+            "agent_id": "00000000-0000-7000-8000-000000000011", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
         })
         router_hook.handle({
             "hook_event_name": "SubagentStop", "session_id": session, "turn_id": "child-turn",
-            "agent_id": "terra-child", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+            "agent_id": "00000000-0000-7000-8000-000000000011", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
             "last_assistant_message": "Evidence: done\nVerification: tests passed\nUncertainty: none",
         })
         parent = Path(self.temp.name) / f"{session}-parent.jsonl"
         parent.write_text("", encoding="utf-8")
-        (Path(self.temp.name) / "rollout-terra-child.jsonl").write_text(json.dumps({
-            "type": "turn_context",
-            "payload": {"turn_id": "child-turn", "model": "gpt-5.6-terra", "effort": "high"},
-        }), encoding="utf-8")
+        self._write_child_transcript(session, "00000000-0000-7000-8000-000000000011", "gpt-5.6-terra", "high")
         router_hook.handle({
             "hook_event_name": "Stop", "session_id": session, "turn_id": "parent",
             "stop_hook_active": False, "transcript_path": str(parent),
@@ -3495,7 +3781,7 @@ class RouterTests(unittest.TestCase):
             "prompt": "Research two independent APIs in parallel and recommend an architecture.",
         })
         call_id = "call-large"
-        agent_id = "large-child"
+        agent_id = "00000000-0000-7000-8000-000000000012"
         agent_path = "/root/large-worker"
         metadata = {"turn_id": turn}
         records = [
@@ -3524,12 +3810,7 @@ class RouterTests(unittest.TestCase):
         ]
         transcript = Path(self.temp.name) / f"{session}.jsonl"
         self._write_large_jsonl(transcript, records, position="late")
-        child = Path(self.temp.name) / f"rollout-{agent_id}.jsonl"
-        child.write_text(json.dumps({
-            "type": "turn_context", "payload": {
-                "turn_id": "child-turn", "model": "gpt-5.6-terra", "effort": "medium",
-            },
-        }) + "\n", encoding="utf-8")
+        self._write_child_transcript(session, agent_id, "gpt-5.6-terra", "medium")
 
         router_hook.handle({
             "hook_event_name": "Stop", "session_id": session, "turn_id": turn,
@@ -3556,19 +3837,15 @@ class RouterTests(unittest.TestCase):
         })
         parent = Path(self.temp.name) / f"{session}.jsonl"
         parent.write_text("", encoding="utf-8")
-        agent_id = "terra-large"
+        agent_id = "00000000-0000-7000-8000-000000000013"
         router_hook.handle({
             **runtime,
             "hook_event_name": "SubagentStart", "session_id": session, "turn_id": turn,
             "agent_id": agent_id, "model": "gpt-5.6-terra", "reasoning_effort": "medium",
             "transcript_path": str(parent),
         })
-        child = Path(self.temp.name) / f"rollout-{agent_id}.jsonl"
-        self._write_large_jsonl(child, [{
-            "type": "turn_context", "payload": {
-                "turn_id": "child-turn", "model": "gpt-5.6-terra", "effort": "medium",
-            },
-        }], position="middle")
+        child = self._write_child_transcript(session, agent_id, "gpt-5.6-terra", "medium")
+        self._write_large_jsonl(child, [json.loads(line) for line in child.read_text().splitlines()], position="middle")
 
         router_hook.handle({
             **runtime,
@@ -4253,7 +4530,7 @@ class RouterTests(unittest.TestCase):
             "Route recommendation: gpt56_terra_deep\nEvidence: requirements are ambiguous\n"
             "Verification: validate state model and acceptance criteria\nUncertainty: product scope"
         )
-        for role, agent_id in (("gpt56_terra_worker", "cost"), ("gpt56_terra_deep", "risk")):
+        for role, agent_id in (("gpt56_terra_worker", "00000000-0000-7000-8000-000000000020"), ("gpt56_terra_deep", "00000000-0000-7000-8000-000000000021")):
             router_hook.handle({
                 "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "t1",
                 "agent_type": role, "agent_id": agent_id,
@@ -4275,18 +4552,18 @@ class RouterTests(unittest.TestCase):
 
         router_hook.handle({
             "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "t1",
-            "agent_type": "gpt56_terra_deep", "agent_id": "executor",
+            "agent_type": "gpt56_terra_deep", "agent_id": "00000000-0000-7000-8000-000000000022",
         })
         executor_message = "Evidence: implementation result\nVerification: focused tests passed\nUncertainty: none"
         router_hook.handle({
             "hook_event_name": "SubagentStop", "session_id": session, "turn_id": "t1",
-            "agent_type": "gpt56_terra_deep", "agent_id": "executor", "stop_hook_active": False,
+            "agent_type": "gpt56_terra_deep", "agent_id": "00000000-0000-7000-8000-000000000022", "stop_hook_active": False,
             "last_assistant_message": executor_message,
         })
         transcript = self._write_agent_transcript(session, [
-            ("gpt56_terra_worker", "cost", advisor_message),
-            ("gpt56_terra_deep", "risk", advisor_message),
-            ("gpt56_terra_deep", "executor", executor_message),
+            ("gpt56_terra_worker", "00000000-0000-7000-8000-000000000020", advisor_message),
+            ("gpt56_terra_deep", "00000000-0000-7000-8000-000000000021", advisor_message),
+            ("gpt56_terra_deep", "00000000-0000-7000-8000-000000000022", executor_message),
         ])
         final = router_hook.handle({
             "hook_event_name": "Stop", "session_id": session, "turn_id": "t1",
@@ -4450,8 +4727,8 @@ class RouterTests(unittest.TestCase):
             "prompt": "Research three independent APIs in parallel and recommend an architecture.",
         })
         transcript = self._write_agent_transcript(session, [
-            ("gpt56_terra_worker", "worker-a", "Evidence: a\nVerification: checked\nUncertainty: none"),
-            ("gpt56_terra_worker", "worker-b", "Evidence: b\nVerification: checked\nUncertainty: none"),
+            ("gpt56_terra_worker", "00000000-0000-7000-8000-000000000023", "Evidence: a\nVerification: checked\nUncertainty: none"),
+            ("gpt56_terra_worker", "00000000-0000-7000-8000-000000000024", "Evidence: b\nVerification: checked\nUncertainty: none"),
         ])
         result = router_hook.handle({
             "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "t1",
@@ -4629,14 +4906,11 @@ class RouterTests(unittest.TestCase):
         transcript = Path(self.temp.name) / "transcript.jsonl"
         records = [
             {"payload": {"type": "custom_tool_call", "input": 'tools.multi_agent_v1__spawn_agent({agent_type:"gpt56_terra_deep",message:"bounded"})'}},
-            {"payload": {"type": "function_call_output", "output": '{"agent_id":"agent-123"}'}},
-            {"payload": {"type": "message", "content": '<subagent_notification>{"agent_path":"agent-123","status":{"completed":"Evidence: x\\nVerification: y\\nUncertainty: z"}}</subagent_notification>'}},
+            {"payload": {"type": "function_call_output", "output": '{"agent_id":"00000000-0000-7000-8000-000000000014"}'}},
+            {"payload": {"type": "message", "content": '<subagent_notification>{"agent_path":"00000000-0000-7000-8000-000000000014","status":{"completed":"Evidence: x\\nVerification: y\\nUncertainty: z"}}</subagent_notification>'}},
         ]
         transcript.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
-        child = Path(self.temp.name) / "rollout-agent-123.jsonl"
-        child.write_text(json.dumps({
-            "type": "turn_context", "payload": {"model": "gpt-5.6-terra", "effort": "high"}
-        }), encoding="utf-8")
+        self._write_child_transcript("s6", "00000000-0000-7000-8000-000000000014", "gpt-5.6-terra", "high")
         result = router_hook.handle({
             "hook_event_name": "Stop", "session_id": "s6", "turn_id": "t6",
             "stop_hook_active": False, "transcript_path": str(transcript),
@@ -4645,7 +4919,7 @@ class RouterTests(unittest.TestCase):
         ledger = json.loads(next(path for path in Path(self.temp.name).glob("s6--*.json")).read_text())
         self.assertEqual(["gpt56_terra_deep"], ledger["subagents_completed"])
         self.assertTrue(ledger["reconciled_from_transcript"])
-        self.assertTrue(ledger["agent_attestations"]["agent-123"]["matched"])
+        self.assertTrue(ledger["agent_attestations"]["00000000-0000-7000-8000-000000000014"]["matched"])
 
     def test_stop_reconciles_current_collaboration_transcript_shape(self) -> None:
         session = "collaboration-shape"
@@ -4660,7 +4934,7 @@ class RouterTests(unittest.TestCase):
         roles = ["gpt56_terra_worker", "gpt56_terra_worker", "gpt56_sol_owner"]
         for index, role in enumerate(roles):
             call_id = f"call-{index}"
-            agent_id = f"019f-child-{index}"
+            agent_id = f"00000000-0000-7000-8000-{index:012d}"
             agent_path = f"/root/worker-{index}"
             metadata = {"turn_id": turn}
             spec = router_hook.ROUTES[role]
@@ -4688,9 +4962,7 @@ class RouterTests(unittest.TestCase):
                     "internal_chat_message_metadata_passthrough": metadata,
                 }},
             ])
-            (Path(self.temp.name) / f"rollout-{agent_id}.jsonl").write_text(json.dumps({
-                "type": "turn_context", "payload": {"model": spec["model"], "effort": spec["effort"]}
-            }), encoding="utf-8")
+            self._write_child_transcript(session, agent_id, spec["model"], spec["effort"])
         transcript.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
 
         result = router_hook.handle({
@@ -4715,12 +4987,10 @@ class RouterTests(unittest.TestCase):
         transcript = Path(self.temp.name) / "attest-parent.jsonl"
         transcript.write_text("\n".join(json.dumps(item) for item in [
             {"payload": {"type": "custom_tool_call", "input": 'tools.multi_agent_v1__spawn_agent({agent_type:"gpt56_terra_deep"})'}},
-            {"payload": {"type": "function_call_output", "output": '{"agent_id":"agent-wrong"}'}},
-            {"payload": {"type": "message", "content": '{"agent_path":"agent-wrong","status":{"completed":"Evidence: x Verification: y Uncertainty: z"}}'}},
+            {"payload": {"type": "function_call_output", "output": '{"agent_id":"00000000-0000-7000-8000-000000000015"}'}},
+            {"payload": {"type": "message", "content": '{"agent_path":"00000000-0000-7000-8000-000000000015","status":{"completed":"Evidence: x Verification: y Uncertainty: z"}}'}},
         ]), encoding="utf-8")
-        (Path(self.temp.name) / "rollout-agent-wrong.jsonl").write_text(json.dumps({
-            "type": "turn_context", "payload": {"model": "gpt-5.6-luna", "effort": "low"}
-        }), encoding="utf-8")
+        self._write_child_transcript("attest", "00000000-0000-7000-8000-000000000015", "gpt-5.6-luna", "low")
         result = router_hook.handle({
             "hook_event_name": "Stop", "session_id": "attest", "turn_id": "t1",
             "stop_hook_active": False, "transcript_path": str(transcript),
@@ -4732,13 +5002,14 @@ class RouterTests(unittest.TestCase):
     def test_child_attestation_detects_advisor_mutation_and_recursive_spawn(self) -> None:
         parent = Path(self.temp.name) / "parent.jsonl"
         parent.write_text("", encoding="utf-8")
-        child = Path(self.temp.name) / "rollout-advisor-proof.jsonl"
-        child.write_text("\n".join(json.dumps(item) for item in [
-            {"type": "turn_context", "payload": {"model": "gpt-5.6-terra", "effort": "medium"}},
+        agent_id = "00000000-0000-7000-8000-000000000030"
+        self._write_child_transcript("advisor", agent_id, "gpt-5.6-terra", "medium", extra=[
             {"type": "custom_tool_call", "payload": {"type": "custom_tool_call", "name": "apply_patch"}},
             {"type": "custom_tool_call", "payload": {"type": "custom_tool_call", "name": "spawn_agent"}},
-        ]), encoding="utf-8")
-        attestation = router_hook._attest_child(parent, "advisor-proof", router_hook.ROUTES["gpt56_terra_worker"])
+        ])
+        attestation = router_hook._attest_child(parent, agent_id, {
+            **router_hook.ROUTES["gpt56_terra_worker"], "parent_session_id": "advisor",
+        })
         self.assertTrue(attestation["matched"])
         self.assertTrue(attestation["mutation_seen"])
         self.assertTrue(attestation["recursive_spawn_seen"])
@@ -4746,9 +5017,10 @@ class RouterTests(unittest.TestCase):
     def test_child_attestation_rejects_malformed_oversized_contradictory_or_duplicate_evidence(self) -> None:
         parent = Path(self.temp.name) / "parent.jsonl"
         parent.write_text("", encoding="utf-8")
-        expected = router_hook.ROUTES["gpt56_terra_worker"]
+        expected = {**router_hook.ROUTES["gpt56_terra_worker"], "parent_session_id": "negative"}
 
-        malformed = Path(self.temp.name) / "rollout-malformed-child.jsonl"
+        malformed_id = "00000000-0000-7000-8000-000000000031"
+        malformed = self._write_child_transcript("negative", malformed_id, "gpt-5.6-terra", "medium")
         malformed.write_text(
             "not-json\n" + json.dumps({
                 "type": "turn_context",
@@ -4756,31 +5028,30 @@ class RouterTests(unittest.TestCase):
             }),
             encoding="utf-8",
         )
-        self.assertFalse(router_hook._attest_child(parent, "malformed-child", expected)["matched"])
+        self.assertEqual("MALFORMED", router_hook._attest_child(parent, malformed_id, expected)["reconciliation_status"])
 
-        oversized = Path(self.temp.name) / "rollout-oversized-child.jsonl"
-        oversized.write_bytes(b" " * ((8 * 1024 * 1024) + 1))
-        self.assertFalse(router_hook._attest_child(parent, "oversized-child", expected)["matched"])
+        oversized_id = "00000000-0000-7000-8000-000000000032"
+        oversized = self._write_child_transcript("negative", oversized_id, "gpt-5.6-terra", "medium")
+        oversized.write_bytes(b" " * (router_hook.TRANSCRIPT_MAX_LINE_BYTES + 1))
+        self.assertEqual("LINE_TOO_LARGE", router_hook._attest_child(parent, oversized_id, expected)["reconciliation_status"])
 
-        contradictory = Path(self.temp.name) / "rollout-contradictory-child.jsonl"
-        contradictory.write_text("\n".join(json.dumps(item) for item in (
+        contradictory_id = "00000000-0000-7000-8000-000000000033"
+        self._write_child_transcript("negative", contradictory_id, "gpt-5.6-terra", "medium", extra=[
             {"type": "turn_context", "payload": {
                 "turn_id": "child-a", "model": "gpt-5.6-terra", "effort": "medium",
             }},
             {"type": "turn_context", "payload": {
                 "turn_id": "child-b", "model": "gpt-5.6-terra", "effort": "medium",
             }},
-        )), encoding="utf-8")
-        contradiction = router_hook._attest_child(parent, "contradictory-child", expected)
+        ])
+        contradiction = router_hook._attest_child(parent, contradictory_id, expected)
         self.assertFalse(contradiction["matched"])
         self.assertTrue(contradiction["contradictory"])
 
-        for suffix in ("a", "b"):
-            (Path(self.temp.name) / f"rollout-{suffix}-duplicate-child.jsonl").write_text(json.dumps({
-                "type": "turn_context",
-                "payload": {"turn_id": "child", "model": "gpt-5.6-terra", "effort": "medium"},
-            }), encoding="utf-8")
-        self.assertFalse(router_hook._attest_child(parent, "duplicate-child", expected)["matched"])
+        duplicate_id = "00000000-0000-7000-8000-000000000034"
+        duplicate = self._write_child_transcript("negative", duplicate_id, "gpt-5.6-terra", "medium")
+        shutil.copyfile(duplicate, duplicate.with_name(duplicate.name.replace("T12-00-00", "T12-00-01")))
+        self.assertEqual("INCOMPLETE", router_hook._attest_child(parent, duplicate_id, expected)["reconciliation_status"])
 
     def test_stable_subagent_start_attests_model_and_agent_config_without_transcript(self) -> None:
         router_hook.handle({
@@ -4865,12 +5136,10 @@ class RouterTests(unittest.TestCase):
         transcript = Path(self.temp.name) / "tier-parent.jsonl"
         transcript.write_text("\n".join(json.dumps(item) for item in [
             {"payload": {"type": "custom_tool_call", "input": 'tools.multi_agent_v1__spawn_agent({agent_type:"gpt56_terra_deep",service_tier:"fast"})'}},
-            {"payload": {"type": "function_call_output", "output": '{"agent_id":"agent-tier"}'}},
-            {"payload": {"type": "message", "content": '{"agent_path":"agent-tier","status":{"completed":"Evidence: x Verification: y Uncertainty: z"}}'}},
+            {"payload": {"type": "function_call_output", "output": '{"agent_id":"00000000-0000-7000-8000-000000000016"}'}},
+            {"payload": {"type": "message", "content": '{"agent_path":"00000000-0000-7000-8000-000000000016","status":{"completed":"Evidence: x Verification: y Uncertainty: z"}}'}},
         ]), encoding="utf-8")
-        (Path(self.temp.name) / "rollout-agent-tier.jsonl").write_text(json.dumps({
-            "type": "turn_context", "payload": {"model": "gpt-5.6-terra", "effort": "high"}
-        }), encoding="utf-8")
+        self._write_child_transcript("tier-spawn", "00000000-0000-7000-8000-000000000016", "gpt-5.6-terra", "high")
         result = router_hook.handle({
             "hook_event_name": "Stop", "session_id": "tier-spawn", "turn_id": "t1",
             "stop_hook_active": False, "transcript_path": str(transcript),

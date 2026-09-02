@@ -85,6 +85,8 @@ Readiness receipts are earned only after an expected child is observed on the re
 
 ## Your first task
 
+Current Codex automation-triggered turns do not dispatch Autorouter executable plugin hooks and are outside its routing and savings coverage. Their root model is host/task configured; do not attribute automation model use or savings to Autorouter. No unsupported workaround is provided. See [supported surfaces and real-host coverage](docs/LIMITATIONS.md#supported-surfaces-and-real-host-coverage); this boundary can be revisited if Codex adds first-class automation hook execution.
+
 That is it—prompt Codex normally. A good first test is:
 
 ```text
