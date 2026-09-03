@@ -182,12 +182,14 @@ BROAD_PRODUCT = re.compile(r"\b(build|create|design|launch|make)\b.{0,30}\b(app|
 CLEAR_SPEC = re.compile(r"\b(approved|specified|documented|exact|acceptance criteria|complete spec|existing pattern|fixed schema|provided design)\b", re.I)
 EXACT_ONCE_COMMAND = re.compile(
     r"\b(?:run|execute)\s+(?:exactly\s+(?:this|the)|(?:this|the)\s+exact)\b"
-    r"[^:.;]{0,120}\bcommand\s+once\s*:",
+    r"[^:.;]{0,120}\bcommand\s+once\s*:|"
+    r"\b(?:run|execute)\s+exactly\s+(?:`[^`\r\n]{1,512}`|"
+    r"(?:python[\d.]*|node|bash|sh|[\w./-]+-cli)\s+[^;\r\n]{1,256}?)\s+once\b",
     re.I,
 )
 COMMAND_RESULT = re.compile(
     r"\b(?:report|return|print|output|show|list|summari[sz]e)\b"
-    r"[^.;]{0,160}\b(?:evidence|status|result|output|records?|totals?|findings?)\b",
+    r"[^.;]{0,160}\b(?:evidence|status|results?|output|records?|totals?|findings?|values)\b",
     re.I,
 )
 READ_ONLY_GUARD = re.compile(
@@ -331,6 +333,41 @@ NEGATED_MUTATION_NOUN = re.compile(
     r"\bno\s+(?:repository\s+|file\s+|code\s+)?(?:edits?|changes?|modifications?|writes?)\b",
     re.I,
 )
+# A subject belongs to its own predicate, not to every verb in the prompt.
+# These units retain prohibited clauses; only their action classification changes.
+INTENT_BOUNDARY = re.compile(r"[;\r\n]|[.!?](?=\s|$)|\b(?:but|however|actually|instead|then|now)\b", re.I)
+INTENT_ACTION = re.compile(
+    r"(?<![\w/-])(?:"
+    r"(?P<change>add|build|chang(?:e|ing)|convert|create|delete|edit|fix|format|generate|"
+    r"implement|install|migrate|modify|modifying|monkey-patch|patch|refactor|remove|removing|"
+    r"rename|replace|repair|transform|update|write|writing|alter|altering|disable|enable|"
+    r"weaken|broaden|expose|exposing|rotate|revoke|secure|chmod|chown|setfacl|debit|credit)|"
+    r"(?P<review>review|audit|assess|threat[ -]model|analy[sz]e|investigate|diagnose)|"
+    r"(?P<observe>report|inspect|check|preserve|keep|maintain|read|return|print|show|"
+    r"list|summari[sz]e|explain|describe|observe|mention|use|run|execute|verify|test)"
+    r")(?![\w/-])",
+    re.I,
+)
+INTENT_NEGATION = re.compile(r"\b(?:do\s+not|don['’]?t|never|must\s+not|should\s+not|cannot|without)\b", re.I)
+SECURITY_SUBJECT = re.compile(
+    r"\b(?:security|vulnerab\w*|exploit\w*|auth(?:entication|orization)?|oauth|permissions?|"
+    r"privileges?|secrets?|credentials?|sandbox(?:ing)?|approval\s+polic(?:y|ies)|"
+    r"trust(?:\s+settings)?|plugins?|hooks?|global\s+config(?:uration)?|"
+    r"security-sensitive\s+config(?:uration)?|network\s+(?:access|restrictions?)|"
+    r"injection|xss|csrf|ssrf|threat[ -]model)\b",
+    re.I,
+)
+SECURITY_COMMAND = re.compile(r"\b(?:chmod|chown|setfacl)\b", re.I)
+FINANCIAL_SUBJECT = re.compile(
+    r"\b(?:financial|accounting|payments?|billing|bank|funds?|money|proration|refunds?|"
+    r"chargebacks?|entitlements?|invoices?|subscriptions?|account\s+balance)\b",
+    re.I,
+)
+OPERATIONAL_LEDGER = re.compile(
+    r"\b(?:root|routing|router|audit|verification|task|session)\s+ledger\b|"
+    r"\bledger\s*(?:ID(?:/path)?|/transcript|metadata)\b",
+    re.I,
+)
 TRIVIAL = re.compile(
     r"\b(typo|one[- ]line|single line|rename this (?:local )?variable|format this|explain this error|"
     r"short answer|quick question|what does this mean)\b",
@@ -412,9 +449,66 @@ def _classification_text(prompt: str) -> str:
 
 
 def _mutation_intent_text(text: str) -> str:
-    """Remove explicit local prohibitions without hiding other requested work."""
-    without_negated_verbs = NEGATED_MUTATION_INTENT.sub(" ", text)
-    return NEGATED_MUTATION_NOUN.sub(" ", without_negated_verbs)
+    """Expose affirmative mutation predicates, including coordinated prohibitions."""
+    return " ".join(unit for unit, kind in _intent_units(text) if kind == "change")
+
+
+def _intent_units(text: str) -> list[tuple[str, str]]:
+    """Bind each subject to a local predicate; never discard a negated clause.
+
+    A prohibition scopes over its coordinated action list, but not a new sentence
+    or an explicit contrast. Observations cannot lend verbs to later subjects.
+    No prompt-derived result from this helper is persisted.
+    """
+    units: list[tuple[str, str]] = []
+    for clause in INTENT_BOUNDARY.split(text):
+        actions = list(INTENT_ACTION.finditer(clause))
+        start = 0
+        prohibited = False
+        for index, action in enumerate(actions):
+            prefix = clause[start:action.start()]
+            if INTENT_NEGATION.search(prefix):
+                prohibited = True
+            elif not re.search(r"[,]|\b(?:and|or|to)\b", prefix, re.I):
+                prohibited = False
+            if index == 0 and prefix:
+                units.append((prefix, "mention"))
+            end = actions[index + 1].start() if index + 1 < len(actions) else len(clause)
+            kind = "prohibited" if prohibited else str(action.lastgroup)
+            if index and re.fullmatch(r"(?:explain|describe|report|inspect|check)", actions[index - 1].group(), re.I):
+                if re.fullmatch(r"\s*(?:how\s+to|(?:the\s+)?command)\s+", prefix, re.I):
+                    kind = "observe"  # the action is the object being described
+            if re.search(r"\b(?:final|last|no)\s+$", prefix, re.I):
+                kind = "mention"  # e.g. "after the final edit", not an imperative
+            units.append((clause[action.start():end], kind))
+            start = action.end()
+        if not actions:
+            units.append((clause, "mention"))
+    return units
+
+
+def _subject_intent(text: str) -> tuple[str, bool, bool, bool]:
+    """Return scoped domain text, security change/review, and financial action."""
+    security_change = security_review = payment_critical = False
+    scoped: list[str] = []
+    for unit, kind in _intent_units(text):
+        subject = bool(SECURITY_SUBJECT.search(unit))
+        changing = kind == "change"
+        reviewing = kind == "review"
+        command = bool(SECURITY_COMMAND.search(unit))
+        security_change |= changing and (subject or command)
+        security_review |= reviewing and subject
+        if not ((changing or reviewing) and subject):
+            # Mask only non-actionable domain nouns, not the enclosing instruction.
+            unit = SECURITY_SUBJECT.sub(" ", unit)
+        financial = bool(FINANCIAL_SUBJECT.search(unit))
+        unqualified_ledger = bool(re.search(r"\bledger\b", OPERATIONAL_LEDGER.sub(" ", unit), re.I))
+        financial_action = (changing or reviewing) and (financial or unqualified_ledger)
+        payment_critical |= financial_action and bool(PAYMENT_CRITICAL.search(unit) or financial)
+        if not financial_action and not financial:
+            unit = re.sub(r"\bledger\b", " ", unit, flags=re.I)
+        scoped.append(unit)
+    return " ".join(scoped), security_change, security_review, payment_critical
 
 
 def _has_concrete_so_outcome(text: str) -> bool:
@@ -1142,12 +1236,14 @@ def _attach_plan(decision: dict[str, Any], profile: dict[str, Any]) -> dict[str,
 
 def _classify_balanced(prompt: str, active_model: str = "", active_effort: str = "medium") -> dict[str, Any]:
     """Classify only trusted user-prompt text; never inspect repo/tool content."""
-    text = " ".join(_classification_text(prompt).split())
+    raw_text = _classification_text(prompt)
+    text = " ".join(raw_text.split())
     words = len(text.split())
+    subject_text, security_change, security_review, payment_critical = _subject_intent(raw_text)
     semantic_text = re.sub(
         r"\b(?:no|without)\s+(?:any\s+)?(?:security|auth(?:entication|orization)?|privacy)\s+changes?\b",
         "",
-        text,
+        subject_text,
         flags=re.I,
     )
     semantic_text = re.sub(
@@ -1168,7 +1264,7 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
     )
     explicit_command_contract = bool(EXACT_ONCE_COMMAND.search(text) and COMMAND_RESULT.search(text))
     consequential_action = _has_consequential_action(text)
-    security_subject = bool(SECURITY.search(semantic_text))
+    security_subject = security_change or security_review
     review = bool(REVIEW.search(text))
     critical_review = bool(CRITICAL_REVIEW.search(text))
     low_stakes_surface = bool(LOW_STAKES_SURFACE.search(text))
@@ -1222,23 +1318,19 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
     read_heavy = bool(READ_HEAVY.search(text))
     parallel = bool(PARALLEL.search(text))
     dependent = bool(DEPENDENT_WORK.search(text))
-    mutation = bool(MUTATION_INTENT.search(_mutation_intent_text(text))) or bool(
+    mutation = security_change or bool(_mutation_intent_text(raw_text).strip()) or bool(
         re.match(r"^\s*make\s+(?:this|that|it)\s+better\s*[.!]*\s*$", text, re.I)
     )
     clear_spec, underspecified_mutation, unbound_continuation = _mutation_actionability(
         text, mutation, explicit_command_contract
     )
-    security = security_subject and (
-        bool(SECURITY_ACTION.search(text)) or mutation or consequence
-    ) and not (bool(EXPLANATORY.search(text)) and not mutation and not review and not consequence)
+    security = (security_change or security_review and (
+        bool(SECURITY_ACTION.search(semantic_text)) or consequence
+    )) and not (
+        bool(EXPLANATORY.search(text)) and not mutation and not review and not consequence
+    )
     product = _product_profile(semantic_text)
     explicit_uncertainty = bool(ROUTING_UNCERTAINTY.search(text))
-    payment_text = re.sub(r"\b(?:routing|router|verification|audit)\s+ledger\b", "", text, flags=re.I)
-    payment_critical = (
-        bool(PAYMENT_CRITICAL.search(payment_text))
-        and bool(PAYMENT_BEHAVIOR.search(payment_text))
-        and "payments_billing" in product["areas"]
-    )
     guarded_command = bool(READ_ONLY_GUARD.search(text)) or bool(
         NO_ORDER_GUARD.search(text) and ZERO_SPEND_GUARD.search(text)
     )
@@ -1279,7 +1371,7 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
         }
 
     if security:
-        task_type = "security_review" if review else "security_change"
+        task_type = "security_change" if security_change else "security_review"
     elif owner:
         task_type = "architecture_migration"
     elif deployment:
@@ -1409,7 +1501,7 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
         return choose("gpt56_luna_worker", 0.95, "high-volume bounded work with cheap objective verification", "schema, aggregate, or sample validation", parallel)
     product_area = product["primary_area"]
     product_stages = set(product["stages"])
-    if product_area == "payments_billing" and mutation and PAYMENT_BEHAVIOR.search(text) and not low_stakes_surface:
+    if product_area == "payments_billing" and mutation and payment_critical and not low_stakes_surface:
         return choose("gpt56_sol_owner", 0.91, "payments or billing behavior requires consequential ownership", "idempotency, reconciliation, rollback, and financial-invariant checks")
     if product_area == "security_privacy":
         return choose("gpt56_terra_deep", 0.88, "security or privacy mapping needs careful boundary and evidence reasoning", "data-flow, permission, and guarantee cross-check")

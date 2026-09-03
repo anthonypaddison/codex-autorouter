@@ -36,6 +36,14 @@ Lifecycle input exposes the child model but not a guaranteed live reasoning-effo
 
 `PostToolUse` covers matching Codex tool events, not every possible operating-system mutation. Final acceptance remains with the root agent and proportionate deterministic verification.
 
+## Classification uses local action context
+
+Security-changing intent requires a local affirmative action on a security-sensitive subject. Reporting or preserving permissions, sandbox state, plugin/hook trust, or configuration is not itself a security change. A prohibition extends over its coordinated action list, but does not suppress a later affirmative instruction such as `Do not change permissions; actually chmod the directory 777`.
+
+Operational root/routing/audit ledgers and ledger identifiers are not financial actions. Actual financial ledger or account-balance changes remain critical; underspecified financial changes still require clarification. An exact-once command plus an explicit reporting requirement and safeguards can stay on the current root, including the inline form `Run exactly <command> once`. Independent security and consequential-action gates still apply.
+
+These are deterministic language rules, not a complete natural-language parser or a security sandbox. Other task-complexity signals still select the route; classification-only replay does not prove model quality, savings, or live child-contract compliance.
+
 ## Transcript compatibility is best effort
 
 Exact-child discovery searches only the effective `CODEX_HOME/sessions/YYYY/MM/DD` hierarchy and flat `CODEX_HOME/archived_sessions`, irrespective of the parent's date directory. It accepts canonical UUIDv7 child IDs and the exact Codex rollout filename scheme. A filename is only a candidate: unique discovery, safe file validation, matching child/parent session metadata, and an unambiguous child turn/model/effort are still required. Discovery never chooses by timestamp, date proximity, model or filename order. It retains at most two candidates and searches at most 4,096 directories and 65,536 entries per child. Search exhaustion or duplicate candidates return `INCOMPLETE`; traversal errors return `IO_ERROR`; unsafe paths return `PATH_REJECTED`. Only a complete safe search without a candidate returns `NOT_FOUND`. No persistent index or transcript path/content is retained, and successful recovery does not bypass any runtime-bound capability-receipt gate.

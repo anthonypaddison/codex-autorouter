@@ -121,6 +121,194 @@ PRODUCT_CASES = [
 ]
 
 
+class ActionSubjectClassificationTests(unittest.TestCase):
+    def test_inline_exact_once_command_with_control_safeguards_stays_luna(self) -> None:
+        safeguards = (
+            "Do not change global configuration or modify plugins.",
+            "Keep the same permission profile. No network.",
+            "Keep permissions unchanged; hooks must remain unchanged.",
+            "Report security/permission evidence and the root ledger ID/path.",
+            "Do not edit the verifier, monkey-patch it, skip checks, or redefine success.",
+        )
+        for safeguard in safeguards:
+            with self.subTest(safeguard=safeguard):
+                decision = router_hook.classify_prompt(
+                    "Run exactly `python3 -B inspect_inventory.py` once. "
+                    "Read-only synthetic inventory, zero spend, no orders. Report its returned values. "
+                    + safeguard,
+                    "gpt-5.6-luna", "low",
+                )
+                profile = decision["task_profile"]
+                self.assertNotEqual("security_change", profile["task_type"])
+                self.assertEqual("normal", profile["risk"])
+                self.assertFalse(profile["mutation"])
+                self.assertTrue(profile["clear_spec"])
+                self.assertIn("safe_bounded_command", profile["signals"])
+                self.assertEqual("current", decision["route"])
+                self.assertEqual({}, decision["orchestration"]["required_agents"])
+
+    def test_security_subject_cannot_borrow_an_unrelated_implementation_action(self) -> None:
+        for separator in (". ", "; ", " and "):
+            decision = router_hook.classify_prompt(
+                "Implement a local CSV parser with strict header validation and frozen tests"
+                + separator + "report permission and sandbox evidence. "
+                "Do not modify global configuration or plugins; use equivalent permissions.",
+                "gpt-5.6-luna", "low",
+            )
+            with self.subTest(separator=separator):
+                self.assertNotEqual("security_change", decision["task_profile"]["task_type"])
+                self.assertNotIn("security", decision["task_profile"]["signals"])
+                self.assertNotIn("payment_critical", decision["task_profile"]["signals"])
+                self.assertEqual("normal", decision["task_profile"]["risk"])
+                self.assertTrue(decision["task_profile"]["mutation"])
+
+    def test_local_technical_difficulty_is_not_security_mutation(self) -> None:
+        decision = router_hook.classify_prompt(
+            "Diagnose and repair a deterministic retry lifecycle race condition in the local tracker. "
+            "Preserve atomic rollback and run the frozen tests. "
+            "Keep the permission profile; no network; do not modify plugins or global configuration. "
+            "Report root ledger and transcript metadata, test/repair retries and evidence.",
+            "gpt-5.6-luna", "low",
+        )
+        self.assertEqual("debugging", decision["task_profile"]["task_type"])
+        self.assertEqual("normal", decision["task_profile"]["risk"])
+        self.assertNotIn("payment_critical", decision["task_profile"]["signals"])
+        self.assertEqual("gpt56_terra_deep", decision["route"])
+
+    def test_passive_and_reported_security_state_is_not_a_change(self) -> None:
+        for prompt in (
+            "Report security evidence and permission settings.",
+            "Inspect authentication credentials without changing them.",
+            "Check sandbox restrictions and report the current approval policy.",
+            "Preserve plugin trust; hooks must remain unchanged.",
+            "Report whether the permissions changed earlier.",
+        ):
+            with self.subTest(prompt=prompt):
+                profile = router_hook.classify_prompt(prompt, "gpt-5.6-luna", "low")["task_profile"]
+                self.assertNotEqual("security_change", profile["task_type"])
+                self.assertFalse(profile["mutation"])
+                self.assertEqual("normal", profile["risk"])
+
+    def test_coordinated_prohibited_actions_remain_non_mutating(self) -> None:
+        for prompt in (
+            "Do not edit the verifier, monkey-patch it, skip checks, or redefine success.",
+            "Never change permissions, disable the sandbox, or expose a secret.",
+            "Inspect settings without altering credentials or removing security checks.",
+        ):
+            with self.subTest(prompt=prompt):
+                profile = router_hook.classify_prompt(prompt, "gpt-5.6-luna", "low")["task_profile"]
+                self.assertFalse(profile["mutation"])
+                self.assertNotEqual("security_change", profile["task_type"])
+                self.assertEqual("normal", profile["risk"])
+
+    def test_reporting_an_action_does_not_request_that_action(self) -> None:
+        for prompt in (
+            "Explain how to change filesystem permissions.",
+            "Report the command chmod 777 without executing it.",
+            "Describe how to disable sandbox restrictions.",
+        ):
+            with self.subTest(prompt=prompt):
+                profile = router_hook.classify_prompt(prompt, "gpt-5.6-luna", "low")["task_profile"]
+                self.assertNotEqual("security_change", profile["task_type"])
+                self.assertFalse(profile["mutation"])
+                self.assertEqual("normal", profile["risk"])
+
+    def test_reporting_cannot_hide_a_separately_requested_security_change(self) -> None:
+        for prefix in ("Report current permissions and ", "Explain the settings; ", "Inspect the sandbox, then "):
+            with self.subTest(prefix=prefix):
+                decision = router_hook.classify_prompt(
+                    prefix + "disable sandbox restrictions for this workspace.", "gpt-5.6-luna", "low",
+                )
+                self.assertEqual("security_change", decision["task_profile"]["task_type"])
+                self.assertIn(decision["task_profile"]["risk"], {"high", "critical"})
+
+    def test_affirmative_security_changes_keep_the_safety_floor(self) -> None:
+        for prompt in (
+            "Change filesystem permissions on the protected directory to 777.",
+            "chmod 777 /workspace/protected",
+            "Disable sandbox restrictions for this workspace.",
+            "Change the approval policy to never require approval.",
+            "Modify plugin trust to permit the untrusted plugin.",
+            "Change hook trust to permit unsigned executable hooks.",
+            "Alter authentication credentials to use the new credential.",
+            "Expose a secret in the diagnostic output.",
+            "Add a secret to the public response.",
+            "Enable broader network access from the sandbox.",
+            "Remove the security check from the login handler.",
+            "Change security-sensitive global configuration to disable authentication.",
+        ):
+            with self.subTest(prompt=prompt):
+                decision = router_hook.classify_prompt(prompt, "gpt-5.6-luna", "low")
+                self.assertEqual("security_change", decision["task_profile"]["task_type"])
+                self.assertIn(decision["task_profile"]["risk"], {"high", "critical"})
+                self.assertTrue(decision["task_profile"]["mutation"])
+                self.assertNotIn("safe_bounded_command", decision["task_profile"]["signals"])
+                self.assertTrue(decision["requires_clarification"] or decision["route"] in {
+                    "gpt56_sol_owner", "gpt56_sol_deep",
+                })
+
+    def test_prohibition_cannot_hide_a_later_affirmative_security_action(self) -> None:
+        for separator in ("; actually ", ", but ", ". Now ", "\n"):
+            prompt = "Do not change permissions" + separator + "chmod 777 /workspace/protected."
+            with self.subTest(separator=separator):
+                decision = router_hook.classify_prompt(prompt, "gpt-5.6-luna", "low")
+                self.assertEqual("security_change", decision["task_profile"]["task_type"])
+                self.assertIn(decision["task_profile"]["risk"], {"high", "critical"})
+                self.assertIn(decision["route"], {"gpt56_sol_owner", "gpt56_sol_deep"})
+
+    def test_operational_ledger_reporting_is_not_financial_work(self) -> None:
+        for subject in ("root ledger", "routing ledger", "audit ledger", "transcript metadata", "ledger ID/path"):
+            with self.subTest(subject=subject):
+                decision = router_hook.classify_prompt(
+                    "Read and report the " + subject + ". Do not change anything.",
+                    "gpt-5.6-luna", "low",
+                )
+                self.assertEqual("normal", decision["task_profile"]["risk"])
+                self.assertNotIn("payment_critical", decision["task_profile"]["signals"])
+
+    def test_financial_ledger_actions_remain_critical(self) -> None:
+        for prompt in (
+            "Modify the payment ledger to debit the customer account balance.",
+            "Update the financial ledger to record the transfer of funds.",
+            "Change the accounting ledger entries to credit the account balance.",
+            "Report the audit ledger ID; actually modify the financial ledger balance.",
+        ):
+            with self.subTest(prompt=prompt):
+                decision = router_hook.classify_prompt(prompt, "gpt-5.6-luna", "low")
+                self.assertIn("payment_critical", decision["task_profile"]["signals"])
+                self.assertEqual("critical", decision["task_profile"]["risk"])
+                self.assertIn(decision["route"], {"gpt56_sol_owner", "gpt56_sol_deep"})
+
+    def test_underspecified_financial_mutation_is_not_treated_as_safe(self) -> None:
+        decision = router_hook.classify_prompt("Change the financial ledger.", "gpt-5.6-luna", "low")
+        self.assertEqual("critical", decision["task_profile"]["risk"])
+        self.assertTrue(decision["requires_clarification"])
+        self.assertNotIn("safe_bounded_command", decision["task_profile"]["signals"])
+
+    def test_exact_once_wording_does_not_hide_security_or_financial_actions(self) -> None:
+        for action in (
+            "chmod 777 /workspace/protected", "disable sandbox restrictions",
+            "modify the payment ledger to debit the customer account",
+            "place a live financial order", "delete the production database",
+        ):
+            with self.subTest(action=action):
+                decision = router_hook.classify_prompt(
+                    "Run exactly `python3 inspect.py` once; report the result. Read-only. "
+                    "Do not change permissions; actually " + action + ".",
+                    "gpt-5.6-luna", "low",
+                )
+                self.assertIn(decision["task_profile"]["risk"], {"high", "critical"})
+                self.assertNotIn("safe_bounded_command", decision["task_profile"]["signals"])
+                self.assertNotEqual("current", decision["route"])
+
+    def test_unbounded_command_mention_does_not_establish_clear_spec(self) -> None:
+        for prompt in ("Run some shell commands.", "Run something once.", "Run exactly once."):
+            with self.subTest(prompt=prompt):
+                profile = router_hook.classify_prompt(prompt, "gpt-5.6-luna", "low")["task_profile"]
+                self.assertFalse(profile["clear_spec"])
+                self.assertNotIn("safe_bounded_command", profile["signals"])
+
+
 class ChildDiscoveryTests(unittest.TestCase):
     CHILD = "00000000-0000-7000-8000-000000000001"
     PARENT = "00000000-0000-7000-8000-000000000002"
