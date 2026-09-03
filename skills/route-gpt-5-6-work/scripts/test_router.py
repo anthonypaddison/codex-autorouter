@@ -590,6 +590,211 @@ class ChildDiscoveryTests(unittest.TestCase):
             self.assertEqual("PATH_REJECTED", self._attest()["reconciliation_status"])
 
 
+class ObservedSpawnContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        RouterTests.setUp(self)
+
+    def tearDown(self) -> None:
+        RouterTests.tearDown(self)
+
+    def _run_child(self, arguments: dict | None, *, nested: bool = False) -> tuple[dict, Path]:
+        base = {"session_id": "observed-contract", "turn_id": "parent"}
+        router_hook.handle({**base, "hook_event_name": "UserPromptSubmit", "model": "gpt-5.6-luna",
+                            "prompt": "Implement a bounded endpoint with targeted unit tests."})
+        path = Path(self.temp.name) / "parent.jsonl"
+        records = [{"type": "turn_context", "payload": {"turn_id": "parent"}}]
+        if arguments is not None:
+            if nested:
+                records.extend([
+                    {"payload": {"type": "custom_tool_call", "name": "exec", "call_id": "spawn-1",
+                                 "input": "text(await tools.multi_agent_v1__spawn_agent(" + json.dumps(arguments) + "));"}},
+                    {"payload": {"type": "custom_tool_call_output", "call_id": "spawn-1",
+                                 "output": [{"type": "input_text", "text": json.dumps({"agent_id": "real-child"})}]}},
+                ])
+            else:
+                records.extend([
+                    {"payload": {"type": "function_call", "name": "spawn_agent", "namespace": "collaboration",
+                                 "call_id": "spawn-1", "arguments": json.dumps(arguments)}},
+                    {"payload": {"type": "sub_agent_activity", "event_id": "spawn-1",
+                                 "agent_thread_id": "real-child", "kind": "started"}},
+                ])
+        path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+        router_hook.handle({**base, "hook_event_name": "SubagentStart", "agent_id": "real-child",
+                            "model": "gpt-5.6-terra", "reasoning_effort": "medium"})
+        router_hook.handle({**base, "hook_event_name": "UserPromptSubmit", "turn_id": "child-turn",
+                            "agent_id": "real-child", "model": "gpt-5.6-terra", "model_reasoning_effort": "medium",
+                            "prompt": "Inspect the bounded endpoint."})
+        router_hook.handle({**base, "hook_event_name": "SubagentStop", "agent_id": "real-child",
+                            "turn_id": "child-turn", "model": "gpt-5.6-terra", "reasoning_effort": "medium",
+                            "last_assistant_message": "Evidence: inspected\nVerification: checked\nUncertainty: none"})
+        router_hook.handle({**base, "hook_event_name": "Stop", "transcript_path": str(path)})
+        return json.loads((Path(self.temp.name) / "observed-contract--parent.json").read_text()), path
+
+    def test_direct_host_bypass_is_not_plan_or_receipt_evidence(self) -> None:
+        for nested in (False, True):
+            with self.subTest(nested=nested):
+                state, path = self._run_child({"model": "gpt-5.6-terra", "reasoning_effort": "medium",
+                                               "message": "Self-contained bounded task."}, nested=nested)
+                child = state["agents"]["real-child"]
+                self.assertEqual("completed", child["status"])
+                self.assertEqual("observed-contract", child["parent_session_id"])
+                self.assertFalse(child.get("spawn_contract_valid", True))
+                self.assertEqual("FAILED_OPEN", state["status"])
+                self.assertFalse(child["receipt_recorded"])
+                self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+                self.assertTrue(any("spawn_contract_invalid" in v for v in state["violations"]))
+                self.assertTrue(any("required" in p and "got 0" in p for p in state["failed_open_problems"]))
+                contracts = state["spawn_contracts"]
+                self.assertEqual(1, len(contracts))
+                evidence = next(iter(contracts.values()))
+                self.assertEqual(["missing_fork_turns", "missing_task_name"], evidence["reasons"])
+                before = json.dumps(state, sort_keys=True)
+                router_hook._reconcile_subagent_transcript({"transcript_path": str(path)}, state)
+                self.assertEqual(len(contracts), len(state["spawn_contracts"]))
+                self.assertEqual(len(json.loads(before)["violations"]), len(state["violations"]))
+
+    def test_lifecycle_without_observed_arguments_cannot_issue_receipt(self) -> None:
+        state, _ = self._run_child(None)
+        self.assertFalse(state["agents"]["real-child"]["receipt_recorded"])
+        self.assertEqual("FAILED_OPEN", state["status"])
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+
+    def test_adapter_output_can_fulfil_plan_and_issue_receipt(self) -> None:
+        args = router_hook.spawn_compat.build_arguments(model="gpt-5.6-terra", effort="medium",
+                                                        task_name="bounded", message="Inspect only.")
+        state, _ = self._run_child(args)
+        self.assertEqual("COMPLETE", state["status"])
+        child = state["agents"]["real-child"]
+        self.assertTrue(child.get("spawn_contract_valid"))
+        self.assertTrue(child["receipt_recorded"])
+        self.assertEqual([], state["violations"])
+        receipt = json.loads(router_hook.CAPABILITY_PATH.read_text())
+        self.assertTrue(receipt["spawn_contract_valid"])
+        self.assertEqual(child["spawn_call_key"], receipt["spawn_call_key"])
+
+    def test_child_flags_without_call_specific_evidence_never_issue_receipts(self) -> None:
+        args = router_hook.spawn_compat.build_arguments(model="gpt-5.6-terra", effort="medium",
+                                                        task_name="bounded", message="Inspect only.")
+        state, _ = self._run_child(args)
+        state["agents"]["real-child"]["receipt_recorded"] = False
+        state["spawn_contracts"].clear()
+        self.assertFalse(router_hook._record_capability(state, "real-child"))
+
+    def test_conflicting_call_child_binding_never_leaks_a_receipt(self) -> None:
+        args = router_hook.spawn_compat.build_arguments(model="gpt-5.6-terra", effort="medium",
+                                                        task_name="bounded", message="Inspect only.")
+        state, path = self._run_child(args)
+        router_hook.CAPABILITY_PATH.unlink()
+        child = state["agents"]["real-child"]
+        child["receipt_recorded"] = False
+        state["agents"]["z-other-child"] = {**child, "receipt_recorded": False}
+        state["agent_attestations"]["z-other-child"] = dict(state["agent_attestations"]["real-child"])
+        records = [json.loads(line) for line in path.read_text().splitlines()]
+        records.append({"payload": {"type": "sub_agent_activity", "event_id": "spawn-1", "agent_thread_id": "z-other-child"}})
+        path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+        router_hook._reconcile_subagent_transcript({"transcript_path": str(path)}, state)
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists(), "conflict was discovered after an early receipt write")
+        self.assertFalse(router_hook._spawn_contract_compliant(state, "real-child"))
+
+    def test_multiple_calls_cannot_be_assigned_to_children_by_return_order(self) -> None:
+        args = router_hook.spawn_compat.build_arguments(model="gpt-5.6-terra", effort="medium",
+                                                        task_name="bounded", message="Inspect only.")
+        state, path = self._run_child(None)
+        records = [
+            {"payload": {"type": "custom_tool_call", "name": "exec", "call_id": "batch",
+                         "input": "text(await Promise.all([tools.multi_agent_v1__spawn_agent(" + json.dumps(args)
+                         + "),tools.multi_agent_v1__spawn_agent(" + json.dumps(args) + ")]));"}},
+            {"payload": {"type": "custom_tool_call_output", "call_id": "batch",
+                         "output": json.dumps([{"agent_id": "real-child"}, {"agent_id": "other-child"}])}},
+        ]
+        path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+        router_hook._reconcile_subagent_transcript({"transcript_path": str(path)}, state)
+        self.assertEqual(2, len(state["spawn_contracts"]))
+        self.assertFalse(router_hook._spawn_contract_compliant(state, "real-child"))
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+
+    def test_observed_model_cannot_borrow_a_different_lifecycle_model(self) -> None:
+        args = router_hook.spawn_compat.build_arguments(model="gpt-5.6-sol", effort="high",
+                                                        task_name="bounded", message="Inspect only.")
+        state, _ = self._run_child(args)
+        self.assertFalse(router_hook._spawn_contract_compliant(state, "real-child"))
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+
+    def test_same_child_cannot_borrow_the_last_of_two_different_spawn_calls(self) -> None:
+        state, path = self._run_child(None)
+        args = router_hook.spawn_compat.build_arguments(model="gpt-5.6-terra", effort="medium",
+                                                        task_name="bounded", message="Inspect only.")
+        records = []
+        for call_id in ("first", "second"):
+            records.extend([
+                {"payload": {"type": "function_call", "name": "spawn_agent", "call_id": call_id,
+                             "arguments": json.dumps(args)}},
+                {"payload": {"type": "sub_agent_activity", "event_id": call_id, "agent_thread_id": "real-child"}},
+            ])
+        path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+        router_hook._reconcile_subagent_transcript({"transcript_path": str(path)}, state)
+        self.assertFalse(router_hook._spawn_contract_compliant(state, "real-child"))
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+
+    def test_all_missing_or_wrong_fields_block_plan_and_receipt(self) -> None:
+        valid = router_hook.spawn_compat.build_arguments(model="gpt-5.6-terra", effort="medium",
+                                                         task_name="bounded", message="Inspect only.")
+        cases = [{k: v for k, v in valid.items() if k != field} for field in valid]
+        cases += [{**valid, "fork_turns": "all"}, {**valid, "task_name": " \t"},
+                  {**valid, "message": ""}, {**valid, "reasoning_effort": "ultra"}]
+        for arguments in cases:
+            with self.subTest(arguments=arguments):
+                state, _ = self._run_child(arguments)
+                self.assertEqual("FAILED_OPEN", state["status"])
+                self.assertFalse(state["agents"]["real-child"]["receipt_recorded"])
+                self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+                self.assertNotIn("", state["subagents_started"])
+
+    def test_later_valid_child_fulfils_role_without_erasing_invalid_provenance(self) -> None:
+        state, path = self._run_child({"model": "gpt-5.6-terra", "reasoning_effort": "medium", "message": "Inspect."})
+        state["decision"]["orchestration"]["max_workers"] = 2  # Policy explicitly permits another worker.
+        state["status"] = "RUNNING"
+        agent_id = "00000000-0000-7000-8000-000000000123"
+        records = [json.loads(line) for line in path.read_text().splitlines()]
+        records += RouterTests._observed_spawn_records(agent_id, "gpt56_terra_worker", "parent")
+        records += [{"payload": {"type": "message", "content": json.dumps({"agent_id": agent_id,
+                     "status": {"completed": "Evidence: checked\nVerification: complete\nUncertainty: none"}})}}]
+        path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+        RouterTests._write_child_transcript(self, "observed-contract", agent_id, "gpt-5.6-terra", "medium")
+        base = {"session_id": "observed-contract", "turn_id": "parent"}
+        router_hook._write_existing_state(base, state)
+        router_hook.handle({**base, "hook_event_name": "Stop", "transcript_path": str(path)})
+        state = json.loads((Path(self.temp.name) / "observed-contract--parent.json").read_text())
+        self.assertEqual("COMPLETE", state["status"])
+        self.assertTrue(any("spawn_contract_invalid" in item for item in state["violations"]))
+        self.assertFalse(state["agents"]["real-child"]["spawn_contract_valid"])
+        self.assertTrue(state["agents"][agent_id]["spawn_contract_valid"])
+
+    def test_malformed_evidence_workers_do_not_fulfil_staged_prerequisites(self) -> None:
+        base = {"session_id": "staged-contract", "turn_id": "parent"}
+        router_hook.handle({**base, "hook_event_name": "UserPromptSubmit", "model": "gpt-5.6-luna",
+                            "prompt": "Research three independent APIs in parallel and recommend an architecture."})
+        state = json.loads((Path(self.temp.name) / "staged-contract--parent.json").read_text())
+        context = router_hook._subagent_scan_context(state)
+        for index in range(2):
+            for record in [
+                {"payload": {"type": "function_call", "name": "spawn_agent", "call_id": str(index),
+                             "arguments": {"model": "gpt-5.6-terra", "reasoning_effort": "medium", "message": "Inspect."}}},
+                {"payload": {"type": "sub_agent_activity", "event_id": str(index), "agent_thread_id": "child-" + str(index)}},
+                {"payload": {"type": "message", "content": json.dumps({"agent_id": "child-" + str(index),
+                             "status": {"completed": "Evidence: done\nVerification: checked\nUncertainty: none"}})}},
+            ]:
+                router_hook._consume_subagent_record(record, state, context)
+        router_hook._record_scanned_spawn(state, context, "gpt56_sol_owner", False)
+        self.assertTrue(any(item.startswith("ordering_violation:") for item in state["violations"]))
+
+    def test_repeated_malformed_unexpected_role_has_no_duplicate_violations(self) -> None:
+        state, path = self._run_child({"model": "gpt-5.6-sol", "reasoning_effort": "high", "message": "Inspect."})
+        before = list(state["violations"])
+        router_hook._reconcile_subagent_transcript({"transcript_path": str(path)}, state)
+        self.assertEqual(before, state["violations"])
+
+
 class RouterTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -624,6 +829,29 @@ class RouterTests(unittest.TestCase):
         child.write_text("".join(json.dumps(item) + "\n" for item in records), encoding="utf-8")
         return child
 
+    @staticmethod
+    def _observed_spawn_records(agent_id: str, role: str, turn: str = "t1") -> list[dict]:
+        spec = router_hook.ROUTES[role]
+        call_id = "spawn-" + agent_id
+        return [
+            {"payload": {"type": "function_call", "name": "spawn_agent", "namespace": "collaboration",
+                         "call_id": call_id, "arguments": json.dumps(router_hook.spawn_compat.build_arguments(
+                             model=spec["model"], effort=spec["effort"], task_name="bounded", message="Inspect only.",
+                         )), "internal_chat_message_metadata_passthrough": {"turn_id": turn}}},
+            {"payload": {"type": "sub_agent_activity", "event_id": call_id, "agent_thread_id": agent_id,
+                         "kind": "started", "internal_chat_message_metadata_passthrough": {"turn_id": turn}}},
+        ]
+
+    def _observe_valid_spawn(self, session: str, turn: str, agent_id: str, role: str) -> None:
+        # Synthetic observed-call evidence, separate from the lifecycle fixture.
+        # Exercise the real scanner/validator; never set compliance booleans in tests.
+        path = Path(self.temp.name) / (agent_id + "-spawn.jsonl")
+        records = self._observed_spawn_records(agent_id, role, turn)
+        path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+        state = self._ledger(session, turn)
+        router_hook._reconcile_subagent_transcript({"transcript_path": str(path)}, state)
+        router_hook._write_existing_state({"session_id": session, "turn_id": turn}, state)
+
     def _complete_transcript_plan(self, session: str, prompt: str, roles: list[str]) -> tuple[dict, dict]:
         router_hook.handle({
             "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "t1",
@@ -633,9 +861,7 @@ class RouterTests(unittest.TestCase):
         records = []
         for index, role in enumerate(roles):
             agent_id = f"00000000-0000-7000-8000-{index:012d}"
-            records.extend([
-                {"payload": {"type": "custom_tool_call", "input": f'tools.multi_agent_v1__spawn_agent({{agent_type:"{role}",message:"unit-{index}"}})'}},
-                {"payload": {"type": "function_call_output", "output": json.dumps({"agent_id": agent_id})}},
+            records.extend(self._observed_spawn_records(agent_id, role) + [
                 {"payload": {"type": "message", "content": (
                     f'<subagent_notification>{{"agent_path":"{agent_id}","status":{{"completed":'
                     '"Evidence: bounded result\\nVerification: objective check passed\\nUncertainty: none"}}}</subagent_notification>'
@@ -655,9 +881,7 @@ class RouterTests(unittest.TestCase):
         transcript = Path(self.temp.name) / f"{session}-parent.jsonl"
         records = []
         for role, agent_id, message in agents:
-            records.extend([
-                {"payload": {"type": "custom_tool_call", "input": f'tools.multi_agent_v1__spawn_agent({{agent_type:"{role}",message:"bounded"}})'}},
-                {"payload": {"type": "function_call_output", "output": json.dumps({"agent_id": agent_id})}},
+            records.extend(self._observed_spawn_records(agent_id, role) + [
                 {"payload": {"type": "message", "content": f'<subagent_notification>{{"agent_path":"{agent_id}","status":{{"completed":{json.dumps(message)}}}}}</subagent_notification>'}},
             ])
             spec = router_hook.ROUTES[role]
@@ -753,6 +977,7 @@ class RouterTests(unittest.TestCase):
                 "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "parent",
                 "agent_id": agent_id, "model": "gpt-5.6-terra", "reasoning_effort": "medium",
             })
+            self._observe_valid_spawn(session, "parent", agent_id, "gpt56_terra_worker")
 
     def _stop_terra_child(
         self, session: str, turn_id: str, agent_id: str, model: str = "gpt-5.6-terra",
@@ -1382,14 +1607,10 @@ class RouterTests(unittest.TestCase):
         child = ledger["agents"]["desktop-test-a-terra-child"]
         self.assertEqual("gpt-5.6-terra", child["observed_model"])
         self.assertEqual("completed", child["status"])
-        self.assertEqual("COMPLETE", ledger["status"])
-        receipt = json.loads(router_hook.CAPABILITY_PATH.read_text(encoding="utf-8"))
-        self.assertEqual("desktop-test-a-terra-child", receipt["agent_id"])
-        self.assertEqual("gpt-5.6-terra", receipt["observed_child_model"])
-        self.assertEqual(
-            "unavailable_from_current_codex_hook_surface",
-            receipt["runtime_identity_source"],
-        )
+        # This historical fixture contains lifecycle only, not the observed spawn.
+        self.assertEqual("FAILED_OPEN", ledger["status"])
+        self.assertFalse(child["spawn_contract_valid"])
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists())
 
     def test_sanitized_desktop_test_c_correlates_standard_agent_type_as_direct(self) -> None:
         fixture = json.loads(
@@ -1414,10 +1635,9 @@ class RouterTests(unittest.TestCase):
         self.assertEqual("gpt-5.6-terra", child["prompt_observed_model"])
         self.assertEqual("gpt-5.6-terra", child["stop_observed_model"])
         self.assertEqual("completed", child["status"])
-        self.assertEqual("COMPLETE", ledger["status"])
-        receipt = json.loads(router_hook.CAPABILITY_PATH.read_text(encoding="utf-8"))
-        self.assertEqual("desktop-test-c-terra-child", receipt["agent_id"])
-        self.assertEqual("gpt-5.6-terra", receipt["observed_child_model"])
+        self.assertEqual("FAILED_OPEN", ledger["status"])
+        self.assertFalse(child["spawn_contract_valid"])
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists())
 
     def test_sanitized_desktop_test_d_preserves_root_and_recovers_late_sol_stop(self) -> None:
         fixture = json.loads(
@@ -1446,15 +1666,14 @@ class RouterTests(unittest.TestCase):
         router_hook.handle(events[5])
         ledger = json.loads(parent_path.read_text(encoding="utf-8"))
         child = ledger["agents"]["desktop-test-d-sol-child"]
-        receipt = json.loads(router_hook.CAPABILITY_PATH.read_text(encoding="utf-8"))
-        self.assertEqual("COMPLETE", ledger["status"])
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+        self.assertEqual("FAILED_OPEN", ledger["status"])
         self.assertEqual("completed", child["status"])
         self.assertEqual("direct_agent_id", child["correlation_mode"])
         self.assertEqual("gpt-5.6-sol", child["requested_model"])
         self.assertEqual("gpt-5.6-sol", child["stop_observed_model"])
         self.assertTrue(child["completion_structured"])
-        self.assertTrue(child["receipt_recorded"])
-        self.assertEqual("gpt-5.6-sol", receipt["observed_child_model"])
+        self.assertFalse(child["receipt_recorded"])
         self.assertEqual("gpt-5.6-luna", json.loads(
             router_hook.ROOT_OBSERVATION_PATH.read_text(encoding="utf-8")
         )["root_model"])
@@ -2017,6 +2236,7 @@ class RouterTests(unittest.TestCase):
         })
         parent = Path(self.temp.name) / f"{session}-parent.jsonl"
         parent.write_text("", encoding="utf-8")
+        self._observe_valid_spawn(session, "parent", "00000000-0000-7000-8000-000000000011", "gpt56_terra_worker")
         self._write_child_transcript(session, "00000000-0000-7000-8000-000000000011", "gpt-5.6-terra", "medium")
 
         router_hook.handle({
@@ -2772,6 +2992,7 @@ class RouterTests(unittest.TestCase):
             "model": "gpt-5.6-sol",
             "reasoning_effort": "high",
         })
+        self._observe_valid_spawn("capability-receipt", "t1", "sol-child", "gpt56_sol_deep")
         router_hook.handle({
             **base,
             "hook_event_name": "UserPromptSubmit",
@@ -2824,6 +3045,7 @@ class RouterTests(unittest.TestCase):
             "model": "gpt-5.6-sol",
             "reasoning_effort": "high",
         })
+        self._observe_valid_spawn("telemetry", "t1", "telemetry-child", "gpt56_sol_deep")
         router_hook.handle({
             **base,
             "hook_event_name": "UserPromptSubmit",
@@ -4033,6 +4255,7 @@ class RouterTests(unittest.TestCase):
             "transcript_path": str(parent),
         })
         child = self._write_child_transcript(session, agent_id, "gpt-5.6-terra", "medium")
+        self._observe_valid_spawn(session, turn, agent_id, "gpt56_terra_worker")
         self._write_large_jsonl(child, [json.loads(line) for line in child.read_text().splitlines()], position="middle")
 
         router_hook.handle({
@@ -4723,6 +4946,7 @@ class RouterTests(unittest.TestCase):
                 "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "t1",
                 "agent_type": role, "agent_id": agent_id,
             })
+            self._observe_valid_spawn(session, "t1", agent_id, role)
             result = router_hook.handle({
                 "hook_event_name": "SubagentStop", "session_id": session, "turn_id": "t1",
                 "agent_type": role, "agent_id": agent_id, "stop_hook_active": False,
@@ -4776,6 +5000,7 @@ class RouterTests(unittest.TestCase):
                 "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "t1",
                 "agent_type": role, "agent_id": agent_id,
             })
+            self._observe_valid_spawn(session, "t1", agent_id, role)
             result = router_hook.handle({
                 "hook_event_name": "SubagentStop", "session_id": session, "turn_id": "t1",
                 "agent_type": role, "agent_id": agent_id, "stop_hook_active": False,
@@ -4803,6 +5028,7 @@ class RouterTests(unittest.TestCase):
                 "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "t1",
                 "agent_type": role, "agent_id": agent_id,
             })
+            self._observe_valid_spawn(session, "t1", agent_id, role)
             result = router_hook.handle({
                 "hook_event_name": "SubagentStop", "session_id": session, "turn_id": "t1",
                 "agent_type": role, "agent_id": agent_id, "stop_hook_active": False,
@@ -4974,6 +5200,7 @@ class RouterTests(unittest.TestCase):
             "hook_event_name": "SubagentStart", "session_id": "route-up", "turn_id": "t1",
             "agent_id": "owner-two", "model": "gpt-5.6-sol", "reasoning_effort": "medium",
         })
+        self._observe_valid_spawn("route-up", "t1", "owner-two", "gpt56_sol_owner")
         router_hook.handle({
             "hook_event_name": "SubagentStop", "session_id": "route-up", "turn_id": "t1",
             "agent_id": "owner-two", "model": "gpt-5.6-sol", "reasoning_effort": "medium", "stop_hook_active": False,
@@ -5105,7 +5332,7 @@ class RouterTests(unittest.TestCase):
         })
         self.assertTrue(result["continue"])
         ledger = json.loads(next(path for path in Path(self.temp.name).glob("s6--*.json")).read_text())
-        self.assertEqual(["gpt56_terra_deep"], ledger["subagents_completed"])
+        self.assertEqual([], ledger["subagents_completed"])  # Legacy call has no observed direct contract.
         self.assertTrue(ledger["reconciled_from_transcript"])
         self.assertTrue(ledger["agent_attestations"]["00000000-0000-7000-8000-000000000014"]["matched"])
 

@@ -8,6 +8,82 @@ import spawn_compat
 
 
 class SpawnCompatibilityTests(unittest.TestCase):
+    def test_observed_contract_requires_every_adapter_field(self) -> None:
+        valid = spawn_compat.build_arguments(
+            model="gpt-5.6-terra", effort="medium", task_name="bounded", message="Inspect only.",
+        )
+        validator = getattr(spawn_compat, "validate_arguments", None)
+        self.assertTrue(callable(validator), "observed spawn validator is missing")
+        self.assertTrue(validator(valid)["spawn_contract_valid"])
+        for field in valid:
+            with self.subTest(missing=field):
+                arguments = {key: value for key, value in valid.items() if key != field}
+                result = validator(arguments)
+                self.assertFalse(result["spawn_contract_valid"])
+                self.assertIn("missing_" + field, result["reasons"])
+        for field, value in (
+            ("fork_turns", "all"), ("task_name", " \t"), ("message", ""),
+            ("model", "gpt-5.6-luna"), ("reasoning_effort", "ultra"),
+            ("model", []), ("reasoning_effort", {}), ("message", None),
+        ):
+            with self.subTest(field=field, value=value):
+                result = validator({**valid, field: value})
+                self.assertFalse(result["spawn_contract_valid"])
+                self.assertIn("invalid_" + field, result["reasons"])
+        self.assertTrue(validator({**valid, "host_metadata": {"trace": "opaque"}})["spawn_contract_valid"])
+        self.assertFalse(validator({**valid, "service_tier": "fast"})["spawn_contract_valid"])
+
+    def test_nested_calls_are_complete_objects_not_message_text(self) -> None:
+        observe = getattr(spawn_compat, "observe_nested_calls", None)
+        self.assertTrue(callable(observe), "nested observed-call parser is missing")
+        arguments = spawn_compat.build_arguments(
+            model="gpt-5.6-sol", effort="high", task_name="bounded", message="Inspect only.",
+        )
+        source = "text(await tools.multi_agent_v1__spawn_agent(" + json.dumps(arguments) + "));"
+        self.assertTrue(observe(source)[0]["spawn_contract_valid"])
+        malformed = (
+            'const msg="fork_turns: none, task_name: fake"; '
+            'await Promise.all([tools.multi_agent_v1__spawn_agent({message:msg, model:"gpt-5.6-terra", reasoning_effort:"medium"}),'
+            'tools.multi_agent_v1__spawn_agent({message:msg, model:"gpt-5.6-terra", reasoning_effort:"medium"})]);'
+        )
+        observations = observe(malformed)
+        self.assertEqual(2, len(observations))
+        for item in observations:
+            self.assertFalse(item["spawn_contract_valid"])
+            self.assertIn("missing_fork_turns", item["reasons"])
+            self.assertIn("missing_task_name", item["reasons"])
+        for source in (
+            'text("tools.multi_agent_v1__spawn_agent({model:fake})");',
+            '// tools.multi_agent_v1__spawn_agent({model:fake})\ntext("done");',
+        ):
+            self.assertEqual([], observe(source))
+
+    def test_dynamic_duplicate_and_partial_arguments_never_prove_compliance(self) -> None:
+        observe = getattr(spawn_compat, "observe_nested_calls", None)
+        self.assertTrue(callable(observe), "nested observed-call parser is missing")
+        prefix = 'model:"gpt-5.6-terra",reasoning_effort:"medium",fork_turns:"none",task_name:"x",message:"ok"'
+        for body in (prefix + ',...overrides', prefix + ',fork_turns:"all"', prefix + '+suffix',
+                     prefix.replace('"ok"', 'dynamicMessage'), prefix + ',[computed]:"none"'):
+            with self.subTest(body=body):
+                items = observe('await tools.multi_agent_v1__spawn_agent({' + body + '});')
+                self.assertTrue(items)
+                self.assertFalse(items[0]["spawn_contract_valid"])
+        partial = observe('await tools.multi_agent_v1__spawn_agent({' + prefix)
+        self.assertFalse(any(item["spawn_contract_valid"] for item in partial))
+
+    def test_nested_parser_rejects_incomplete_comments_and_oversized_input(self) -> None:
+        args = spawn_compat.build_arguments(model="gpt-5.6-terra", effort="medium", task_name="bounded", message="Inspect.")
+        call = 'tools.multi_agent_v1__spawn_agent(' + json.dumps(args) + ')'
+        for source in ('/* never closed ' + call, ' ' * (256 * 1024) + call):
+            self.assertFalse(any(item["spawn_contract_valid"] for item in spawn_compat.observe_nested_calls(source)))
+
+    def test_nested_message_with_spawn_code_is_not_a_second_call(self) -> None:
+        args = spawn_compat.build_arguments(model="gpt-5.6-terra", effort="medium", task_name="bounded",
+                                           message='Example: tools.spawn_agent({model:"gpt-5.6-sol",fork_turns:"all"})')
+        observed = spawn_compat.observe_nested_calls('text(await tools.spawn_agent(' + json.dumps(args) + '));')
+        self.assertEqual(1, len(observed))
+        self.assertTrue(observed[0]["spawn_contract_valid"])
+
     def test_builds_supported_direct_model_calls(self) -> None:
         for model, effort in (
             ("gpt-5.6-terra", "medium"),

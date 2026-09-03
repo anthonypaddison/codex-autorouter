@@ -1036,6 +1036,7 @@ def _record_capability(state: dict[str, Any], agent_id: str) -> bool:
     observed_model = str(agent.get("observed_model") or "")
     if (
         role not in ROUTES
+        or not _spawn_contract_compliant(state, agent_id)
         or agent.get("correlation_mode") != "direct_agent_id"
         or not agent.get("expected_by_parent")
         or agent.get("status") != "completed"
@@ -1062,6 +1063,8 @@ def _record_capability(state: dict[str, Any], agent_id: str) -> bool:
         "platform": identity.get("platform") or platform.system() or sys.platform,
         "runtime_identity_source": identity.get("runtime_identity_source") or "unavailable_from_current_codex_hook_surface",
         "agent_id": agent_id,
+        "spawn_call_key": agent["spawn_call_key"],
+        "spawn_contract_valid": True,
         "parent_session_id": state.get("session_id"),
         "parent_turn_id": state.get("turn_id"),
         "child_turn_id": agent.get("child_turn_id"),
@@ -3046,7 +3049,7 @@ def _transcript_turn_matches(payload: dict[str, Any], state: dict[str, Any]) -> 
     return str(metadata.get("turn_id")) == str(state.get("turn_id"))
 
 
-def _collaboration_spawn(payload: dict[str, Any]) -> tuple[str, str, bool] | None:
+def _collaboration_spawn(payload: dict[str, Any]) -> tuple[str, str, bool, dict[str, Any]] | None:
     if payload.get("type") != "function_call" or payload.get("name") != "spawn_agent":
         return None
     if payload.get("namespace") not in {None, "collaboration"}:
@@ -3061,9 +3064,68 @@ def _collaboration_spawn(payload: dict[str, Any]) -> tuple[str, str, bool] | Non
         return None
     role = spawn_compat.role_from_arguments(arguments) or ""
     call_id = str(payload.get("call_id") or "")
-    if not role or not call_id:
+    if not call_id:
         return None
-    return role, call_id, "service_tier" in arguments
+    return role, call_id, "service_tier" in arguments, spawn_compat.validate_arguments(arguments)
+
+
+def _remember_spawn_contract(state: dict[str, Any], key: str, observation: dict[str, Any]) -> None:
+    records = state.setdefault("spawn_contracts", {})
+    if key not in records and len(records) >= TRANSCRIPT_MAX_CALLS:
+        raise _TranscriptIncomplete
+    evidence = {name: observation.get(name) for name in ("spawn_contract_valid", "reasons", "role", "model", "effort")}
+    old = records.get(key)
+    if old is not None and any(old.get(name) != value for name, value in evidence.items()):
+        evidence = {**old, "spawn_contract_valid": False,
+                    "reasons": sorted(set(old.get("reasons", [])) | {"conflicting_spawn_evidence"})}
+    records[key] = {**(old or {}), **evidence}
+    if not evidence["spawn_contract_valid"]:
+        violation = f"spawn_contract_invalid:{key}:" + ",".join(evidence["reasons"])
+        if violation not in state.setdefault("violations", []):
+            state["violations"].append(violation)
+
+
+def _bind_spawn_contract(state: dict[str, Any], agent_id: str, keys: list[str]) -> None:
+    """Only a unique call/result link can establish compliance. No role heuristics."""
+    agent = state.setdefault("agents", {}).setdefault(agent_id, {})
+    old_key = agent.get("spawn_call_key")
+    if old_key and keys and (len(keys) != 1 or old_key != keys[0]):
+        agent["spawn_binding_conflict"] = True
+    if len(keys) > 1:
+        agent["spawn_binding_conflict"] = True
+    unique = len(keys) == 1 and not agent.get("spawn_binding_conflict")
+    record = state.get("spawn_contracts", {}).get(keys[0], {}) if unique else {}
+    if record.get("agent_id") not in (None, agent_id):
+        record["spawn_contract_valid"] = False
+        record["reasons"] = sorted(set(record.get("reasons", [])) | {"conflicting_spawn_child"})
+        unique = False
+    if unique:
+        record["agent_id"] = agent_id
+        agent["spawn_call_key"] = keys[0]
+    agent["spawn_contract_valid"] = bool(unique and record.get("spawn_contract_valid") is True)
+    agent["spawn_contract_reasons"] = list(record.get("reasons", [])) if unique else ["unproven_call_binding"]
+
+
+def _link_spawn_contract(context: dict[str, Any], agent_id: str, keys: list[str]) -> None:
+    previous = context["agent_contracts"].get(agent_id)
+    context["agent_contracts"][agent_id] = (
+        list(keys) if previous is None else
+        list(dict.fromkeys(previous + keys)) if previous and keys else []
+    )
+
+
+def _spawn_contract_compliant(state: dict[str, Any], agent_id: str) -> bool:
+    agent = state.get("agents", {}).get(agent_id, {})
+    record = state.get("spawn_contracts", {}).get(agent.get("spawn_call_key"), {})
+    return bool(
+        agent.get("spawn_contract_valid") is True
+        and record.get("spawn_contract_valid") is True
+        and record.get("agent_id") == agent_id
+        and record.get("role") == agent.get("type")
+        and record.get("role") in ROUTES
+        and agent.get("requested_model", record.get("model")) == record.get("model")
+        and agent.get("requested_effort", record.get("effort")) == record.get("effort")
+    )
 
 
 def _event_role(data: dict[str, Any], state: dict[str, Any]) -> str:
@@ -3374,16 +3436,27 @@ def _subagent_scan_context(state: dict[str, Any]) -> dict[str, Any] | None:
         "pending_types": [],
         "agent_roles": agent_roles,
         "spawn_calls": {},
+        "contract_calls": {},
+        "agent_contracts": {},
+        "seen_spawn_keys": set(),
         "agent_paths": {},
         "completed_ids": set(),
         "structured_ids": set(),
     }
 
 
-def _subagent_completed_role_counts(context: dict[str, Any]) -> dict[str, int]:
+def _subagent_completed_role_counts(state: dict[str, Any], context: dict[str, Any]) -> dict[str, int]:
     counts: dict[str, int] = {}
     for completed_id in context["completed_ids"]:
         role = context["agent_roles"].get(completed_id, "")
+        keys = context["agent_contracts"].get(completed_id, [])
+        record = state.get("spawn_contracts", {}).get(keys[0], {}) if len(keys) == 1 else {}
+        if (
+            record.get("spawn_contract_valid") is not True
+            or record.get("role") != role
+            or sum(keys[0] in other for other in context["agent_contracts"].values()) != 1
+        ):
+            continue
         counts[role] = counts.get(role, 0) + 1
     return counts
 
@@ -3394,18 +3467,22 @@ def _record_scanned_spawn(state: dict[str, Any], context: dict[str, Any], role: 
         raise _TranscriptIncomplete
     if not tier_overridden:
         context["inheriting_spawns"] += 1
-    if role not in state["subagents_started"]:
+    if role and role not in state["subagents_started"]:
         state["subagents_started"].append(role)
-    if role not in context["allowed"]:
-        state["violations"].append(f"unexpected_agent:{role}")
+    violations = []
+    if role and role not in context["allowed"]:
+        violations.append(f"unexpected_agent:{role}")
     if context["spawn_count"] > context["lifetime_worker_cap"]:
-        state["violations"].append(f"worker_cap_exceeded:{context['lifetime_worker_cap']}")
+        violations.append(f"worker_cap_exceeded:{context['lifetime_worker_cap']}")
     staged = next((
         candidate for candidate in context["valid_plans"]
         if candidate.get("mode") == "evidence_then_owner" and role == candidate.get("synthesis_role")
     ), None)
-    if staged and _subagent_completed_role_counts(context).get("gpt56_terra_worker", 0) < 2:
-        state["violations"].append(f"ordering_violation:{staged['mode']}:{role}")
+    if staged and _subagent_completed_role_counts(state, context).get("gpt56_terra_worker", 0) < 2:
+        violations.append(f"ordering_violation:{staged['mode']}:{role}")
+    for violation in violations:
+        if violation not in state["violations"]:
+            state["violations"].append(violation)
 
 
 def _consume_subagent_record(
@@ -3416,21 +3493,27 @@ def _consume_subagent_record(
         return False
     collaboration_spawn = _collaboration_spawn(payload)
     if collaboration_spawn is not None:
-        role, call_id, tier_overridden = collaboration_spawn
+        role, call_id, tier_overridden, observation = collaboration_spawn
         call_id = _bounded_transcript_key(call_id)
         if call_id not in context["spawn_calls"] and len(context["spawn_calls"]) >= TRANSCRIPT_MAX_CALLS:
             raise _TranscriptIncomplete
         context["spawn_calls"][call_id] = role
-        _record_scanned_spawn(state, context, role, tier_overridden)
+        key = "direct:" + call_id
+        _remember_spawn_contract(state, key, observation)
+        context["contract_calls"][call_id] = [key]
+        if key not in context["seen_spawn_keys"]:
+            context["seen_spawn_keys"].add(key)
+            _record_scanned_spawn(state, context, role, tier_overridden)
         return True
     if payload.get("type") == "sub_agent_activity":
         call_id = _bounded_transcript_key(payload.get("event_id"))
         agent_id = _bounded_transcript_key(payload.get("agent_thread_id"))
         role = context["spawn_calls"].get(call_id)
-        if role and agent_id:
+        if call_id in context["spawn_calls"] and agent_id:
             if agent_id not in context["agent_roles"] and len(context["agent_roles"]) >= TRANSCRIPT_MAX_AGENTS:
                 raise _TranscriptIncomplete
-            context["agent_roles"][agent_id] = role
+            context["agent_roles"][agent_id] = role or context["agent_roles"].get(agent_id, "")
+            _link_spawn_contract(context, agent_id, context["contract_calls"][call_id])
             path_name = _bounded_transcript_key(payload.get("agent_path"))
             if path_name:
                 if path_name not in context["agent_paths"] and len(context["agent_paths"]) >= TRANSCRIPT_MAX_AGENTS:
@@ -3439,11 +3522,27 @@ def _consume_subagent_record(
             return True
         return False
     payload_type = str(payload.get("type") or "")
-    if payload_type not in {"custom_tool_call", "function_call_output", "message", "agent_message"}:
+    if payload_type not in {"custom_tool_call", "custom_tool_call_output", "function_call_output", "message", "agent_message"}:
         return False
     if payload_type == "custom_tool_call":
-        if not any("spawn_agent" in text for text in _text_values(payload)):
+        source = payload.get("input")
+        if not isinstance(source, str) or "spawn_agent" not in source:
             return False
+        call_id = _bounded_transcript_key(payload.get("call_id"))
+        observations = spawn_compat.observe_nested_calls(source)
+        if call_id and observations:
+            keys = []
+            for observation in observations:
+                key = f"nested:{call_id}:{observation['index']}"
+                keys.append(key)
+                _remember_spawn_contract(state, key, observation)
+                if key not in context["seen_spawn_keys"]:
+                    context["seen_spawn_keys"].add(key)
+                    _record_scanned_spawn(state, context, observation.get("role") or "", "service_tier_override" in observation["reasons"])
+            context["contract_calls"][call_id] = keys
+            return True
+        if call_id:
+            return False  # No executable call found; do not inspect quoted message examples.
         joined = _bounded_text(payload)
         transcript_role = spawn_compat.role_from_text(joined)
     else:
@@ -3457,7 +3556,20 @@ def _consume_subagent_record(
             state, context, transcript_role, bool(re.search(r"\bservice_tier\s*:", joined)),
         )
         return True
-    if payload_type == "function_call_output":
+    if payload_type in {"custom_tool_call_output", "function_call_output"}:
+        call_id = _bounded_transcript_key(payload.get("call_id"))
+        keys = context["contract_calls"].get(call_id)
+        if keys:
+            agent_ids = _spawn_result_agent_ids(payload.get("output"))
+            for agent_id in agent_ids:
+                if agent_id not in context["agent_roles"] and len(context["agent_roles"]) >= TRANSCRIPT_MAX_AGENTS:
+                    raise _TranscriptIncomplete
+                # Multi-call wrappers do not expose an inner call/result bridge.
+                # Preserve real children but never assign by array position/model.
+                role = state["spawn_contracts"][keys[0]].get("role") if len(keys) == 1 and len(agent_ids) == 1 else None
+                context["agent_roles"].setdefault(agent_id, role or "")
+                _link_spawn_contract(context, agent_id, keys if len(agent_ids) == 1 else [])
+            return bool(agent_ids)
         if not context["pending_types"]:
             return False
         found = False
@@ -3496,6 +3608,38 @@ def _consume_subagent_record(
     return found
 
 
+def _spawn_result_agent_ids(value: Any) -> list[str]:
+    """Read bounded structured host result containers, not arbitrary prose IDs."""
+    found: set[str] = set()
+    remaining = [256]
+
+    def visit(item: Any, depth: int) -> None:
+        remaining[0] -= 1
+        if depth > 8 or remaining[0] < 0:
+            raise _TranscriptIncomplete
+        if isinstance(item, str):
+            if len(item) > TRANSCRIPT_MAX_RETAINED_TEXT_BYTES:
+                raise _TranscriptIncomplete
+            try:
+                decoded = json.loads(item)
+            except (ValueError, RecursionError):
+                return
+            if isinstance(decoded, (dict, list)):
+                visit(decoded, depth + 1)
+        elif isinstance(item, list):
+            for child in item:
+                visit(child, depth + 1)
+        elif isinstance(item, dict):
+            agent_id = item.get("agent_id")
+            if isinstance(agent_id, str) and agent_id:
+                found.add(_bounded_transcript_key(agent_id))
+            for name in ("content", "text", "structuredContent"):
+                if name in item:
+                    visit(item[name], depth + 1)
+    visit(value, 0)
+    return sorted(found)
+
+
 def _apply_subagent_scan(state: dict[str, Any], path: Path, context: dict[str, Any]) -> str:
     if context["spawn_count"] > 0:
         if context["inheriting_spawns"] != context["spawn_count"]:
@@ -3506,6 +3650,9 @@ def _apply_subagent_scan(state: dict[str, Any], path: Path, context: dict[str, A
     state.setdefault("agents", {})
     state.setdefault("agent_attestations", {})
     children = state.setdefault("transcript_reconciliation", {}).setdefault("children", {})
+    # Resolve all bindings/conflicts before any child can write a receipt.
+    for agent_id, keys in context["agent_contracts"].items():
+        _bind_spawn_contract(state, agent_id, keys)
     for agent_id, role in sorted(context["agent_roles"].items()):
         if agent_id not in state["agent_ids"]:
             state["agent_ids"].append(agent_id)
@@ -3518,6 +3665,8 @@ def _apply_subagent_scan(state: dict[str, Any], path: Path, context: dict[str, A
             "completion_structured": True if transcript_complete else bool(existing.get("completion_structured")),
             "completion_source": "transcript" if transcript_complete else existing.get("completion_source"),
         }
+        state["agents"][agent_id].setdefault("spawn_contract_valid", False)
+        state["agents"][agent_id].setdefault("spawn_contract_reasons", ["unproven_spawn_call"])
         if context["plan"]["mode"] == "routing_council" and existing.get("phase") == "execution":
             context["plan"]["execution_agent_id"] = agent_id
         if role in ROUTES:
@@ -3533,7 +3682,7 @@ def _apply_subagent_scan(state: dict[str, Any], path: Path, context: dict[str, A
                 state["agent_attestations"][agent_id] = attestation
             if attestation.get("model") is not None:
                 _bind_child_transcript_evidence(state, agent_id, attestation)
-        if agent_id in context["completed_ids"] and agent_id in context["structured_ids"] and role not in state["subagents_completed"]:
+        if _spawn_contract_compliant(state, agent_id) and agent_id in context["completed_ids"] and agent_id in context["structured_ids"] and role not in state["subagents_completed"]:
             state["subagents_completed"].append(role)
         if (
             _completion_is_trustworthy(state["agents"][agent_id])
@@ -3543,6 +3692,10 @@ def _apply_subagent_scan(state: dict[str, Any], path: Path, context: dict[str, A
             state.setdefault("telemetry", {})["child_completion_attested"] = True
     if context["completed_ids"] and context["structured_ids"]:
         state.setdefault("reconciled_from_transcript", True)
+    state["subagents_completed"] = list(dict.fromkeys(
+        agent.get("type") for agent_id, agent in state["agents"].items()
+        if _completion_is_trustworthy(agent) and _spawn_contract_compliant(state, agent_id)
+    ))
     return "FOUND" if context["spawn_count"] or context["completed_ids"] else "NOT_FOUND"
 
 
@@ -3788,8 +3941,8 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             1 for agent in state.setdefault("agents", {}).values() if agent.get("status") != "completed"
         ) >= int(plan["max_workers"])
         completed_by_role: dict[str, int] = {}
-        for agent in state["agents"].values():
-            if agent.get("status") == "completed":
+        for completed_id, agent in state["agents"].items():
+            if agent.get("status") == "completed" and _spawn_contract_compliant(state, completed_id):
                 completed_role = str(agent.get("type") or "")
                 completed_by_role[completed_role] = completed_by_role.get(completed_role, 0) + 1
         ordering_violation = (
@@ -3799,7 +3952,8 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         ) or (
             council
             and council_phase != "advisory"
-            and sum(1 for agent in state["agents"].values() if agent.get("phase") == "advisory" and agent.get("status") == "completed") < 2
+            and sum(1 for key, agent in state["agents"].items() if agent.get("phase") == "advisory"
+                    and agent.get("status") == "completed" and _spawn_contract_compliant(state, key)) < 2
         )
         phase = "advisory" if council and council_phase == "advisory" else "execution"
         expected_role = role if role in allowed else (
@@ -3815,6 +3969,8 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         )
         observed_lifecycle = bool(supplied_agent_id and direct_model in spawn_compat.SUPPORTED_EFFORTS)
         state["agents"][agent_id] = {
+            **{key: value for key, value in state["agents"].get(agent_id, {}).items()
+               if key in {"spawn_call_key", "spawn_contract_valid", "spawn_contract_reasons", "spawn_binding_conflict"}},
             "type": role,
             "agent_type": str(data.get("agent_type") or "") or None,
             "status": "started",
@@ -3858,6 +4014,8 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             "completion_structured": False,
             "receipt_recorded": False,
         }
+        state["agents"][agent_id].setdefault("spawn_contract_valid", False)
+        state["agents"][agent_id].setdefault("spawn_contract_reasons", ["unproven_spawn_call"])
         state.setdefault("telemetry", {})["child_count"] = len(state["agents"])
         if role in ROUTES:
             state.setdefault("agent_attestations", {})[agent_id] = _agent_config_attestation(
@@ -3997,7 +4155,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         target["completion_structured"] = required
         target["completion_source"] = "subagent_stop" if required else None
         if required:
-            if role not in state["subagents_completed"]:
+            if _spawn_contract_compliant(state, target_id) and role not in state["subagents_completed"]:
                 state["subagents_completed"].append(role)
             target["status"] = "completed"
             attestation = state.get("agent_attestations", {}).get(target_id, {})
@@ -4018,6 +4176,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             completed_advisors = [
                 (key, agent) for key, agent in agents.items()
                 if agent.get("phase") == "advisory" and agent.get("status") == "completed"
+                and _spawn_contract_compliant(state, key)
             ]
             if required and len(completed_advisors) == 2:
                 recommendations = [state["routing_recommendations"].get(key) for key, _ in completed_advisors]
@@ -4145,8 +4304,8 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         problems: list[str] = []
         plan = decision["orchestration"]
         completed_counts: dict[str, int] = {}
-        for agent in state.get("agents", {}).values():
-            if _completion_is_trustworthy(agent):
+        for agent_id, agent in state.get("agents", {}).items():
+            if _completion_is_trustworthy(agent) and _spawn_contract_compliant(state, agent_id):
                 role = str(agent.get("type") or "")
                 completed_counts[role] = completed_counts.get(role, 0) + 1
         for role, count in plan["required_agents"].items():
@@ -4159,7 +4318,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             elif selection["selected"] != "current":
                 execution_id = str(plan.get("execution_agent_id") or "")
                 execution_agent = state.get("agents", {}).get(execution_id, {})
-                if not execution_id or execution_agent.get("status") != "completed":
+                if not execution_id or execution_agent.get("status") != "completed" or not _spawn_contract_compliant(state, execution_id):
                     problems.append("complete exactly one selected routing-council executor")
                 elif execution_agent.get("type") != selection["selected"]:
                     problems.append("execute with the exact routing-council selected role")
@@ -4179,9 +4338,9 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         for agent_id, attestation in state.get("agent_attestations", {}).items():
             role = str(state.get("agents", {}).get(agent_id, {}).get("type") or "")
             if role in plan["required_agents"]:
-                if attestation.get("matched"):
+                if attestation.get("matched") and _spawn_contract_compliant(state, agent_id):
                     matched_counts[role] = matched_counts.get(role, 0) + 1
-                else:
+                elif not attestation.get("matched"):
                     mismatched_required = True
         for role, count in plan["required_agents"].items():
             if matched_counts.get(role, 0) < count:

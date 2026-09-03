@@ -36,6 +36,14 @@ Lifecycle input exposes the child model but not a guaranteed live reasoning-effo
 
 `PostToolUse` covers matching Codex tool events, not every possible operating-system mutation. Final acceptance remains with the root agent and proportionate deterministic verification.
 
+## Observed spawn compliance is separate from child identity
+
+A real, correlated, completed child is not necessarily compliant routed execution. Required-role fulfilment and capability receipts require a validated observed spawn call: explicit supported model/effort, `fork_turns: "none"`, nonblank `task_name` and `message`, and no service-tier override. Construction and validation share the compatibility adapter. Lifecycle model/effort or the intended envelope cannot substitute for the actual arguments.
+
+Structured spawn calls use exact call/activity identities. Nested `functions.exec` recovery parses complete literal argument objects without executing JavaScript; variables, computed/spread properties, duplicate fields, incomplete syntax and bounded-parser exhaustion cannot prove compliance. It never searches message contents for missing argument fields. Multiple nested spawns in one wrapper without an authoritative inner call/result bridge remain unproven per child; response order, model and timing are not identity evidence. Call-specific reason codes are retained without raw messages. Malformed-call history remains visible, but a later compliant child can fulfil the role where existing orchestration policy permits.
+
+Pre-execution blocking for the exact nested spawn surface remains **HOST CAPABILITY UNPROVEN**. This validation refuses compliant execution/receipt credit; it does not claim to prevent the host from launching a malformed child. Lifecycle-only historical fixtures and receipts are not new proof of this contract.
+
 ## Classification uses local action context
 
 Security-changing intent requires a local affirmative action on a security-sensitive subject. Reporting or preserving permissions, sandbox state, plugin/hook trust, or configuration is not itself a security change. A prohibition extends over its coordinated action list, but does not suppress a later affirmative instruction such as `Do not change permissions; actually chmod the directory 777`.
