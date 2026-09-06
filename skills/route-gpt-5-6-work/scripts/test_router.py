@@ -336,6 +336,8 @@ class AstraClassificationTests(unittest.TestCase):
             ("I explicitly request GPT-6 Astra for this bounded task.", "gpt6_astra_medium"),
             ("Use Astra Medium for this bounded task.", "gpt6_astra_medium"),
             ("Run this task with GPT-6 Astra High.", "gpt6_astra_high"),
+            ("Run with GPT-6 Astra High.", "gpt6_astra_high"),
+            ("Execute with Astra Medium.", "gpt6_astra_medium"),
             ("Delegate this to Astra xHigh.", "gpt6_astra_xhigh"),
             ("Escalate this task to GPT-6 Astra Max.", "gpt6_astra_max"),
         )
@@ -388,6 +390,56 @@ class AstraClassificationTests(unittest.TestCase):
                 decision = router_hook.classify_prompt(prompt, "gpt-5.6-luna", "low")
                 self.assertNotIn("astra", decision["route"])
                 self.assertNotEqual("explicit_user_request", decision.get("astra_gate"))
+
+    def test_astra_metadata_labels_do_not_open_the_explicit_gate(self) -> None:
+        for run_id, effort in (
+            ("01", "low"),
+            ("02", "low"),
+            ("03", "medium"),
+            ("04", "low"),
+            ("05", "low"),
+            ("06", "high"),
+            ("07", "xHigh"),
+            ("08", "medium"),
+        ):
+            metadata = f"Run ID: POST-ASTRA-{run_id}\nRequired effort: {effort}"
+            with self.subTest(metadata=metadata):
+                decision = router_hook.classify_prompt(
+                    f"{metadata}\nFix a typo in README.", "gpt-5.6-luna", "low"
+                )
+                self.assertEqual("current", decision["route"])
+                self.assertFalse(decision["requires_clarification"])
+                self.assertNotIn("astra_gate", decision)
+
+        for metadata in (
+            "Run 7: POST-ASTRA comparison\nRequired effort: xHigh",
+            "Use case: Astra comparison\nRequired effort: medium",
+            "Route name: Astra Medium",
+        ):
+            with self.subTest(metadata=metadata):
+                decision = router_hook.classify_prompt(
+                    f"{metadata}\nFix a typo in README.", "gpt-5.6-luna", "low"
+                )
+                self.assertEqual("current", decision["route"])
+                self.assertFalse(decision["requires_clarification"])
+                self.assertNotIn("astra_gate", decision)
+
+    def test_explicit_astra_effort_is_bound_to_the_request_clause(self) -> None:
+        decision = router_hook.classify_prompt(
+            "Use GPT-6 Astra for this task.\nRequired effort: high",
+            "gpt-5.6-luna",
+            "low",
+        )
+        self.assertEqual("gpt6_astra_medium", decision["route"])
+        self.assertEqual("explicit_user_request", decision["astra_gate"])
+
+        decision = router_hook.classify_prompt(
+            "Use GPT-6 Astra for this task at High effort.\nRequired effort: low",
+            "gpt-5.6-luna",
+            "low",
+        )
+        self.assertEqual("gpt6_astra_high", decision["route"])
+        self.assertEqual("explicit_user_request", decision["astra_gate"])
 
 
 class ChildDiscoveryTests(unittest.TestCase):

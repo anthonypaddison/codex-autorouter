@@ -142,12 +142,21 @@ ASTRA_ROLES = frozenset({
     "gpt6_astra_medium", "gpt6_astra_high", "gpt6_astra_xhigh", "gpt6_astra_max",
 })
 ASTRA_EXPLICIT_REQUEST = re.compile(
-    r"(?:^|[\n.!?;]\s*)(?:[-*]\s*)?(?:(?:please|kindly)\s+|(?:can|could|would)\s+you\s+)?"
-    r"\b(?:use|select|choose|run|delegate|escalate|route|execute)\b.{0,100}"
-    r"\b(?:gpt[ -]?6(?:[ -]astra)?|astra)\b|"
-    r"(?:^|[\n.!?;]\s*)(?:[-*]\s*)?\bi\s+(?:explicitly\s+)?(?:request|want|choose|select)\b.{0,100}"
-    r"\b(?:gpt[ -]?6(?:[ -]astra)?|astra)\b",
-    re.I | re.S,
+    r"(?:^|[\n.!?;]\s*)(?:[-*]\s*)?"
+    r"(?:(?:please|kindly)\s+|(?:can|could|would)\s+you\s+)?"
+    r"(?:"
+    r"(?:use|select|choose)\s+(?:the\s+)?(?:model\s+)?"
+    r"|(?:run|execute)\s+"
+    r"(?:(?:(?:(?:this|the|my|our)\s+(?:task|work|request|job|prompt)|this|it)\s+)?"
+    r"(?:with|using|on)\s+)?"
+    r"|(?:delegate|escalate|route)\s+"
+    r"(?:(?:(?:this|the|my|our)\s+(?:task|work|request|job|prompt)|this|it)\s+)?"
+    r"(?:to|through|via|using)\s+"
+    r"|i\s+(?:explicitly\s+)?(?:request|want|choose|select)\s+"
+    r"(?:to\s+(?:use|run|select|choose)\s+)?(?:the\s+)?(?:model\s+)?"
+    r")"
+    r"(?:gpt[ -]?6(?:[ -]astra)?|astra)\b",
+    re.I,
 )
 
 SECURITY = re.compile(
@@ -1831,7 +1840,8 @@ def _explicit_astra_effort(prompt: str) -> tuple[bool, str | None]:
     if not match:
         return False, None
     end = min(len(text), match.end() + 80)
-    effort = re.search(r"\b(extra[ -]?high|xhigh|max|ultra|high|medium|low)\b", text[match.end():end], re.I)
+    clause_suffix = re.split(r"[\n.!?;]", text[match.end():end], maxsplit=1)[0]
+    effort = re.search(r"\b(extra[ -]?high|xhigh|max|ultra|high|medium|low)\b", clause_suffix, re.I)
     if not effort:
         return True, "medium"
     normalized = effort.group(1).lower().replace(" ", "-")
