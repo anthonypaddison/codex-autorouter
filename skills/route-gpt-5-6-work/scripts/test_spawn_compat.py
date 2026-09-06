@@ -88,6 +88,10 @@ class SpawnCompatibilityTests(unittest.TestCase):
         for model, effort in (
             ("gpt-5.6-terra", "medium"),
             ("gpt-5.6-sol", "high"),
+            ("gpt-6-astra", "medium"),
+            ("gpt-6-astra", "high"),
+            ("gpt-6-astra", "xhigh"),
+            ("gpt-6-astra", "max"),
         ):
             with self.subTest(model=model, effort=effort):
                 arguments = spawn_compat.build_arguments(
@@ -108,6 +112,8 @@ class SpawnCompatibilityTests(unittest.TestCase):
             ("gpt-5.6-luna", "low"),
             ("gpt-5.6-unknown", "medium"),
             ("gpt-5.6-terra", "ultra"),
+            ("gpt-6-astra", "low"),
+            ("gpt-6-astra", "ultra"),
         ):
             with self.subTest(model=model, effort=effort), self.assertRaises(ValueError):
                 spawn_compat.build_arguments(
@@ -116,6 +122,46 @@ class SpawnCompatibilityTests(unittest.TestCase):
                     task_name="bounded",
                     message="A complete bounded contract.",
                 )
+
+    def test_astra_roles_are_exact_and_malformed_calls_receive_no_credit(self) -> None:
+        expected = {
+            "medium": "gpt6_astra_medium",
+            "high": "gpt6_astra_high",
+            "xhigh": "gpt6_astra_xhigh",
+            "max": "gpt6_astra_max",
+        }
+        for effort, role in expected.items():
+            with self.subTest(effort=effort):
+                arguments = spawn_compat.build_arguments(
+                    model="gpt-6-astra",
+                    effort=effort,
+                    task_name="astra-frontier",
+                    message="Complete the bounded frontier task and return structured evidence.",
+                )
+                self.assertEqual(role, spawn_compat.validate_arguments(arguments)["role"])
+                observed = spawn_compat.observe_nested_calls(
+                    "await tools.spawn_agent(" + json.dumps(arguments) + ");"
+                )
+                self.assertEqual(1, len(observed))
+                self.assertTrue(observed[0]["spawn_contract_valid"])
+                self.assertEqual(role, observed[0]["role"])
+
+        valid = spawn_compat.build_arguments(
+            model="gpt-6-astra",
+            effort="medium",
+            task_name="astra-frontier",
+            message="Complete the bounded frontier task.",
+        )
+        for field, value in (
+            ("fork_turns", "all"),
+            ("task_name", ""),
+            ("message", " "),
+            ("service_tier", "priority"),
+        ):
+            with self.subTest(field=field):
+                malformed = {**valid, field: value}
+                result = spawn_compat.validate_arguments(malformed)
+                self.assertFalse(result["spawn_contract_valid"])
 
     def test_signature_and_fallback_are_explicit(self) -> None:
         self.assertEqual(1, spawn_compat.SCHEMA_VERSION)

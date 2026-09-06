@@ -19,7 +19,7 @@ For every row in `RELEASE_CHECKLIST.md`, record:
 - ledger status, continuation count, verification evidence, and violations;
 - any warning, retry, manual intervention, or environmental limitation.
 
-A passing delegated route requires the expected model/effort intent, no unplanned children, satisfied verification, no unresolved violation, and a receipt created only after the same `agent_id` starts, is observed on the compatible model, and completes genuine Terra or Sol work. A successful-looking final answer or an accepted spawn request is insufficient.
+A passing delegated route requires the expected model/effort intent, no unplanned children, satisfied verification, no unresolved violation, and a model-keyed receipt created only after the same `agent_id` starts, is observed on the exact compatible model, and completes genuine Terra, Sol, or Astra work. A successful-looking final answer or an accepted spawn request is insufficient.
 
 ## Cheap-root setup and health boundary
 
@@ -65,9 +65,14 @@ Run the matrix only with explicit acceptance authorization because non-Luna sele
 |---|---|---|---|---|
 | Luna | remain Luna | Terra allowed | Sol allowed | eligible for `READY` with a current receipt |
 | Terra | remain Terra | remain Terra | Sol allowed | `DEGRADED` |
-| Sol | remain Sol | remain Sol | remain Sol | `DEGRADED` |
+| Sol | remain Sol | remain Sol | remain Sol; Astra only through explicit request or attested route-up | `DEGRADED` |
+| Astra | remain Astra | remain Astra | remain Astra | `DEGRADED` |
 
-Sol must not delegate downward merely to satisfy the classifier. A Sol child is permissible only for separately justified independent parallel work. A non-Luna actual root must report that credit-saving behaviour is substantially reduced for that turn.
+Sol and Astra must not delegate downward merely to satisfy the classifier. A lower-tier child is permissible only for separately justified independent parallel work. A non-Luna actual root must report that credit-saving behaviour is substantially reduced for that turn.
+
+## Rare Astra frontier smoke
+
+Do not fold Astra into the normal Terra/Sol smoke. In a fresh exact-candidate process, prove separately that generic difficult prompts and Astra keyword noise do not select Astra; an explicit unqualified request selects Astra Medium; explicit High, Extra High, and Max retain the requested effort; and explicit Low or Ultra is rejected without substitution. If a bounded paid acceptance is authorised, launch at most one Astra child and bind its model-keyed receipt to the exact lifecycle, model, effort intent, plugin identity, and observable runtime identity. Test the automatic path without a paid probe by replaying an authoritative same-task Sol `ROUTE_UP`; insufficient or contradictory evidence must not route to Astra. No automatic High, Extra High, Max, or effort retry is allowed.
 
 ## Desktop-specific smoke
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Added GPT-6 Astra as a rare frontier tier: explicit requests support Medium, High, Extra High, and Max while Low and Ultra are rejected; the sole automatic path is an authoritative attested Sol route-up to Astra Medium.
+- Kept Astra roots as final owners, centralized Astra child arguments in the spawn adapter, and added exact model-keyed runtime capability receipts and per-tier health reporting.
+- Extended route audits, deterministic fuzzing, frozen benchmark classification replay, operator documentation, and acceptance guidance without adding paid probes or automatic Astra effort retries.
+
 ## 0.1.0 - Private beta
 
 - Renamed the user-facing plugin to **Autorouter** while retaining the technical `gpt-5-6-router` package ID for upgrade continuity, and added a GitHub-ready visual system covering model choice, profiles, subagent orchestration, architecture, and readiness.

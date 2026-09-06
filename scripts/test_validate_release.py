@@ -55,6 +55,25 @@ class ReleaseContractTests(unittest.TestCase):
         for required in ("v0.2.0", "git tag", "archive", "SHA256", "scripts/validate_release.py"):
             self.assertIn(required, release)
 
+    def test_astra_frontier_policy_is_part_of_the_release_contract(self) -> None:
+        skill = (ROOT / "skills/route-gpt-5-6-work/SKILL.md").read_text(encoding="utf-8")
+        operator_docs = "\n".join(
+            (ROOT / path).read_text(encoding="utf-8")
+            for path in ("README.md", "docs/HOST_ACCEPTANCE.md", "docs/LIMITATIONS.md")
+        )
+        manifest = json.loads((ROOT / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))
+
+        for required in (
+            "GPT-6 Astra",
+            "Astra Medium",
+            "Low and Ultra are rejected",
+            "authoritative attested Sol `ROUTE_UP`",
+            "no automatic Astra effort retry",
+            "model-keyed",
+        ):
+            self.assertIn(required, skill + "\n" + operator_docs)
+        self.assertIn("gpt-6", manifest["keywords"])
+
 
 if __name__ == "__main__":
     unittest.main()

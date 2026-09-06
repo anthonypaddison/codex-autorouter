@@ -13,6 +13,7 @@ CAPABILITY_SIGNATURE = "direct-model-spawn-v1"
 SUPPORTED_EFFORTS = {
     "gpt-5.6-terra": frozenset({"medium", "high"}),
     "gpt-5.6-sol": frozenset({"medium", "high", "xhigh"}),
+    "gpt-6-astra": frozenset({"medium", "high", "xhigh", "max"}),
 }
 LEGACY_ROLES = frozenset({
     "gpt56_luna_worker",
@@ -213,6 +214,10 @@ def role_for(model: str, effort: str) -> str | None:
         ("gpt-5.6-sol", "medium"): "gpt56_sol_owner",
         ("gpt-5.6-sol", "high"): "gpt56_sol_deep",
         ("gpt-5.6-sol", "xhigh"): "gpt56_sol_xhigh",
+        ("gpt-6-astra", "medium"): "gpt6_astra_medium",
+        ("gpt-6-astra", "high"): "gpt6_astra_high",
+        ("gpt-6-astra", "xhigh"): "gpt6_astra_xhigh",
+        ("gpt-6-astra", "max"): "gpt6_astra_max",
     }.get((model, effort))
 
 

@@ -18,6 +18,11 @@ from unittest import mock
 import router_hook
 
 
+def _capability_receipt(model: str) -> dict:
+    document = json.loads(router_hook.CAPABILITY_PATH.read_text(encoding="utf-8"))
+    return document["capabilities"][model]
+
+
 CASES = [
     ("Fix a typo in README.", "current"),
     ("What does this TypeScript error mean?", "current"),
@@ -146,7 +151,6 @@ class ActionSubjectClassificationTests(unittest.TestCase):
                 self.assertIn("safe_bounded_command", profile["signals"])
                 self.assertEqual("current", decision["route"])
                 self.assertEqual({}, decision["orchestration"]["required_agents"])
-
     def test_security_subject_cannot_borrow_an_unrelated_implementation_action(self) -> None:
         for separator in (". ", "; ", " and "):
             decision = router_hook.classify_prompt(
@@ -307,6 +311,83 @@ class ActionSubjectClassificationTests(unittest.TestCase):
                 profile = router_hook.classify_prompt(prompt, "gpt-5.6-luna", "low")["task_profile"]
                 self.assertFalse(profile["clear_spec"])
                 self.assertNotIn("safe_bounded_command", profile["signals"])
+
+
+class AstraClassificationTests(unittest.TestCase):
+    def test_astra_root_remains_owner_for_every_lower_classifier_route(self) -> None:
+        prompts = (
+            "Fix a typo in README.",
+            "Diagnose why this flaky test fails intermittently.",
+            "Review OAuth token handling for auth bypasses and leaked credentials.",
+        )
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                decision = router_hook.classify_prompt(prompt, "gpt-6-astra", "medium")
+                self.assertEqual("current", decision["route"])
+                self.assertEqual("direct", decision["orchestration"]["mode"])
+                self.assertEqual({}, decision["orchestration"]["required_agents"])
+                self.assertEqual("DEGRADED", decision["credit_efficiency"])
+                self.assertIn("Astra root", decision["reason"])
+
+    def test_explicit_astra_request_uses_only_approved_efforts(self) -> None:
+        cases = (
+            ("Use GPT-6 Astra for this bounded task.", "gpt6_astra_medium"),
+            ("Please use GPT-6 Astra for this bounded task.", "gpt6_astra_medium"),
+            ("I explicitly request GPT-6 Astra for this bounded task.", "gpt6_astra_medium"),
+            ("Use Astra Medium for this bounded task.", "gpt6_astra_medium"),
+            ("Run this task with GPT-6 Astra High.", "gpt6_astra_high"),
+            ("Delegate this to Astra xHigh.", "gpt6_astra_xhigh"),
+            ("Escalate this task to GPT-6 Astra Max.", "gpt6_astra_max"),
+        )
+        for prompt, expected in cases:
+            with self.subTest(prompt=prompt):
+                decision = router_hook.classify_prompt(prompt, "gpt-5.6-luna", "low")
+                self.assertEqual(expected, decision["route"])
+                self.assertEqual({expected: 1}, decision["orchestration"]["required_agents"])
+                self.assertEqual("explicit_user_request", decision["astra_gate"])
+
+    def test_explicit_unsupported_astra_effort_fails_closed_without_substitution(self) -> None:
+        for effort in ("Low", "Ultra"):
+            with self.subTest(effort=effort):
+                decision = router_hook.classify_prompt(
+                    f"Use GPT-6 Astra {effort} for this task.", "gpt-5.6-luna", "low"
+                )
+                self.assertEqual("current", decision["route"])
+                self.assertEqual({}, decision["orchestration"]["required_agents"])
+                self.assertTrue(decision["requires_clarification"])
+                self.assertEqual("unsupported_explicit_effort", decision["astra_gate"])
+                self.assertIn(effort.lower(), decision["reason"].lower())
+
+    def test_keyword_noise_and_existing_three_model_routes_never_select_astra(self) -> None:
+        keyword_prompt = (
+            "Review a critical complex large difficult strategic security architecture for production financial use."
+        )
+        decision = router_hook.classify_prompt(keyword_prompt, "gpt-5.6-luna", "low")
+        self.assertNotIn("astra", str(decision["model"]).lower())
+        self.assertNotIn("astra", decision["route"])
+        for profile in ("token-saver", "balanced", "max-quality"):
+            with self.subTest(profile=profile):
+                profiled = router_hook.classify_prompt(
+                    keyword_prompt, "gpt-5.6-luna", "low", profile
+                )
+                self.assertNotIn("astra", profiled["route"])
+
+        for prompt, expected in CASES:
+            with self.subTest(prompt=prompt):
+                current = router_hook.classify_prompt(prompt, "gpt-5.6-luna", "low")
+                self.assertEqual(expected, current["route"])
+                self.assertNotIn("astra", current["route"])
+
+    def test_astra_mentions_that_are_not_requests_do_not_open_the_gate(self) -> None:
+        for prompt in (
+            "Do not use GPT-6 Astra for this task; review the telemetry only.",
+            "Should we use Astra for this task? Explain the tradeoffs without changing models.",
+            "Document how to route to GPT-6 Astra without actually doing so.",
+        ):
+            with self.subTest(prompt=prompt):
+                decision = router_hook.classify_prompt(prompt, "gpt-5.6-luna", "low")
+                self.assertNotIn("astra", decision["route"])
+                self.assertNotEqual("explicit_user_request", decision.get("astra_gate"))
 
 
 class ChildDiscoveryTests(unittest.TestCase):
@@ -668,7 +749,7 @@ class ObservedSpawnContractTests(unittest.TestCase):
         self.assertTrue(child.get("spawn_contract_valid"))
         self.assertTrue(child["receipt_recorded"])
         self.assertEqual([], state["violations"])
-        receipt = json.loads(router_hook.CAPABILITY_PATH.read_text())
+        receipt = _capability_receipt("gpt-5.6-terra")
         self.assertTrue(receipt["spawn_contract_valid"])
         self.assertEqual(child["spawn_call_key"], receipt["spawn_call_key"])
 
@@ -805,7 +886,7 @@ class RouterTests(unittest.TestCase):
         router_hook.CODEX_HOME = Path(self.config_temp.name).resolve()
         router_hook.HEALTH_ROOT = router_hook.CODEX_HOME / "gpt-5-6-router"
         router_hook.ROOT_OBSERVATION_PATH = router_hook.HEALTH_ROOT / "root-observation-v1.json"
-        router_hook.CAPABILITY_PATH = router_hook.HEALTH_ROOT / "capability-v1.json"
+        router_hook.CAPABILITY_PATH = router_hook.HEALTH_ROOT / "capability-v2.json"
         router_hook.CONFIG_PATH.write_text("", encoding="utf-8")
         source_agents = Path(router_hook.__file__).resolve().parents[1] / "assets" / "agents"
         shutil.copytree(source_agents, router_hook.CONFIG_PATH.parent / "agents")
@@ -2247,7 +2328,7 @@ class RouterTests(unittest.TestCase):
             "transcript_path": str(parent),
         })
 
-        receipt = json.loads(router_hook.CAPABILITY_PATH.read_text(encoding="utf-8"))
+        receipt = _capability_receipt("gpt-5.6-terra")
         child = self._ledger(session, "parent")["agents"]["00000000-0000-7000-8000-000000000011"]
         self.assertEqual("00000000-0000-7000-8000-000000000011", receipt["agent_id"])
         self.assertEqual("child-turn", receipt["child_turn_id"])
@@ -3010,7 +3091,7 @@ class RouterTests(unittest.TestCase):
             "reasoning_effort": "high",
             "last_assistant_message": "Evidence: checked\nVerification: tests passed\nUncertainty: none",
         })
-        receipt = json.loads(router_hook.CAPABILITY_PATH.read_text(encoding="utf-8"))
+        receipt = _capability_receipt("gpt-5.6-sol")
         self.assertEqual("direct-model-spawn-v1", receipt["capability_signature"])
         self.assertEqual(router_hook.PLUGIN_IDENTITY, receipt["plugin_identity"])
         self.assertEqual("child-turn", receipt["child_turn_id"])
@@ -3019,6 +3100,74 @@ class RouterTests(unittest.TestCase):
         self.assertEqual("codex-1.2.3", receipt["runtime_version"])
         self.assertEqual("desktop-456", receipt["runtime_build"])
         self.assertNotIn("authorization", json.dumps(receipt).lower())
+        document = json.loads(router_hook.CAPABILITY_PATH.read_text(encoding="utf-8"))
+        self.assertEqual(2, document["schema_version"])
+        self.assertEqual({"gpt-5.6-sol"}, set(document["capabilities"]))
+
+    def test_astra_receipt_requires_an_exact_astra_observation(self) -> None:
+        preserved = {
+            "schema_version": 2,
+            "capability_signature": "direct-model-spawn-v1",
+            "capabilities": {"gpt-5.6-terra": {"preserved": True}},
+        }
+        router_hook.CAPABILITY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        router_hook.CAPABILITY_PATH.write_text(json.dumps(preserved), encoding="utf-8")
+        base = {
+            "session_id": "astra-capability-receipt",
+            "turn_id": "t1",
+            "runtime_version": "codex-1.2.3",
+            "runtime_build": "desktop-456",
+            "host_type": "Desktop",
+        }
+        agent_id = "00000000-0000-7000-8000-000000000205"
+        router_hook.handle({
+            **base,
+            "hook_event_name": "UserPromptSubmit",
+            "model": "gpt-5.6-luna",
+            "model_reasoning_effort": "low",
+            "prompt": "Use GPT-6 Astra Medium for this bounded task.",
+        })
+        router_hook.handle({
+            **base,
+            "hook_event_name": "SubagentStart",
+            "agent_id": agent_id,
+            "model": "gpt-6-astra",
+            "reasoning_effort": "medium",
+        })
+        self._observe_valid_spawn("astra-capability-receipt", "t1", agent_id, "gpt6_astra_medium")
+        router_hook.handle({
+            **base,
+            "hook_event_name": "UserPromptSubmit",
+            "turn_id": "child-turn",
+            "agent_id": agent_id,
+            "model": "gpt-6-astra",
+            "model_reasoning_effort": "medium",
+            "prompt": "Complete the bounded frontier task.",
+        })
+        router_hook.handle({
+            **base,
+            "hook_event_name": "SubagentStop",
+            "turn_id": "child-turn",
+            "agent_id": agent_id,
+            "model": "gpt-6-astra",
+            "reasoning_effort": "medium",
+            "last_assistant_message": "Evidence: checked\nVerification: tests passed\nUncertainty: none",
+        })
+        receipt = _capability_receipt("gpt-6-astra")
+        self.assertEqual("gpt-6-astra", receipt["requested_child_model"])
+        self.assertEqual("gpt-6-astra", receipt["observed_child_model"])
+        self.assertEqual("medium", receipt["effort_intent"])
+        document = json.loads(router_hook.CAPABILITY_PATH.read_text(encoding="utf-8"))
+        self.assertEqual({"gpt-5.6-terra", "gpt-6-astra"}, set(document["capabilities"]))
+        self.assertTrue(document["capabilities"]["gpt-5.6-terra"]["preserved"])
+
+        state = self._ledger("astra-capability-receipt", "t1")
+        state["agents"][agent_id]["receipt_recorded"] = False
+        state["agents"][agent_id]["observed_model"] = "gpt-5.6-sol"
+        state["agents"][agent_id]["model_evidence_consistent"] = False
+        router_hook.CAPABILITY_PATH.unlink()
+        self.assertFalse(router_hook._record_capability(state, agent_id))
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists())
 
     def test_ledger_records_routing_telemetry_without_inventing_credit_usage(self) -> None:
         base = {"session_id": "telemetry", "turn_id": "t1"}
@@ -4276,7 +4425,7 @@ class RouterTests(unittest.TestCase):
         self.assertGreater(child.stat().st_size, 8 * 1024 * 1024)
         self.assertEqual("FOUND", attestation["reconciliation_status"])
         self.assertTrue(attestation["matched"])
-        receipt = json.loads(router_hook.CAPABILITY_PATH.read_text(encoding="utf-8"))
+        receipt = _capability_receipt("gpt-5.6-terra")
         self.assertEqual("gpt-5.6-terra", receipt["observed_child_model"])
 
     def test_transcript_custom_validator_settles_the_latest_mutation(self) -> None:
@@ -4910,13 +5059,16 @@ class RouterTests(unittest.TestCase):
                 self.assertEqual("current", decision["route"])
                 self.assertNotIn("security", decision["task_profile"]["signals"])
 
-    def test_council_can_recommend_every_supported_cost_route(self) -> None:
+    def test_council_can_recommend_every_non_frontier_cost_route(self) -> None:
         decision = router_hook.classify_prompt(
             "Run a routing council: I am not sure how to implement this ordinary endpoint with focused tests.",
             "gpt-5.6-terra",
             "medium",
         )
-        self.assertEqual(set(router_hook.ROUTES), set(decision["orchestration"]["candidate_routes"]))
+        self.assertEqual(
+            set(router_hook.ROUTES) - set(router_hook.ASTRA_ROLES),
+            set(decision["orchestration"]["candidate_routes"]),
+        )
 
     def test_missing_or_drifted_legacy_agents_do_not_affect_supported_routing(self) -> None:
         (router_hook.CONFIG_PATH.parent / "agents" / "gpt56_sol_deep.toml").unlink()
@@ -5213,6 +5365,133 @@ class RouterTests(unittest.TestCase):
         ledger = json.loads((Path(self.temp.name) / "route-up--t1.json").read_text())
         self.assertNotIn("worker_cap_exceeded:1", ledger["violations"])
         self.assertEqual("COMPLETE", ledger["status"])
+
+    def test_attested_sol_route_up_targets_astra_medium(self) -> None:
+        session = "sol-to-astra"
+        agent_id = "00000000-0000-7000-8000-000000000201"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "t1",
+            "model": "gpt-5.6-luna", "model_reasoning_effort": "low",
+            "prompt": "Fix the production outage.",
+        })
+        initial = self._ledger(session, "t1")
+        self.assertEqual("gpt56_sol_owner", initial["decision"]["route"])
+        router_hook.handle({
+            "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "t1",
+            "agent_id": agent_id, "model": "gpt-5.6-sol", "reasoning_effort": "medium",
+        })
+        self._observe_valid_spawn(session, "t1", agent_id, "gpt56_sol_owner")
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "child-turn",
+            "agent_id": agent_id, "model": "gpt-5.6-sol", "model_reasoning_effort": "medium",
+            "prompt": "Resolve the bounded root cause and return structured evidence.",
+        })
+        result = router_hook.handle({
+            "hook_event_name": "SubagentStop", "session_id": session, "turn_id": "child-turn",
+            "agent_id": agent_id, "model": "gpt-5.6-sol", "reasoning_effort": "medium",
+            "last_assistant_message": (
+                "ROUTE_UP\nEvidence: evidence exhausted at the Sol capability ceiling\n"
+                "Verification: competing causes remain\nUncertainty: unresolved root cause"
+            ),
+        })
+        ledger = self._ledger(session, "t1")
+        self.assertIn("Route-up accepted", result["systemMessage"])
+        self.assertEqual("gpt6_astra_medium", ledger["decision"]["route"])
+        self.assertEqual("gpt-6-astra", ledger["decision"]["model"])
+        self.assertEqual("medium", ledger["decision"]["effort"])
+        self.assertEqual("Astra Medium Speed unknown", ledger["decision"]["visible_route"])
+        self.assertEqual(
+            [{"from": "gpt56_sol_owner", "to": "gpt6_astra_medium", "reason": "ROUTE_UP"}],
+            ledger["escalations"],
+        )
+
+    def test_unattested_or_malformed_sol_route_up_cannot_open_astra_gate(self) -> None:
+        cases = ("unattested", "malformed")
+        for case in cases:
+            with self.subTest(case=case):
+                session = "sol-no-astra-" + case
+                agent_id = "00000000-0000-7000-8000-00000000020" + str(cases.index(case) + 2)
+                router_hook.handle({
+                    "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "t1",
+                    "model": "gpt-5.6-luna", "model_reasoning_effort": "low",
+                    "prompt": "Fix the production outage.",
+                })
+                router_hook.handle({
+                    "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "t1",
+                    "agent_id": agent_id, "model": "gpt-5.6-sol", "reasoning_effort": "medium",
+                })
+                if case == "malformed":
+                    path = Path(self.temp.name) / f"{session}.jsonl"
+                    records = [
+                        {"payload": {
+                            "type": "function_call", "name": "spawn_agent", "namespace": "collaboration",
+                            "call_id": "bad-spawn", "arguments": json.dumps({
+                                "model": "gpt-5.6-sol", "reasoning_effort": "medium",
+                                "message": "Missing the rest of the direct contract.",
+                            }),
+                            "internal_chat_message_metadata_passthrough": {"turn_id": "t1"},
+                        }},
+                        {"payload": {
+                            "type": "sub_agent_activity", "event_id": "bad-spawn",
+                            "agent_thread_id": agent_id, "kind": "started",
+                            "internal_chat_message_metadata_passthrough": {"turn_id": "t1"},
+                        }},
+                    ]
+                    path.write_text("\n".join(json.dumps(item) for item in records), encoding="utf-8")
+                    state = self._ledger(session, "t1")
+                    router_hook._reconcile_subagent_transcript({"transcript_path": str(path)}, state)
+                    router_hook._write_existing_state(
+                        {"session_id": session, "turn_id": "t1"}, state
+                    )
+                router_hook.handle({
+                    "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "child-turn",
+                    "agent_id": agent_id, "model": "gpt-5.6-sol", "model_reasoning_effort": "medium",
+                    "prompt": "Resolve the bounded root cause and return structured evidence.",
+                })
+                result = router_hook.handle({
+                    "hook_event_name": "SubagentStop", "session_id": session, "turn_id": "child-turn",
+                    "agent_id": agent_id, "model": "gpt-5.6-sol", "reasoning_effort": "medium",
+                    "last_assistant_message": (
+                        "ROUTE_UP\nEvidence: evidence exhausted at the Sol capability ceiling\n"
+                        "Verification: competing causes remain\nUncertainty: unresolved root cause"
+                    ),
+                })
+                ledger = self._ledger(session, "t1")
+                self.assertNotIn("Route-up accepted", str(result.get("systemMessage") or ""))
+                self.assertEqual("gpt56_sol_owner", ledger["decision"]["route"])
+                self.assertEqual([], ledger["escalations"])
+                self.assertIn("unattested_route_up:gpt56_sol_owner", ledger["violations"])
+
+    def test_astra_is_terminal_for_automatic_route_up(self) -> None:
+        session = "astra-terminal"
+        agent_id = "00000000-0000-7000-8000-000000000204"
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "t1",
+            "model": "gpt-5.6-luna", "model_reasoning_effort": "low",
+            "prompt": "Use GPT-6 Astra for this bounded task.",
+        })
+        router_hook.handle({
+            "hook_event_name": "SubagentStart", "session_id": session, "turn_id": "t1",
+            "agent_id": agent_id, "model": "gpt-6-astra", "reasoning_effort": "medium",
+        })
+        self._observe_valid_spawn(session, "t1", agent_id, "gpt6_astra_medium")
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": session, "turn_id": "child-turn",
+            "agent_id": agent_id, "model": "gpt-6-astra", "model_reasoning_effort": "medium",
+            "prompt": "Complete the bounded task.",
+        })
+        result = router_hook.handle({
+            "hook_event_name": "SubagentStop", "session_id": session, "turn_id": "child-turn",
+            "agent_id": agent_id, "model": "gpt-6-astra", "reasoning_effort": "medium",
+            "last_assistant_message": (
+                "ROUTE_UP\nEvidence: capability limit\nVerification: evidence exhausted\n"
+                "Uncertainty: deeper reasoning requested"
+            ),
+        })
+        ledger = self._ledger(session, "t1")
+        self.assertNotIn("Route-up accepted", str(result.get("systemMessage") or ""))
+        self.assertEqual("gpt6_astra_medium", ledger["decision"]["route"])
+        self.assertEqual([], ledger["escalations"])
 
     def test_route_up_rejects_metadata_or_identity_confusion(self) -> None:
         session = "route-up-metadata"

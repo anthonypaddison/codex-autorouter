@@ -381,6 +381,13 @@ EXPECTED_PLANS = {
 
 ROUTE_PROBES = (
     ("trivial", "Fix a typo in README.", "current", "direct"),
+    ("astra_explicit", "Use GPT-6 Astra for this task.", "gpt6_astra_medium", "single_delegate"),
+    (
+        "astra_keyword_noise",
+        "Review the telemetry field named gpt-6-astra without changing routing.",
+        "gpt56_terra_deep",
+        "single_delegate",
+    ),
     ("batch", "Normalize 120 independent locale JSON catalogs using the exact schema and validator. Apply the same mechanical rule to every file.", "current", "direct"),
     (
         "delegated_fixture",

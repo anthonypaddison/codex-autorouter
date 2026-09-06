@@ -24,7 +24,7 @@ The installer refuses any unowned `CODEX_HOME/skills/route-gpt-5-6-work`, even i
 
 Successful installation prints a durable controller path under `CODEX_HOME/plugin-data/gpt-5-6-router/standalone/controllers`. Keep that path for status, updates, and uninstall. Start a new task after installation so the standalone skill is discovered as `$route-gpt-5-6-work`.
 
-The supported routing instructions use the central compatibility boundary for direct Terra or Sol child spawning. Capability and fallback assumptions must not be duplicated in standalone instructions. Because plugin hooks are absent, `scripts/check_hooks.py` cannot promote standalone mode to `READY`; it must remain truthful about `ADVISORY` capability.
+The supported routing instructions use the central compatibility boundary for direct Terra, Sol, or eligible Astra child spawning. Capability and fallback assumptions must not be duplicated in standalone instructions. Because plugin hooks are absent, standalone mode cannot authoritatively prove the same-task Sol route-up gate or promote itself to `READY`; explicit Astra requests still use only Medium, High, Extra High, or Max, with Low and Ultra rejected.
 
 ## Optional explicit legacy mode
 
@@ -37,7 +37,7 @@ python3 "$CODEX_HOME/skills/route-gpt-5-6-work/scripts/routerctl.py" activate --
 python3 "$CODEX_HOME/skills/route-gpt-5-6-work/scripts/routerctl.py" status
 ```
 
-Legacy activation cannot make standalone mode `READY` and does not prove Terra/Sol direct-spawn capability.
+Legacy activation cannot make standalone mode `READY` and does not prove Terra/Sol/Astra direct-spawn capability.
 
 ## Update
 

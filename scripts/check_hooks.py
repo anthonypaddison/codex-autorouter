@@ -23,7 +23,14 @@ CAPABILITY_SIGNATURE = "direct-model-spawn-v1"
 ROOT_OBSERVATION_FILE = "root-observation-v1.json"
 ROOT_OBSERVATIONS_DIRECTORY = "root-observations-v1"
 CAPABILITY_FILE = "capability-v1.json"
+CAPABILITY_FILE_V2 = "capability-v2.json"
 CAPABILITY_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
+CAPABILITY_MODELS = ("gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra")
+CAPABILITY_EFFORTS = {
+    "gpt-5.6-terra": frozenset({"medium", "high"}),
+    "gpt-5.6-sol": frozenset({"medium", "high", "xhigh"}),
+    "gpt-6-astra": frozenset({"medium", "high", "xhigh", "max"}),
+}
 PLUGIN_IDENTITY_FILES = (
     ".codex-plugin/plugin.json",
     "hooks/hooks.json",
@@ -161,6 +168,130 @@ def _timestamp(value: Any) -> int | None:
     return None
 
 
+def _capability_receipts(
+    data_root: Path,
+) -> tuple[dict[str, dict[str, Any] | None], list[str]]:
+    """Read model-keyed receipts plus one exact-tier legacy receipt."""
+    receipts: dict[str, dict[str, Any] | None] = {model: None for model in CAPABILITY_MODELS}
+    errors: list[str] = []
+    document, document_error = _read_json_object(data_root / CAPABILITY_FILE_V2)
+    if document_error:
+        errors.append(f"Model-keyed capability evidence is unreadable ({document_error}).")
+    elif document is not None:
+        capabilities = document.get("capabilities")
+        if (
+            document.get("schema_version") != 2
+            or document.get("capability_signature") != CAPABILITY_SIGNATURE
+            or not isinstance(capabilities, dict)
+            or any(model not in CAPABILITY_MODELS for model in capabilities)
+        ):
+            errors.append("Model-keyed capability evidence has an incompatible schema or model key.")
+        else:
+            for model, receipt in capabilities.items():
+                if not isinstance(receipt, dict):
+                    errors.append(f"Capability evidence for {model} has an invalid shape.")
+                else:
+                    receipts[model] = {**receipt, "_container_schema_version": 2}
+
+    legacy, legacy_error = _read_json_object(data_root / CAPABILITY_FILE)
+    if legacy_error:
+        errors.append(f"Legacy capability receipt is unreadable ({legacy_error}).")
+    elif legacy is not None:
+        model = legacy.get("observed_child_model")
+        if model in {"gpt-5.6-terra", "gpt-5.6-sol"} and receipts[model] is None:
+            receipts[model] = legacy
+        elif model not in {"gpt-5.6-terra", "gpt-5.6-sol"}:
+            errors.append("Legacy capability receipt does not attest an exact Terra or Sol tier.")
+    return receipts, errors
+
+
+def _capability_status(
+    receipt: dict[str, Any] | None,
+    model: str,
+    observation: dict[str, Any] | None,
+    observation_compatible: bool,
+    plugin_version: str,
+    plugin_identity: str | None,
+) -> tuple[str, list[str]]:
+    if receipt is None:
+        return "UNPROVEN", []
+    reasons: list[str] = []
+    compatible = observation_compatible
+    receipt_schema = receipt.get("schema_version")
+    if receipt.get("_container_schema_version") == 2 and receipt_schema != 2:
+        reasons.append("model-keyed receipt schema is unsupported")
+        compatible = False
+    elif receipt_schema not in {1, 2}:
+        reasons.append("receipt schema is unsupported")
+        compatible = False
+    elif receipt_schema == 2:
+        required_identities = (
+            "agent_id", "spawn_call_key", "parent_session_id", "parent_turn_id", "child_turn_id",
+        )
+        if any(not isinstance(receipt.get(field), str) or not receipt.get(field) for field in required_identities):
+            reasons.append("execution identity binding is incomplete")
+            compatible = False
+        required_gates = (
+            "spawn_contract_valid", "lifecycle_complete", "completion_structured",
+            "ambiguity_clear", "model_evidence_consistent", "attestation_matched",
+        )
+        if any(receipt.get(field) is not True for field in required_gates):
+            reasons.append("execution gate binding is incomplete")
+            compatible = False
+    if receipt.get("capability_signature") != CAPABILITY_SIGNATURE:
+        reasons.append("capability signature does not match the direct-spawn adapter")
+        compatible = False
+    if receipt.get("plugin_version") != plugin_version:
+        reasons.append("plugin version differs")
+        compatible = False
+    if not plugin_identity or receipt.get("plugin_identity") != plugin_identity:
+        reasons.append("plugin candidate identity differs or is unavailable")
+        compatible = False
+    if receipt.get("observed_child_model") != model:
+        reasons.append("observed child model does not match its capability key")
+        compatible = False
+    requested = receipt.get("requested_child_model")
+    if requested is not None and requested != model:
+        reasons.append("requested child model does not match its capability key")
+        compatible = False
+    if receipt.get("effort_intent") not in CAPABILITY_EFFORTS[model]:
+        reasons.append("effort intent is absent or unsupported")
+        compatible = False
+    receipt_timestamp = _timestamp(receipt.get("timestamp"))
+    if receipt_timestamp is None:
+        reasons.append("timestamp is absent")
+        compatible = False
+    else:
+        age = int(time.time()) - receipt_timestamp
+        if age > CAPABILITY_MAX_AGE_SECONDS:
+            reasons.append("receipt is stale")
+            return "STALE", reasons
+        if age < -300:
+            reasons.append("timestamp is in the future")
+            compatible = False
+
+    current_versioned = {
+        field: observation.get(field)
+        for field in ("runtime_version", "runtime_build")
+        if observation is not None and isinstance(observation.get(field), str) and observation.get(field)
+    }
+    if not current_versioned:
+        reasons.append("runtime identity unavailable; capability compatibility unproven")
+        return "UNPROVEN", reasons
+    for field, label in (("runtime_version", "runtime version"), ("runtime_build", "runtime build")):
+        current_value = current_versioned.get(field)
+        if current_value and receipt.get(field) != current_value:
+            reasons.append(f"{label} changed or was not bound")
+            compatible = False
+    if observation is not None:
+        for field, label in (("host_type", "host type"), ("platform", "platform")):
+            current_value = observation.get(field)
+            if isinstance(current_value, str) and current_value and receipt.get(field) != current_value:
+                reasons.append(f"{label} changed or was not bound")
+                compatible = False
+    return ("CURRENT" if compatible else "INCOMPATIBLE"), reasons
+
+
 def _routing_health(
     effective: dict[str, Any],
     plugin_version: str,
@@ -192,7 +323,7 @@ def _routing_health(
     else:
         observation = global_observation
         observation_error = global_observation_error
-    receipt, receipt_error = _read_json_object(data_root / CAPABILITY_FILE)
+    receipts, receipt_errors = _capability_receipts(data_root)
     current_plugin_identity = plugin_identity or _plugin_identity()
     config_model = effective.get("model")
     observed_model = observation.get("root_model") if observation and session_id else None
@@ -203,9 +334,13 @@ def _routing_health(
     historical_escalation_state = "NO ESCALATION RECEIPT"
     current_runtime_capability_state = "NO_EVIDENCE"
     observation_compatible = observation is not None
+    capability_status = {model: "UNPROVEN" for model in CAPABILITY_MODELS}
+    capability_reasons = {model: [] for model in CAPABILITY_MODELS}
 
-    receipt_child_model = receipt.get("observed_child_model") if receipt else None
-    if receipt is not None and receipt_child_model in {"gpt-5.6-terra", "gpt-5.6-sol"} and _timestamp(receipt.get("timestamp")) is not None:
+    if any(
+        receipt is not None and _timestamp(receipt.get("timestamp")) is not None
+        for receipt in receipts.values()
+    ):
         historical_escalation_state = "ESCALATION PREVIOUSLY OBSERVED"
 
     if not effective.get("available"):
@@ -254,82 +389,33 @@ def _routing_health(
         elif observation is not None and session_id:
             current_task_root_state = "CHEAP_ROOT"
 
-        if receipt_error:
-            reasons.append(f"Capability receipt is unreadable ({receipt_error}).")
-        if receipt is None:
-            reasons.append("No successful Terra/Sol escalation receipt exists; no automatic paid probe was performed.")
-        else:
-            receipt_compatible = observation_compatible
-            if receipt.get("schema_version") != CAPABILITY_SCHEMA_VERSION:
-                reasons.append("Capability receipt schema does not match this health checker.")
-                receipt_compatible = False
-            if receipt.get("capability_signature") != CAPABILITY_SIGNATURE:
-                reasons.append("Capability receipt signature does not match the supported direct-spawn adapter.")
-                receipt_compatible = False
-            if receipt.get("plugin_version") != plugin_version:
-                reasons.append("Capability receipt belongs to a different plugin version.")
-                receipt_compatible = False
-            if not current_plugin_identity or receipt.get("plugin_identity") != current_plugin_identity:
-                reasons.append("Capability receipt belongs to a different or unidentifiable plugin candidate.")
-                receipt_compatible = False
-            if receipt.get("observed_child_model") not in {"gpt-5.6-terra", "gpt-5.6-sol"}:
-                reasons.append("Capability receipt does not attest a Terra or Sol child.")
-                receipt_compatible = False
-            receipt_timestamp = _timestamp(receipt.get("timestamp"))
-            if not receipt.get("effort_intent") or receipt_timestamp is None:
-                reasons.append("Capability receipt lacks effort intent or timestamp evidence.")
-                receipt_compatible = False
-            else:
-                receipt_age = int(time.time()) - receipt_timestamp
-                if receipt_age > CAPABILITY_MAX_AGE_SECONDS:
-                    reasons.append("Capability receipt is stale and cannot establish present runtime compatibility.")
-                    current_runtime_capability_state = "STALE"
-                    receipt_compatible = False
-                elif receipt_age < -300:
-                    reasons.append("Capability receipt timestamp is in the future and cannot establish present compatibility.")
-                    receipt_compatible = False
+        for model in CAPABILITY_MODELS:
+            tier_status, tier_reasons = _capability_status(
+                receipts[model], model, observation, observation_compatible,
+                plugin_version, current_plugin_identity,
+            )
+            capability_status[model] = tier_status
+            capability_reasons[model] = tier_reasons
+        current_tiers = [model for model, value in capability_status.items() if value == "CURRENT"]
+        if current_tiers:
+            current_runtime_capability_state = "CURRENT RUNTIME ESCALATION CAPABLE"
+        elif any(value == "STALE" for value in capability_status.values()):
+            current_runtime_capability_state = "STALE"
+        elif any(value == "INCOMPATIBLE" for value in capability_status.values()):
+            current_runtime_capability_state = "INCOMPATIBLE"
+        elif any(receipt is not None for receipt in receipts.values()):
+            current_runtime_capability_state = "UNPROVEN"
 
-            current_versioned = {
-                field: observation.get(field)
-                for field in ("runtime_version", "runtime_build")
-                if observation is not None and isinstance(observation.get(field), str) and observation.get(field)
-            }
-            if not current_versioned:
-                reasons.append("Runtime identity unavailable; capability compatibility unproven.")
-                if current_runtime_capability_state != "STALE":
-                    current_runtime_capability_state = "UNPROVEN"
-                receipt_compatible = False
-            else:
-                for field, label in (
-                    ("runtime_version", "Codex runtime version"),
-                    ("runtime_build", "Codex runtime build"),
-                ):
-                    current_value = current_versioned.get(field)
-                    if current_value:
-                        receipt_value = receipt.get(field)
-                        if not isinstance(receipt_value, str) or not receipt_value:
-                            reasons.append(f"{label} is currently observable but was not bound by the capability receipt.")
-                            receipt_compatible = False
-                        elif current_value != receipt_value:
-                            reasons.append(f"{label} changed after the last successful escalation receipt.")
-                            receipt_compatible = False
-
-            if observation is not None:
-                for field, label in (("host_type", "Codex host type"), ("platform", "Current platform")):
-                    current_value = observation.get(field)
-                    if isinstance(current_value, str) and current_value:
-                        receipt_value = receipt.get(field)
-                        if not isinstance(receipt_value, str) or not receipt_value:
-                            reasons.append(f"{label} was not bound by the capability receipt.")
-                            receipt_compatible = False
-                        elif current_value != receipt_value:
-                            reasons.append(f"Capability receipt {field.replace('_', ' ')} does not match the current hook observation.")
-                            receipt_compatible = False
-
-            if receipt_compatible:
-                current_runtime_capability_state = "CURRENT RUNTIME ESCALATION CAPABLE"
-            elif current_runtime_capability_state not in {"STALE", "UNPROVEN"}:
-                current_runtime_capability_state = "INCOMPATIBLE"
+        if receipt_errors:
+            reasons.extend(receipt_errors)
+        if not any(receipt is not None for receipt in receipts.values()):
+            reasons.append("No successful Terra/Sol/Astra escalation receipt exists; no automatic paid probe was performed.")
+        elif not current_tiers:
+            reasons.extend(dict.fromkeys(
+                reason
+                for model in CAPABILITY_MODELS
+                for reason in capability_reasons[model]
+            ))
 
         if not reasons:
             status = "READY"
@@ -362,7 +448,9 @@ def _routing_health(
         "historical_escalation_state": historical_escalation_state,
         "current_runtime_capability_state": current_runtime_capability_state,
         "observation_present": observation is not None,
-        "capability_receipt_present": receipt is not None,
+        "capability_receipt_present": any(receipt is not None for receipt in receipts.values()),
+        "capability_status": capability_status,
+        "capability_reasons": capability_reasons,
         "runtime_identity": runtime_identity,
         "automatic_paid_probe_performed": False,
         "data_root": str(data_root),

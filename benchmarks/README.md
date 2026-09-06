@@ -23,7 +23,8 @@ The suite deliberately includes work where different behavior should emerge:
 | `parallel_audit` | independent security, accessibility, and data review | Terra evidence followed by one Sol owner |
 
 Route-only probes also exercise ordinary implementation, unclear multi-area
-work, protected security floors, profile changes, and high-volume delegation.
+work, protected security floors, profile changes, high-volume delegation,
+explicit Astra Medium selection, and Astra keyword-noise rejection.
 
 ## Start with a zero-cost route audit
 

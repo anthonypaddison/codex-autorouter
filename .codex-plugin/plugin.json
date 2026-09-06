@@ -1,7 +1,7 @@
 {
   "name": "gpt-5-6-router",
   "version": "0.2.0",
-  "description": "Autorouter automatically selects the right GPT-5.6 model, effort, and bounded agent plan for each Codex task.",
+  "description": "Autorouter selects a cost-effective Codex model, effort, and bounded agent plan, with GPT-6 Astra behind a rare frontier gate.",
   "author": {
     "name": "Alchemist"
   },
@@ -9,6 +9,7 @@
   "keywords": [
     "codex",
     "gpt-5.6",
+    "gpt-6",
     "model-routing",
     "subagents",
     "orchestration",
@@ -18,7 +19,7 @@
   "interface": {
     "displayName": "Autorouter",
     "shortDescription": "The right model and effort for every Codex task",
-    "longDescription": "Profiles each task, chooses an appropriate GPT-5.6 model and reasoning effort, orchestrates bounded subagents when useful, preserves Fast or Standard, and requires proportionate verification before completion.",
+    "longDescription": "Profiles each task, chooses an appropriate Luna, Terra, or Sol model and reasoning effort, exposes GPT-6 Astra only through an explicit or attested frontier gate, orchestrates bounded subagents, preserves Fast or Standard, and requires proportionate verification.",
     "developerName": "Alchemist",
     "category": "Developer Tools",
     "websiteURL": "https://github.com/anthonypaddison/Codex-Autorouter",
@@ -28,7 +29,7 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Automatically choose the best GPT-5.6 route for this task.",
+      "Automatically choose the best cost-effective route for this task.",
       "Show me the model, effort, speed, and verification plan.",
       "Route this product-building task for maximum cost efficiency."
     ],

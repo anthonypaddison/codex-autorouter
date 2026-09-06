@@ -38,8 +38,38 @@ def main() -> int:
         assert sum(plan["required_agents"].values()) <= plan["max_workers"]
         assert set(plan["required_agents"]) <= set(plan["allowed_agents"])
         assert prompt not in json.dumps(first)
+
+        astra_root = router_hook.classify_prompt(prompt, "gpt-6-astra", "medium")
+        assert astra_root["route"] == "current"
+        assert astra_root["orchestration"]["mode"] in {"direct", "clarify"}
+        assert astra_root["orchestration"]["required_agents"] == {}
+
+        sol_root = router_hook.classify_prompt(prompt, "gpt-5.6-sol", "high")
+        if sol_root["orchestration"]["mode"] != "routing_council":
+            assert sol_root["route"] == "current"
+            assert sol_root["orchestration"]["required_agents"] == {}
+        assert not any(role.startswith("gpt6_astra_") for role in first["orchestration"]["required_agents"])
         count += 1
     assert count == 5000
+
+    explicit_efforts = {
+        "Use GPT-6 Astra for this task.": "gpt6_astra_medium",
+        "Use GPT-6 Astra Medium for this task.": "gpt6_astra_medium",
+        "Use GPT-6 Astra High for this task.": "gpt6_astra_high",
+        "Use GPT-6 Astra xHigh for this task.": "gpt6_astra_xhigh",
+        "Use GPT-6 Astra Max for this task.": "gpt6_astra_max",
+    }
+    for prompt, route in explicit_efforts.items():
+        decision = router_hook.classify_prompt(prompt, "gpt-5.6-luna", "low")
+        assert decision["route"] == route
+        assert decision["orchestration"]["required_agents"] == {route: 1}
+    for effort in ("Low", "Ultra"):
+        decision = router_hook.classify_prompt(
+            f"Use GPT-6 Astra {effort} for this task.", "gpt-5.6-luna", "low"
+        )
+        assert decision["route"] == "current"
+        assert decision["orchestration"]["mode"] == "clarify"
+        assert decision["orchestration"]["required_agents"] == {}
     print(f"routing fuzz passed: {count} cases")
     return 0
 

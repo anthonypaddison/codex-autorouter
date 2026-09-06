@@ -75,13 +75,13 @@ python3 scripts/check_hooks.py
 
 The command returns one of three top-level health states:
 
-- `READY`: Luna is the observed root for the current task and a non-stale receipt proves a successful Terra or Sol escalation through the same plugin candidate and versioned Codex runtime/build identity.
+- `READY`: Luna is the observed root for the current task and at least one model-keyed, non-stale receipt proves a successful Terra, Sol, or Astra escalation through the same plugin candidate and versioned Codex runtime/build identity.
 - `DEGRADED`: Autorouter remains usable, but the active root was not Luna or current escalation capability is not proven. When the root is not Luna, credit-saving behaviour will be substantially reduced.
 - `UNAVAILABLE`: the supported hooks or direct child-routing path cannot operate.
 
 The hook's `UserPromptSubmit.model` is authoritative for every actual turn. Desktop, app-server, and config evidence can explain health, but cannot override that active-model evidence. Follow the [troubleshooting guide](docs/TROUBLESHOOTING.md) for any state other than `READY`.
 
-Readiness receipts are earned only after an expected child is observed on the requested Terra or Sol model and the same `agent_id` completes successfully. The exact bounded child transcript may supply authoritative model, effort, and turn evidence when Desktop omits a child prompt hook; missing, contradictory, malformed, or oversized evidence creates no receipt. Receipts bind the plugin content identity, plugin version, Codex runtime/build where exposed, Desktop or CLI host type, platform, observed child model, effort intent, capability/schema signature, and timestamp. At least one matching versioned runtime/build identifier is mandatory for `READY`; null never matches null. Identity-null receipts remain visible as `ESCALATION PREVIOUSLY OBSERVED` but cannot establish current-runtime capability. Receipts expire for readiness after 30 days but remain available as history. A runtime/build or plugin-candidate change invalidates `READY` until normal work produces a fresh successful receipt; the health check never launches an automatic paid probe.
+Readiness receipts are earned only after an expected child is observed on the exact requested Terra, Sol, or Astra model and the same `agent_id` completes successfully. Receipts are stored by model tier, so one tier's proof cannot silently attest another. The exact bounded child transcript may supply authoritative model, effort, and turn evidence when Desktop omits a child prompt hook; missing, contradictory, malformed, or oversized evidence creates no receipt. Receipts bind the plugin content identity, plugin version, Codex runtime/build where exposed, Desktop or CLI host type, platform, observed child model, effort intent, capability/schema signature, and timestamp. At least one matching versioned runtime/build identifier is mandatory for `READY`; null never matches null. Identity-null receipts remain visible as `ESCALATION PREVIOUSLY OBSERVED` but cannot establish current-runtime capability. Receipts expire for readiness after 30 days but remain available as history. A runtime/build or plugin-candidate change invalidates `READY` until normal work produces a fresh successful receipt; the health check never launches an automatic paid probe.
 
 ## Your first task
 
@@ -144,7 +144,7 @@ See the official [Codex speed guide](https://learn.chatgpt.com/docs/agent-config
 ## What Autorouter chooses
 
 <p align="center">
-  <img src="assets/readme/routing-map.svg" alt="Luna repeats checked work, Terra builds and investigates, and Sol owns the hardest outcomes" width="100%">
+  <img src="assets/readme/routing-map.svg" alt="Luna repeats checked work, Terra builds and investigates, Sol owns hard outcomes, and Astra is a gated frontier" width="100%">
 </p>
 
 The model reported by `UserPromptSubmit.model` determines what is allowed for that turn:
@@ -153,9 +153,12 @@ The model reported by `UserPromptSubmit.model` determines what is allowed for th
 |---|---|---|---|---|
 | **Luna** | Stay on Luna | May escalate to Terra | May escalate to Sol | Efficient root; eligible for `READY` |
 | **Terra** | Stay on Terra | Stay on Terra | May escalate to Sol | `DEGRADED` for the turn |
-| **Sol** | Stay on Sol | Stay on Sol | Stay on Sol | `DEGRADED` for the turn |
+| **Sol** | Stay on Sol | Stay on Sol | Stay on Sol; Astra only through an explicit request or attested `ROUTE_UP` | `DEGRADED` for the turn |
+| **Astra** | Stay on Astra | Stay on Astra | Stay on Astra | `DEGRADED` for the turn |
 
-Sol is never delegated downward merely to satisfy the classifier. Independent parallel work may still justify a child when it has its own bounded reason. User-intent ambiguity does not justify a stronger model: Luna asks one concise clarification. Technical uncertainty inside an otherwise clear task may justify Terra or Sol.
+Sol and Astra are never delegated downward merely to satisfy the classifier. Independent parallel work may still justify a child when it has its own bounded reason. User-intent ambiguity does not justify a stronger model: Luna asks one concise clarification. Technical uncertainty inside an otherwise clear task may justify Terra or Sol.
+
+Astra is deliberately rare. Generic task severity, frontier-sounding keywords, and Max Quality do not select it. An explicit request supports Astra Medium, High, Extra High, or Max and defaults to Medium when unqualified; explicit Low and Ultra are rejected. The only automatic path is an authoritative, same-task, successfully attested Sol `ROUTE_UP`, and it always requests Astra Medium. There are no automatic Astra effort retries.
 
 ## When subagents help
 
@@ -167,7 +170,7 @@ Small tasks stay in one agent. Larger tasks may split into a few independent pie
 
 ## Tips for better results
 
-1. **Describe the outcome, not the model.** Say what you want built or fixed; let Autorouter choose Luna, Terra, or Sol.
+1. **Describe the outcome, not the model.** Say what you want built or fixed; let Autorouter choose Luna, Terra, or Sol. Request Astra explicitly only when you intentionally want the frontier tier.
 2. **Include “done when.”** Mention the test, behavior, or visible result that should prove completion.
 3. **Start with Balanced.** Move to Token Saver or Max Quality only when you have a reason.
 4. **Use Fast for active collaboration.** Standard is a good default for work that can run in the background.
@@ -177,7 +180,7 @@ Small tasks stay in one agent. Larger tasks may split into a few independent pie
 
 ## What Autorouter will—and will not—do
 
-- It chooses a cost-effective GPT-5.6 route for each task.
+- It chooses a cost-effective Luna, Terra, or Sol route for each task and exposes Astra only through its narrow frontier gate.
 - It can use a small number of specialized subagents when they materially help.
 - It keeps important work on appropriately capable routes, even in Token Saver.
 - It verifies file-changing work before reporting success.
@@ -214,7 +217,7 @@ Use the health check after an update. Removal must not change the user-selected 
   <img src="assets/readme/architecture.svg" alt="Autorouter profiles a task, chooses model and effort, executes a bounded plan, and verifies the result" width="100%">
 </p>
 
-Autorouter profiles the task, selects one route and bounded plan, executes it directly or through depth-1 agents, and verifies the final result. It permits at most three subagents and one evidence-backed route-up.
+Autorouter profiles the task, selects one route and bounded plan, executes it directly or through depth-1 agents, and verifies the final result. It permits at most three subagents and one evidence-backed route-up; only an attested Sol route-up may enter automatic Astra Medium.
 
 ### Local verification
 

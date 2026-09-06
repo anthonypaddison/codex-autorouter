@@ -4,7 +4,7 @@
 
 Normal routing uses the direct model-spawn compatibility adapter and does not install or require custom-agent TOMLs. The six namespaced templates remain only for compatibility testing and an explicit legacy mode. Users who deliberately need that mode can run `routerctl activate --legacy-agents`; their absence never degrades normal readiness.
 
-Current direct-spawn schema construction, capability detection, and fallback live in one tested adapter. If Codex changes that schema, normal routing degrades to the current root model until the adapter is updated and a genuine successful Terra or Sol escalation creates a fresh capability receipt. Autorouter never runs an automatic paid probe.
+Current direct-spawn schema construction, capability detection, and fallback live in one tested adapter. If Codex changes that schema, normal routing degrades to the current root model until the adapter is updated and a genuine successful Terra, Sol, or Astra escalation creates a fresh model-keyed capability receipt. Autorouter never runs an automatic paid probe.
 
 ## Hook trust is not filesystem-observable
 
@@ -22,7 +22,11 @@ Codex can retain the resolved, versioned hook command for an already-open task. 
 
 ## READY is runtime-bound
 
-`scripts/check_hooks.py` reports `READY` only after a current-task Luna root observation and a genuine successful Terra or Sol escalation receipt for the same plugin content identity/version, at least one matching versioned Codex runtime/build identifier, host type, platform, capability signature, and supported schema. Another task's observation, missing current-task context, null runtime identity, a candidate change, or a receipt older than 30 days returns health to `DEGRADED`. Historical receipts remain auditable as `ESCALATION PREVIOUSLY OBSERVED`. This is intentional; health checks never spend credits on an automatic probe.
+`scripts/check_hooks.py` reports `READY` only after a current-task Luna root observation and at least one genuine successful Terra, Sol, or Astra escalation receipt for the same plugin content identity/version, at least one matching versioned Codex runtime/build identifier, host type, platform, capability signature, and supported schema. Receipts are keyed by exact model tier and reported independently; one tier never proves another. Another task's observation, missing current-task context, null runtime identity, a candidate change, or a receipt older than 30 days returns health to `DEGRADED` when no other current tier receipt exists. Historical receipts remain auditable as `ESCALATION PREVIOUSLY OBSERVED`. This is intentional; health checks never spend credits on an automatic probe.
+
+## Astra is intentionally rare
+
+Normal classification, severity, keywords, and Max Quality cannot select Astra. Explicit requests support Medium, High, Extra High, and Max and default to Medium; Low and Ultra are rejected. The only automatic path is a fully attested same-task Sol `ROUTE_UP`, always to Astra Medium. Autorouter has no automatic Astra effort retry. An Astra root remains the final owner rather than delegating downward.
 
 ## Fast is reported, not UI-attested
 

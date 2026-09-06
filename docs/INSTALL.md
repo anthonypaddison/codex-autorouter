@@ -38,11 +38,13 @@ python3 scripts/check_hooks.py
 
 The combined check reports:
 
-- `READY` when the current task observed Luna and a non-stale capability receipt proves a genuine successful Terra or Sol escalation against the same plugin candidate and at least one matching versioned Codex runtime/build identifier;
+- `READY` when the current task observed Luna and at least one model-keyed non-stale capability receipt proves a genuine successful Terra, Sol, or Astra escalation against the same plugin candidate and at least one matching versioned Codex runtime/build identifier;
 - `DEGRADED` when Autorouter works but the observed root is not Luna, the runtime/build changed, or current escalation capability is not yet proven; a non-Luna root substantially reduces credit-saving behaviour;
 - `ADVISORY` when hooks or the supported direct child path cannot enforce the complete contract.
 
-`UserPromptSubmit.model` is authoritative for the active root on every actual turn. Root observations carry task and turn identity, and `CODEX_SESSION_ID`/`CODEX_THREAD_ID` selects current-task evidence; another task's Luna observation cannot establish readiness. Without authoritative task context the global report remains conservative. App Server and config evidence may support health reporting but cannot override hook evidence. The receipt binds plugin content identity, plugin version, Codex runtime/build where exposed, Desktop or CLI host type, platform, observed child model, effort intent, capability/schema signature, and timestamp. Null runtime identity never proves compatibility, and receipts older than 30 days are history rather than current capability. The check never launches an automatic paid probe.
+`UserPromptSubmit.model` is authoritative for the active root on every actual turn. Root observations carry task and turn identity, and `CODEX_SESSION_ID`/`CODEX_THREAD_ID` selects current-task evidence; another task's Luna observation cannot establish readiness. Without authoritative task context the global report remains conservative. App Server and config evidence may support health reporting but cannot override hook evidence. Each Terra, Sol, or Astra receipt binds only its exact model tier plus plugin content identity, plugin version, Codex runtime/build where exposed, Desktop or CLI host type, platform, effort intent, capability/schema signature, and timestamp. Null runtime identity never proves compatibility, and receipts older than 30 days are history rather than current capability. The check reports each tier separately and never launches an automatic paid probe.
+
+Astra is not part of normal automatic classification. Explicit Astra requests default to Medium and may select Medium, High, Extra High, or Max; Low and Ultra are rejected. The sole automatic Astra path is an authoritative attested Sol `ROUTE_UP`, always to Astra Medium, with no automatic effort retry.
 
 ## Routing preference
 

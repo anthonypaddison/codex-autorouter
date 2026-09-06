@@ -17,7 +17,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v scripts.test_validate_release
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/fuzz_router.py
 ```
 
-Run the full repository-defined test suite and complete the real Desktop/CLI acceptance evidence before continuing. The health check must not run an automatic paid probe; readiness capability must come from a genuine successful Terra or Sol escalation during controlled acceptance or normal work.
+Run the full repository-defined test suite and complete the real Desktop/CLI acceptance evidence before continuing. The health check must not run an automatic paid probe; readiness capability must come from a genuine successful Terra, Sol, or Astra escalation during controlled acceptance or normal work. Astra acceptance is a separately bounded frontier check, not part of routine release probing.
 
 ## 2. Create a local reviewed tag
 
