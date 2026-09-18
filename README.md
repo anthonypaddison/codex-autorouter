@@ -85,7 +85,7 @@ Readiness receipts are earned only after an expected child is observed on the ex
 
 ## Your first task
 
-Current Codex automation-triggered turns do not dispatch Autorouter executable plugin hooks and are outside its routing and savings coverage. Their root model is host/task configured; do not attribute automation model use or savings to Autorouter. No unsupported workaround is provided. See [supported surfaces and real-host coverage](docs/LIMITATIONS.md#supported-surfaces-and-real-host-coverage); this boundary can be revisited if Codex adds first-class automation hook execution.
+Automation hook delivery is host/version dependent. The currently observed Codex Desktop host dispatches Autorouter hook context and ledgers for automation-triggered turns, but Autorouter has not validated automation routing semantics as a supported savings surface. Continue excluding automation activity from Autorouter-attributable savings until that support is explicitly validated. See [supported surfaces and real-host coverage](docs/LIMITATIONS.md#supported-surfaces-and-real-host-coverage).
 
 That is it—prompt Codex normally. A good first test is:
 

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reconciled current Codex nested `event_msg` / `item_completed` / `SubAgentActivity` lifecycle records by exact parent turn, spawn call ID, and child ID while preserving strict spawn-contract, completion, attestation, and receipt gates.
+- Corrected automation documentation: current Desktop evidence shows hook context and ledgers, but automation remains outside savings attribution until its routing semantics are explicitly validated.
 - Added GPT-6 Astra as a rare frontier tier: explicit requests support Medium, High, Extra High, and Max while Low and Ultra are rejected; the sole automatic path is an authoritative attested Sol route-up to Astra Medium.
 - Kept Astra roots as final owners, centralized Astra child arguments in the spawn adapter, and added exact model-keyed runtime capability receipts and per-tier health reporting.
 - Extended route audits, deterministic fuzzing, frozen benchmark classification replay, operator documentation, and acceptance guidance without adding paid probes or automatic Astra effort retries.

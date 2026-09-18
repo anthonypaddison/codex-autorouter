@@ -730,7 +730,30 @@ class ObservedSpawnContractTests(unittest.TestCase):
     def tearDown(self) -> None:
         RouterTests.tearDown(self)
 
-    def _run_child(self, arguments: dict | None, *, nested: bool = False) -> tuple[dict, Path]:
+    @staticmethod
+    def _current_nested_activity(
+        call_id: str, agent_id: str, *, kind: str = "started", turn_id: str = "parent",
+        agent_path: str = "/root/bounded",
+    ) -> dict:
+        return {
+            "type": "event_msg",
+            "payload": {
+                "type": "item_completed",
+                "thread_id": "observed-contract",
+                "turn_id": turn_id,
+                "item": {
+                    "type": "SubAgentActivity",
+                    "id": call_id,
+                    "kind": kind,
+                    "agent_thread_id": agent_id,
+                    "agent_path": agent_path,
+                },
+            },
+        }
+
+    def _run_child(
+        self, arguments: dict | None, *, nested: bool = False, current_nested: bool = False,
+    ) -> tuple[dict, Path]:
         base = {"session_id": "observed-contract", "turn_id": "parent"}
         router_hook.handle({**base, "hook_event_name": "UserPromptSubmit", "model": "gpt-5.6-luna",
                             "prompt": "Implement a bounded endpoint with targeted unit tests."})
@@ -748,6 +771,7 @@ class ObservedSpawnContractTests(unittest.TestCase):
                 records.extend([
                     {"payload": {"type": "function_call", "name": "spawn_agent", "namespace": "collaboration",
                                  "call_id": "spawn-1", "arguments": json.dumps(arguments)}},
+                    self._current_nested_activity("spawn-1", "real-child") if current_nested else
                     {"payload": {"type": "sub_agent_activity", "event_id": "spawn-1",
                                  "agent_thread_id": "real-child", "kind": "started"}},
                 ])
@@ -804,6 +828,162 @@ class ObservedSpawnContractTests(unittest.TestCase):
         receipt = _capability_receipt("gpt-5.6-terra")
         self.assertTrue(receipt["spawn_contract_valid"])
         self.assertEqual(child["spawn_call_key"], receipt["spawn_call_key"])
+
+    def test_current_nested_activity_binds_exact_valid_spawn(self) -> None:
+        args = router_hook.spawn_compat.build_arguments(
+            model="gpt-5.6-terra", effort="medium", task_name="bounded", message="Inspect only.",
+        )
+        state, _ = self._run_child(args, current_nested=True)
+        child = state["agents"]["real-child"]
+        self.assertTrue(child["spawn_contract_valid"])
+        self.assertEqual("direct:spawn-1", child["spawn_call_key"])
+        self.assertEqual("COMPLETE", state["status"])
+
+    def test_current_nested_activity_keeps_invalid_contract_noncompliant(self) -> None:
+        args = router_hook.spawn_compat.build_arguments(
+            model="gpt-5.6-terra", effort="medium", task_name="bounded", message="Inspect only.",
+        )
+        state, _ = self._run_child({**args, "fork_turns": "all"}, current_nested=True)
+        child = state["agents"]["real-child"]
+        self.assertFalse(child["spawn_contract_valid"])
+        self.assertIn("invalid_fork_turns", child["spawn_contract_reasons"])
+        self.assertFalse(child["receipt_recorded"])
+        self.assertEqual("FAILED_OPEN", state["status"])
+
+    def test_multiple_current_nested_children_bind_only_by_exact_call_id(self) -> None:
+        base = {"session_id": "observed-contract", "turn_id": "parent"}
+        router_hook.handle({
+            **base, "hook_event_name": "UserPromptSubmit", "model": "gpt-5.6-luna",
+            "prompt": "Research two independent APIs in parallel and recommend an architecture.",
+        })
+        state = json.loads((Path(self.temp.name) / "observed-contract--parent.json").read_text())
+        context = router_hook._subagent_scan_context(state)
+        self.assertIsNotNone(context)
+        for suffix in ("a", "b"):
+            args = router_hook.spawn_compat.build_arguments(
+                model="gpt-5.6-terra", effort="medium", task_name=f"bounded-{suffix}",
+                message=f"Inspect source {suffix} only.",
+            )
+            records = [
+                {"payload": {"type": "function_call", "name": "spawn_agent", "namespace": "collaboration",
+                             "call_id": f"spawn-{suffix}", "arguments": json.dumps(args),
+                             "internal_chat_message_metadata_passthrough": {"turn_id": "parent"}}},
+                self._current_nested_activity(f"spawn-{suffix}", f"child-{suffix}"),
+            ]
+            for record in records:
+                router_hook._consume_subagent_record(record, state, context)
+        router_hook._bind_spawn_contract(state, "child-a", context["agent_contracts"]["child-a"])
+        router_hook._bind_spawn_contract(state, "child-b", context["agent_contracts"]["child-b"])
+        self.assertEqual("direct:spawn-a", state["agents"]["child-a"]["spawn_call_key"])
+        self.assertEqual("direct:spawn-b", state["agents"]["child-b"]["spawn_call_key"])
+        self.assertTrue(state["agents"]["child-a"]["spawn_contract_valid"])
+        self.assertTrue(state["agents"]["child-b"]["spawn_contract_valid"])
+
+    def test_current_nested_wrapper_binds_one_statically_observed_spawn(self) -> None:
+        base = {"session_id": "observed-contract", "turn_id": "parent"}
+        router_hook.handle({
+            **base, "hook_event_name": "UserPromptSubmit", "model": "gpt-5.6-luna",
+            "prompt": "Implement a bounded endpoint with targeted unit tests.",
+        })
+        state = json.loads((Path(self.temp.name) / "observed-contract--parent.json").read_text())
+        context = router_hook._subagent_scan_context(state)
+        self.assertIsNotNone(context)
+        args = router_hook.spawn_compat.build_arguments(
+            model="gpt-5.6-terra", effort="medium", task_name="bounded", message="Inspect only.",
+        )
+        records = [
+            {"payload": {"type": "custom_tool_call", "name": "exec", "call_id": "wrapper-1",
+                         "input": "text(await tools.multi_agent_v1__spawn_agent(" + json.dumps(args) + "));",
+                         "internal_chat_message_metadata_passthrough": {"turn_id": "parent"}}},
+            self._current_nested_activity("wrapper-1", "wrapped-child"),
+        ]
+        for record in records:
+            router_hook._consume_subagent_record(record, state, context)
+        router_hook._bind_spawn_contract(
+            state, "wrapped-child", context["agent_contracts"]["wrapped-child"],
+        )
+        self.assertTrue(state["agents"]["wrapped-child"]["spawn_contract_valid"])
+        self.assertEqual("nested:wrapper-1:0", state["agents"]["wrapped-child"]["spawn_call_key"])
+
+    def test_current_nested_activity_replay_is_idempotent_and_tracks_completion(self) -> None:
+        base = {"session_id": "observed-contract", "turn_id": "parent"}
+        router_hook.handle({
+            **base, "hook_event_name": "UserPromptSubmit", "model": "gpt-5.6-luna",
+            "prompt": "Implement a bounded endpoint with targeted unit tests.",
+        })
+        state = json.loads((Path(self.temp.name) / "observed-contract--parent.json").read_text())
+        context = router_hook._subagent_scan_context(state)
+        self.assertIsNotNone(context)
+        args = router_hook.spawn_compat.build_arguments(
+            model="gpt-5.6-terra", effort="medium", task_name="bounded", message="Inspect only.",
+        )
+        call = {"payload": {"type": "function_call", "name": "spawn_agent", "namespace": "collaboration",
+                            "call_id": "spawn-1", "arguments": json.dumps(args),
+                            "internal_chat_message_metadata_passthrough": {"turn_id": "parent"}}}
+        started = self._current_nested_activity("spawn-1", "real-child")
+        completed = self._current_nested_activity(
+            "subagent-completed-opaque", "real-child", kind="completed",
+        )
+        for record in (call, started, started, completed, completed):
+            router_hook._consume_subagent_record(record, state, context)
+        self.assertEqual(["direct:spawn-1"], context["agent_contracts"]["real-child"])
+        self.assertEqual({"real-child"}, context["completed_ids"])
+
+    def test_current_nested_activity_without_exact_linkage_remains_unproven(self) -> None:
+        base = {"session_id": "observed-contract", "turn_id": "parent"}
+        router_hook.handle({
+            **base, "hook_event_name": "UserPromptSubmit", "model": "gpt-5.6-luna",
+            "prompt": "Implement a bounded endpoint with targeted unit tests.",
+        })
+        state = json.loads((Path(self.temp.name) / "observed-contract--parent.json").read_text())
+        context = router_hook._subagent_scan_context(state)
+        self.assertIsNotNone(context)
+        consumed = router_hook._consume_subagent_record(
+            self._current_nested_activity("missing-call", "unlinked-child"), state, context,
+        )
+        self.assertFalse(consumed)
+        self.assertNotIn("unlinked-child", context["agent_contracts"])
+
+    def test_current_nested_activity_contradiction_fails_closed(self) -> None:
+        base = {"session_id": "observed-contract", "turn_id": "parent"}
+        router_hook.handle({
+            **base, "hook_event_name": "UserPromptSubmit", "model": "gpt-5.6-luna",
+            "prompt": "Implement a bounded endpoint with targeted unit tests.",
+        })
+        state = json.loads((Path(self.temp.name) / "observed-contract--parent.json").read_text())
+        context = router_hook._subagent_scan_context(state)
+        self.assertIsNotNone(context)
+        args = router_hook.spawn_compat.build_arguments(
+            model="gpt-5.6-terra", effort="medium", task_name="bounded", message="Inspect only.",
+        )
+        records = [
+            {"payload": {"type": "function_call", "name": "spawn_agent", "namespace": "collaboration",
+                         "call_id": "spawn-1", "arguments": json.dumps(args),
+                         "internal_chat_message_metadata_passthrough": {"turn_id": "parent"}}},
+            self._current_nested_activity("spawn-1", "first-child"),
+            self._current_nested_activity("spawn-1", "other-child"),
+        ]
+        for record in records:
+            router_hook._consume_subagent_record(record, state, context)
+        for agent_id in ("first-child", "other-child"):
+            router_hook._bind_spawn_contract(state, agent_id, context["agent_contracts"][agent_id])
+        self.assertFalse(router_hook._spawn_contract_compliant(state, "first-child"))
+        self.assertFalse(router_hook._spawn_contract_compliant(state, "other-child"))
+
+    def test_current_nested_activity_requires_exact_parent_turn(self) -> None:
+        base = {"session_id": "observed-contract", "turn_id": "parent"}
+        router_hook.handle({
+            **base, "hook_event_name": "UserPromptSubmit", "model": "gpt-5.6-luna",
+            "prompt": "Implement a bounded endpoint with targeted unit tests.",
+        })
+        state = json.loads((Path(self.temp.name) / "observed-contract--parent.json").read_text())
+        context = router_hook._subagent_scan_context(state)
+        self.assertIsNotNone(context)
+        self.assertFalse(router_hook._consume_subagent_record(
+            self._current_nested_activity("spawn-1", "wrong-turn-child", turn_id="other-turn"),
+            state, context,
+        ))
+        self.assertNotIn("wrong-turn-child", context["agent_contracts"])
 
     def test_child_flags_without_call_specific_evidence_never_issue_receipts(self) -> None:
         args = router_hook.spawn_compat.build_arguments(model="gpt-5.6-terra", effort="medium",

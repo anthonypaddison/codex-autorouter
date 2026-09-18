@@ -3199,6 +3199,35 @@ def _collaboration_spawn(payload: dict[str, Any]) -> tuple[str, str, bool, dict[
     return role, call_id, "service_tier" in arguments, spawn_compat.validate_arguments(arguments)
 
 
+def _subagent_activity(
+    payload: dict[str, Any], state: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Normalize supported lifecycle records without weakening exact-turn binding."""
+    if payload.get("type") == "sub_agent_activity":
+        return {**payload, "kind": payload.get("kind") or "started"}
+    if payload.get("type") != "item_completed":
+        return None
+    item = payload.get("item")
+    if not isinstance(item, dict) or item.get("type") != "SubAgentActivity":
+        return None
+    # Current Codex lifecycle records carry authoritative parent identities on
+    # the item wrapper rather than internal_chat_message_metadata_passthrough.
+    if (
+        not payload.get("thread_id")
+        or str(payload.get("thread_id")) != str(state.get("session_id"))
+        or not payload.get("turn_id")
+        or str(payload.get("turn_id")) != str(state.get("turn_id"))
+    ):
+        return None
+    return {
+        "type": "sub_agent_activity",
+        "event_id": item.get("id"),
+        "agent_thread_id": item.get("agent_thread_id"),
+        "agent_path": item.get("agent_path"),
+        "kind": item.get("kind"),
+    }
+
+
 def _remember_spawn_contract(state: dict[str, Any], key: str, observation: dict[str, Any]) -> None:
     records = state.setdefault("spawn_contracts", {})
     if key not in records and len(records) >= TRANSCRIPT_MAX_CALLS:
@@ -3635,21 +3664,30 @@ def _consume_subagent_record(
             context["seen_spawn_keys"].add(key)
             _record_scanned_spawn(state, context, role, tier_overridden)
         return True
-    if payload.get("type") == "sub_agent_activity":
-        call_id = _bounded_transcript_key(payload.get("event_id"))
-        agent_id = _bounded_transcript_key(payload.get("agent_thread_id"))
+    activity = _subagent_activity(payload, state)
+    if activity is not None:
+        call_id = _bounded_transcript_key(activity.get("event_id"))
+        agent_id = _bounded_transcript_key(activity.get("agent_thread_id"))
+        kind = _bounded_transcript_key(activity.get("kind")).lower()
+        keys = context["contract_calls"].get(call_id)
         role = context["spawn_calls"].get(call_id)
-        if call_id in context["spawn_calls"] and agent_id:
+        if role is None and isinstance(keys, list) and len(keys) == 1:
+            role = state.get("spawn_contracts", {}).get(keys[0], {}).get("role")
+        if kind == "started" and isinstance(keys, list) and agent_id:
             if agent_id not in context["agent_roles"] and len(context["agent_roles"]) >= TRANSCRIPT_MAX_AGENTS:
                 raise _TranscriptIncomplete
             context["agent_roles"][agent_id] = role or context["agent_roles"].get(agent_id, "")
-            _link_spawn_contract(context, agent_id, context["contract_calls"][call_id])
-            path_name = _bounded_transcript_key(payload.get("agent_path"))
+            _link_spawn_contract(context, agent_id, keys)
+            path_name = _bounded_transcript_key(activity.get("agent_path"))
             if path_name:
                 if path_name not in context["agent_paths"] and len(context["agent_paths"]) >= TRANSCRIPT_MAX_AGENTS:
                     raise _TranscriptIncomplete
                 context["agent_paths"][path_name] = agent_id
             return True
+        if agent_id in context["agent_roles"]:
+            if kind == "completed":
+                context["completed_ids"].add(agent_id)
+            return kind in {"completed", "interacted", "interrupted"}
         return False
     payload_type = str(payload.get("type") or "")
     if payload_type not in {"custom_tool_call", "custom_tool_call_output", "function_call_output", "message", "agent_message"}:

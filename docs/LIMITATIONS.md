@@ -74,7 +74,7 @@ Some Codex builds replay a `Stop` or `SubagentStop` block reason as a persisted 
 
 ## Supported surfaces and real-host coverage
 
-Current Codex automation-triggered turns do not dispatch Autorouter executable plugin hooks and are outside Autorouter routing coverage. Their root model is configured by the Codex host/task, not Autorouter. Automation activity must therefore be excluded from Autorouter-attributable routing and savings claims. No unsupported workaround is provided; this boundary can be revisited if Codex exposes first-class automation hook execution.
+Automation hook delivery is host/version dependent. The currently observed Codex Desktop host dispatches Autorouter hook context and ledgers for automation-triggered turns, disproving the earlier blanket assumption that automation hooks never run. Autorouter has not yet validated automation routing semantics as a supported savings surface, so automation activity remains excluded from Autorouter-attributable routing and savings claims. Operators must not infer either hook absence or savings coverage without host-specific evidence.
 
 Full plugin mode targets Codex Desktop and CLI. Codex IDE extensions do not currently support plugins; IDE use is therefore limited to the standalone skill's explicit `ADVISORY` mode without hook enforcement. CI can exercise macOS, Linux, and Windows semantics, but public stable release still requires native acceptance on supported Desktop and CLI hosts, including hook trust and filesystem behavior.
 
