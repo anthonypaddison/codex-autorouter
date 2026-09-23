@@ -19,9 +19,12 @@ PLUGIN_VERSION = "1.2.3"
 PLUGIN_IDENTITY = "sha256:test-plugin-candidate"
 CURRENT_SESSION_ID = "current-task"
 NOW = int(time.time())
+SOL_BALANCED_MEDIUM = check_hooks.model_policy.capability_key("gpt-6-sol", "balanced", "medium")
+SOL_HIGH_HIGH = check_hooks.model_policy.capability_key("gpt-6-sol", "high", "high")
+ASTRA_FRONTIER_MEDIUM = check_hooks.model_policy.capability_key("gpt-6-astra", "frontier", "medium")
 
 
-def _effective(*, model: str = "gpt-5.6-luna", agents_enabled: bool = True) -> dict[str, object]:
+def _effective(*, model: str = "gpt-6-luna", agents_enabled: bool = True) -> dict[str, object]:
     return check_hooks._effective_readiness(
         {
             "config": {
@@ -38,7 +41,7 @@ def _effective(*, model: str = "gpt-5.6-luna", agents_enabled: bool = True) -> d
 def _write_evidence(
     root: Path,
     *,
-    root_model: str = "gpt-5.6-luna",
+    root_model: str = "gpt-6-luna",
     runtime_version: str | None = "0.88.0",
     runtime_build: str | None = "desktop-88",
     host_type: str | None = "Desktop",
@@ -66,8 +69,9 @@ def _write_evidence(
         "timestamp": observation_timestamp,
     }
     receipt = {
-        "schema_version": 1,
+        "schema_version": 3,
         "capability_signature": "direct-model-spawn-v1",
+        "policy_revision": check_hooks.model_policy.POLICY_REVISION,
         "plugin_version": PLUGIN_VERSION,
         "plugin_identity": receipt_plugin_identity or plugin_identity,
         "runtime_version": runtime_version if receipt_version is None else receipt_version,
@@ -75,46 +79,63 @@ def _write_evidence(
         "host_type": host_type,
         "runtime_identity_source": "hook_payload" if any((runtime_version, runtime_build, host_type)) else "unavailable_from_current_codex_hook_surface",
         "platform": "darwin",
-        "observed_child_model": "gpt-5.6-terra",
+        "agent_id": "00000000-0000-7000-8000-000000000001",
+        "spawn_call_key": "call:test",
+        "parent_session_id": session_id,
+        "parent_turn_id": "root-turn",
+        "child_turn_id": "child-turn",
+        "requested_child_model": "gpt-6-sol",
+        "observed_child_model": "gpt-6-sol",
+        "route_profile": "balanced",
+        "capability_key": SOL_BALANCED_MEDIUM,
         "effort_intent": "medium",
+        "spawn_contract_valid": True,
+        "lifecycle_complete": True,
+        "completion_structured": True,
+        "ambiguity_clear": True,
+        "model_evidence_consistent": True,
+        "attestation_matched": True,
+        "profile_policy_valid": True,
         "timestamp": receipt_timestamp,
     }
     (root / "root-observation-v1.json").write_text(json.dumps(observation), encoding="utf-8")
     observations = root / "root-observations-v1"
     observations.mkdir()
     (observations / f"{session_id}.json").write_text(json.dumps(observation), encoding="utf-8")
-    (root / "capability-v1.json").write_text(json.dumps(receipt), encoding="utf-8")
+    (root / "capability-v3.json").write_text(json.dumps({
+        "schema_version": 3,
+        "capability_signature": "direct-model-spawn-v1",
+        "policy_revision": check_hooks.model_policy.POLICY_REVISION,
+        "capabilities": {SOL_BALANCED_MEDIUM: receipt},
+    }), encoding="utf-8")
 
 
-def _write_model_keyed_evidence(root: Path, models: tuple[str, ...]) -> None:
+def _write_capability_evidence(root: Path, capabilities: tuple[str, ...]) -> None:
     _write_evidence(root)
-    legacy = root / "capability-v1.json"
-    receipt = json.loads(legacy.read_text(encoding="utf-8"))
-    legacy.unlink()
-    capabilities = {}
-    for model in models:
-        capabilities[model] = {
-            **receipt,
-            "schema_version": 2,
-            "agent_id": "00000000-0000-7000-8000-000000000001",
-            "spawn_call_key": "call:test",
-            "spawn_contract_valid": True,
-            "lifecycle_complete": True,
-            "completion_structured": True,
-            "ambiguity_clear": True,
-            "model_evidence_consistent": True,
-            "attestation_matched": True,
-            "parent_session_id": CURRENT_SESSION_ID,
-            "parent_turn_id": "root-turn",
-            "child_turn_id": "child-turn",
+    path = root / "capability-v3.json"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    base = next(iter(document["capabilities"].values()))
+    document["capabilities"] = {}
+    for key in capabilities:
+        model, profile, effort, _policy_revision = key.split("|")
+        document["capabilities"][key] = {
+            **base,
             "requested_child_model": model,
             "observed_child_model": model,
-            "effort_intent": "medium",
+            "route_profile": profile,
+            "capability_key": key,
+            "effort_intent": effort,
         }
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+
+def _write_legacy_model_keyed_evidence(root: Path, model: str) -> None:
+    _write_evidence(root)
+    (root / "capability-v3.json").unlink()
     (root / "capability-v2.json").write_text(json.dumps({
         "schema_version": 2,
         "capability_signature": "direct-model-spawn-v1",
-        "capabilities": capabilities,
+        "capabilities": {model: {"schema_version": 2, "observed_child_model": model}},
     }), encoding="utf-8")
 
 
@@ -219,96 +240,94 @@ class RoutingHealthTests(unittest.TestCase):
         self.assertEqual("CHEAP_ROOT", health["current_task_root_state"])
         self.assertEqual("ESCALATION PREVIOUSLY OBSERVED", health["historical_escalation_state"])
         self.assertEqual("CURRENT RUNTIME ESCALATION CAPABLE", health["current_runtime_capability_state"])
-        self.assertEqual("CURRENT", health["capability_status"]["gpt-5.6-terra"])
-        self.assertEqual("UNPROVEN", health["capability_status"]["gpt-5.6-sol"])
-        self.assertEqual("UNPROVEN", health["capability_status"]["gpt-6-astra"])
+        self.assertEqual("CURRENT", health["capability_status"][SOL_BALANCED_MEDIUM])
+        self.assertEqual("UNPROVEN", health["capability_status"][SOL_HIGH_HIGH])
+        self.assertEqual("UNPROVEN", health["capability_status"][ASTRA_FRONTIER_MEDIUM])
 
-    def test_model_keyed_receipts_prove_only_their_exact_capability_tier(self) -> None:
+    def test_profile_keyed_receipts_prove_only_their_exact_capability_tier(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             data = Path(raw)
-            _write_model_keyed_evidence(data, ("gpt-5.6-sol",))
+            _write_capability_evidence(data, (SOL_HIGH_HIGH,))
             health = _health(data)
-        self.assertEqual("UNPROVEN", health["capability_status"]["gpt-5.6-terra"])
-        self.assertEqual("CURRENT", health["capability_status"]["gpt-5.6-sol"])
-        self.assertEqual("UNPROVEN", health["capability_status"]["gpt-6-astra"])
+        self.assertEqual("UNPROVEN", health["capability_status"][SOL_BALANCED_MEDIUM])
+        self.assertEqual("CURRENT", health["capability_status"][SOL_HIGH_HIGH])
+        self.assertEqual("UNPROVEN", health["capability_status"][ASTRA_FRONTIER_MEDIUM])
         self.assertEqual("READY", health["status"])
 
-    def test_model_keyed_receipt_requires_recorded_execution_gates(self) -> None:
+    def test_profile_keyed_receipt_requires_recorded_execution_gates(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             data = Path(raw)
-            _write_model_keyed_evidence(data, ("gpt-6-astra",))
-            path = data / "capability-v2.json"
+            _write_capability_evidence(data, (ASTRA_FRONTIER_MEDIUM,))
+            path = data / "capability-v3.json"
             document = json.loads(path.read_text(encoding="utf-8"))
-            document["capabilities"]["gpt-6-astra"].pop("agent_id", None)
+            document["capabilities"][ASTRA_FRONTIER_MEDIUM].pop("agent_id", None)
             path.write_text(json.dumps(document), encoding="utf-8")
             health = _health(data)
-        self.assertEqual("INCOMPATIBLE", health["capability_status"]["gpt-6-astra"])
+        self.assertEqual("INCOMPATIBLE", health["capability_status"][ASTRA_FRONTIER_MEDIUM])
         self.assertEqual("DEGRADED", health["status"])
 
-    def test_model_keyed_document_cannot_smuggle_a_legacy_receipt(self) -> None:
+    def test_historical_gpt56_receipt_cannot_satisfy_current_gpt6_capability(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             data = Path(raw)
-            _write_model_keyed_evidence(data, ("gpt-6-astra",))
-            path = data / "capability-v2.json"
-            document = json.loads(path.read_text(encoding="utf-8"))
-            document["capabilities"]["gpt-6-astra"]["schema_version"] = 1
-            path.write_text(json.dumps(document), encoding="utf-8")
+            _write_legacy_model_keyed_evidence(data, "gpt-5.6-sol")
             health = _health(data)
-        self.assertEqual("INCOMPATIBLE", health["capability_status"]["gpt-6-astra"])
+        self.assertEqual("UNPROVEN", health["capability_status"][SOL_BALANCED_MEDIUM])
+        self.assertEqual("UNPROVEN", health["capability_status"][ASTRA_FRONTIER_MEDIUM])
         self.assertEqual("DEGRADED", health["status"])
+        self.assertEqual("ESCALATION PREVIOUSLY OBSERVED", health["historical_escalation_state"])
 
     def test_astra_receipt_is_independent_and_astra_root_is_savings_degraded(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             data = Path(raw)
-            _write_model_keyed_evidence(data, ("gpt-6-astra",))
-            health = _health(data, effective=_effective(model="gpt-5.6-luna"))
-            self.assertEqual("CURRENT", health["capability_status"]["gpt-6-astra"])
-            self.assertEqual("UNPROVEN", health["capability_status"]["gpt-5.6-sol"])
+            _write_capability_evidence(data, (ASTRA_FRONTIER_MEDIUM,))
+            health = _health(data, effective=_effective(model="gpt-6-luna"))
+            self.assertEqual("CURRENT", health["capability_status"][ASTRA_FRONTIER_MEDIUM])
+            self.assertEqual("UNPROVEN", health["capability_status"][SOL_BALANCED_MEDIUM])
 
             observation_path = data / "root-observations-v1" / f"{CURRENT_SESSION_ID}.json"
             observation = json.loads(observation_path.read_text(encoding="utf-8"))
             observation["root_model"] = "gpt-6-astra"
             observation_path.write_text(json.dumps(observation), encoding="utf-8")
-            health = _health(data, effective=_effective(model="gpt-5.6-luna"))
+            health = _health(data, effective=_effective(model="gpt-6-luna"))
         self.assertEqual("DEGRADED", health["status"])
         self.assertEqual("DEGRADED_NON_LUNA", health["current_task_root_state"])
-        self.assertEqual("CURRENT", health["capability_status"]["gpt-6-astra"])
+        self.assertEqual("CURRENT", health["capability_status"][ASTRA_FRONTIER_MEDIUM])
 
     def test_stale_or_incompatible_astra_does_not_erase_current_sol_capability(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             data = Path(raw)
-            _write_model_keyed_evidence(data, ("gpt-5.6-sol", "gpt-6-astra"))
-            path = data / "capability-v2.json"
+            _write_capability_evidence(data, (SOL_BALANCED_MEDIUM, ASTRA_FRONTIER_MEDIUM))
+            path = data / "capability-v3.json"
             document = json.loads(path.read_text(encoding="utf-8"))
-            astra = document["capabilities"]["gpt-6-astra"]
+            astra = document["capabilities"][ASTRA_FRONTIER_MEDIUM]
             astra["timestamp"] = NOW - check_hooks.CAPABILITY_MAX_AGE_SECONDS - 1
             path.write_text(json.dumps(document), encoding="utf-8")
             health = _health(data)
             self.assertEqual("READY", health["status"])
-            self.assertEqual("CURRENT", health["capability_status"]["gpt-5.6-sol"])
-            self.assertEqual("STALE", health["capability_status"]["gpt-6-astra"])
+            self.assertEqual("CURRENT", health["capability_status"][SOL_BALANCED_MEDIUM])
+            self.assertEqual("STALE", health["capability_status"][ASTRA_FRONTIER_MEDIUM])
 
             astra["timestamp"] = NOW - 30
             astra["plugin_identity"] = "sha256:other-candidate"
             path.write_text(json.dumps(document), encoding="utf-8")
             health = _health(data)
         self.assertEqual("READY", health["status"])
-        self.assertEqual("CURRENT", health["capability_status"]["gpt-5.6-sol"])
-        self.assertEqual("INCOMPATIBLE", health["capability_status"]["gpt-6-astra"])
+        self.assertEqual("CURRENT", health["capability_status"][SOL_BALANCED_MEDIUM])
+        self.assertEqual("INCOMPATIBLE", health["capability_status"][ASTRA_FRONTIER_MEDIUM])
 
     def test_authoritative_non_luna_hook_observation_overrides_luna_config(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             data = Path(raw)
-            _write_evidence(data, root_model="gpt-5.6-sol")
-            health = _health(data, effective=_effective(model="gpt-5.6-luna"))
+            _write_evidence(data, root_model="gpt-6-sol")
+            health = _health(data, effective=_effective(model="gpt-6-luna"))
         self.assertEqual("DEGRADED", health["status"])
-        self.assertEqual("gpt-5.6-sol", health["root_model"])
+        self.assertEqual("gpt-6-sol", health["root_model"])
         self.assertIn("credit-saving", " ".join(health["reasons"]))
 
     def test_config_model_is_supporting_evidence_not_authoritative_turn_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             data = Path(raw) / "absent-data-root"
-            health = _health(data, effective=_effective(model="gpt-5.6-luna"))
+            health = _health(data, effective=_effective(model="gpt-6-luna"))
             self.assertFalse(data.exists())
         self.assertEqual("DEGRADED", health["status"])
         self.assertEqual("effective_config", health["root_model_source"])
@@ -317,7 +336,7 @@ class RoutingHealthTests(unittest.TestCase):
     def test_non_luna_config_without_a_task_observation_is_not_called_the_active_root(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             data = Path(raw) / "absent-data-root"
-            health = _health(data, effective=_effective(model="gpt-5.6-terra"))
+            health = _health(data, effective=_effective(model="gpt-6-sol"))
         reasons = " ".join(health["reasons"])
         self.assertEqual("DEGRADED", health["status"])
         self.assertEqual("UNKNOWN", health["current_task_root_state"])
@@ -358,9 +377,9 @@ class RoutingHealthTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw:
             data = Path(raw)
             _write_evidence(data)
-            receipt_path = data / "capability-v1.json"
+            receipt_path = data / "capability-v3.json"
             receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-            receipt["runtime_version"] = None
+            receipt["capabilities"][SOL_BALANCED_MEDIUM]["runtime_version"] = None
             receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
             health = _health(data)
         self.assertEqual("DEGRADED", health["status"])
@@ -369,12 +388,12 @@ class RoutingHealthTests(unittest.TestCase):
     def test_unrelated_luna_summary_cannot_override_current_non_luna_task(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             data = Path(raw)
-            _write_evidence(data, root_model="gpt-5.6-sol")
+            _write_evidence(data, root_model="gpt-6-sol")
             global_observation = json.loads((data / "root-observation-v1.json").read_text(encoding="utf-8"))
             global_observation.update({
                 "session_id": "unrelated-task",
                 "turn_id": "newer-luna-turn",
-                "root_model": "gpt-5.6-luna",
+                "root_model": "gpt-6-luna",
                 "runtime_version": None,
                 "runtime_build": None,
                 "host_type": None,
@@ -383,7 +402,7 @@ class RoutingHealthTests(unittest.TestCase):
             (data / "root-observation-v1.json").write_text(json.dumps(global_observation), encoding="utf-8")
             health = _health(data)
         self.assertEqual("DEGRADED", health["status"])
-        self.assertEqual("gpt-5.6-sol", health["root_model"])
+        self.assertEqual("gpt-6-sol", health["root_model"])
         self.assertEqual("DEGRADED_NON_LUNA", health["current_task_root_state"])
 
     def test_global_summary_without_current_task_context_never_claims_ready(self) -> None:

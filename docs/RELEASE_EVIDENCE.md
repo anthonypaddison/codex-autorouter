@@ -13,9 +13,9 @@ Record exact command output and commit identifiers here before checking the matc
 - Release-contract tests cover fork metadata, immutable planned ref, retained Alchemist attribution, cheap-root documentation, and the future tag/archive/SHA256 procedure.
 - The release validator requires manifest `0.2.0`, fork URLs, privacy URL pinned to `v0.2.0`, known optional legacy assets only, and the release procedure. It rejects moving `main`, `master`, or `HEAD` marketplace refs.
 - Normal lifecycle behaviour and health no longer depend on legacy custom-agent TOMLs. Those assets remain optional compatibility material selected only through `activate --legacy-agents`.
-- Direct Terra/Sol/Astra argument construction, schema detection, and fallback are expected to pass only through the central compatibility adapter; current automated and real-host results must be attached before release.
+- Direct GPT-6 Sol/Astra argument construction, schema detection, and fallback are expected to pass only through the central compatibility adapter; current automated and real-host results must be attached before release.
 - Hook definitions are expected to execute only the router under their own exact plugin root and fail open without sibling-cache discovery; current exact-candidate test output must be attached before release.
-- `UserPromptSubmit.model` is the required per-turn active-root evidence. Current tests must prove Luna/Terra/Sol/Astra policy, clarification without escalation for user-intent ambiguity, and `DEGRADED` health for every non-Luna turn.
+- `UserPromptSubmit.model` is the required per-turn active-root evidence. Current tests must prove GPT-6 Luna/Sol/Astra policy, clarification without escalation for user-intent ambiguity, and `DEGRADED` health for every non-Luna turn. GPT-5.6 evidence is historical/transition-only.
 - Astra evidence must prove that generic classification never selects it, explicit requests default to Medium and reject Low/Ultra, the sole automatic Sol route-up targets Medium with exact attestation, and no automatic Astra effort retry exists.
 - Capability receipts must bind plugin version, observable Codex runtime/build, host type, platform, observed child model, effort intent, capability/schema signature, and timestamp. Current tests and host runs must prove runtime invalidation and absence of automatic paid probes.
 - Status commands must be proven read-only against an absent `CODEX_HOME` tree and existing state. This cannot be inferred from implementation review alone.
@@ -29,7 +29,7 @@ No `0.2.0` Desktop or CLI row is accepted yet. Each row must follow `HOST_ACCEPT
 - exact plugin/tag/archive identity and SHA256;
 - Codex runtime/build, Desktop or CLI host, platform, and hook trust;
 - hook-observed Luna root for the efficient path;
-- a genuine successful Terra and Sol escalation through the direct compatibility adapter, plus a separately bounded Astra gate check;
+- a genuine successful Sol escalation through the direct compatibility adapter, plus a separately bounded Astra gate check;
 - a matching `READY` receipt followed by proven `DEGRADED` behaviour after runtime/build identity changes;
 - proof that health/status did not launch a paid child;
 - bounded Luna Low evidence and, only if Low is unreliable, a controlled Luna Medium comparison;

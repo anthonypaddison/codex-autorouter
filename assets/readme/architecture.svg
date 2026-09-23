@@ -59,7 +59,7 @@
       <text x="28" y="79" fill="#F3F6FA" font-size="24" font-weight="700">Bounded plan</text>
       <g transform="translate(28 105)">
         <circle cx="10" cy="10" r="8" fill="#A78BFA"/><text x="30" y="16" fill="#C9C1DD" font-size="16">Luna — mechanical</text>
-        <circle cx="10" cy="52" r="8" fill="#48D7E8"/><text x="30" y="58" fill="#B8CFD2" font-size="16">Terra — build + reason</text>
+        <circle cx="10" cy="52" r="8" fill="#48D7E8"/><text x="30" y="58" fill="#B8CFD2" font-size="16">Sol — build + reason</text>
         <circle cx="10" cy="94" r="8" fill="#FDBA4A"/><text x="30" y="100" fill="#D8C5A8" font-size="16">Sol — deep execution</text>
         <circle cx="10" cy="136" r="8" fill="#F472B6"/><text x="30" y="142" fill="#E8C1DC" font-size="16">Astra — gated frontier</text>
       </g>

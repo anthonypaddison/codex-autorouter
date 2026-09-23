@@ -8,16 +8,16 @@ From the exact installed plugin root, run:
 python3 scripts/check_hooks.py
 ```
 
-- `READY` means this task's latest actual parent turn observed a Luna root and at least one model-keyed non-stale capability receipt proves a genuine successful Terra, Sol, or Astra escalation for the same plugin candidate and versioned Codex runtime/build.
+- `READY` means this task's latest actual parent turn observed a GPT-6 Luna root and at least one model-keyed non-stale capability receipt proves a genuine successful GPT-6 Sol or Astra escalation for the same plugin candidate and versioned Codex runtime/build.
 - `DEGRADED` means Autorouter can still operate but the active root is not Luna, the runtime/build changed, or current escalation capability has not yet been proven. A non-Luna root substantially reduces credit-saving behaviour.
 - `UNAVAILABLE` means the supported hook or direct child-routing path cannot operate.
 
 `UserPromptSubmit.model` is the authoritative active root for every actual turn. App Server and config evidence may explain the report, but cannot override the hook's active-model evidence.
 
-If the root is not Luna, select GPT-5.6 Luna in Desktop before starting a new task, or set these personal top-level `config.toml` values:
+If the root is not Luna, select GPT-6 Luna in Desktop before starting a new task, or set these personal top-level `config.toml` values:
 
 ```toml
-model = "gpt-5.6-luna"
+model = "gpt-6-luna"
 model_reasoning_effort = "low"
 ```
 
@@ -25,11 +25,11 @@ Autorouter never makes this change itself and never claims to have configured Lu
 
 ## A Codex update changed `READY` to `DEGRADED`
 
-This is expected when observable Codex runtime/build/host identity or plugin content identity no longer matches the capability receipt. A receipt is created only after an expected direct child is observed on the exact requested Terra, Sol, or Astra model and the same `agent_id` returns a successful structured completion. The exact bounded child transcript may provide authoritative child model, effort, and turn evidence when Desktop omits the child prompt hook. It binds one exact model tier plus plugin content identity and version, Codex runtime/build where exposed, Desktop or CLI host type, platform, effort intent, capability/schema signature, and timestamp.
+This is expected when observable Codex runtime/build/host identity or plugin content identity no longer matches the capability receipt. A receipt is created only after an expected direct child is observed on the exact requested GPT-6 Sol or Astra model and the same `agent_id` returns a successful structured completion. The exact bounded child transcript may provide authoritative child model, effort, and turn evidence when Desktop omits the child prompt hook. It binds one exact model tier plus plugin content identity and version, Codex runtime/build where exposed, Desktop or CLI host type, platform, effort intent, capability/schema signature, and timestamp.
 
 If Codex exposes no authoritative versioned runtime/build field, the report says `DEGRADED — runtime identity unavailable; capability compatibility unproven`. Host type and platform alone are insufficient, and null never matches null. A valid identity-null receipt remains labelled `ESCALATION PREVIOUSLY OBSERVED`, but it cannot establish current-runtime capability. A receipt older than 30 days is likewise retained as history but cannot establish `READY`.
 
-Continue normal work. A genuine successful Terra, Sol, or Astra escalation can create a fresh receipt for that exact tier in the current observable environment. If the host still exposes no versioned runtime/build identifier, health remains conservatively `DEGRADED` even after that historical evidence is refreshed. The status and health commands never launch an automatic paid probe.
+Continue normal work. A genuine successful GPT-6 Sol or Astra escalation can create a fresh receipt for that exact tier in the current observable environment. If the host still exposes no versioned runtime/build identifier, health remains conservatively `DEGRADED` even after that historical evidence is refreshed. The status and health commands never launch an automatic paid probe.
 
 ## Status says `UNAVAILABLE`
 

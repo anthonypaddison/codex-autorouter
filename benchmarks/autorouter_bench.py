@@ -364,7 +364,7 @@ EXPECTED_PLANS = {
     "webhook_race": {
         "token-saver": ("single_delegate", {"gpt56_terra_worker": 1}),
         "balanced": ("single_delegate", {"gpt56_terra_deep": 1}),
-        "max-quality": ("evidence_then_owner", {"gpt56_terra_worker": 2, "gpt56_sol_owner": 1}),
+        "max-quality": ("evidence_then_owner", {"gpt56_terra_worker": 2, "gpt56_sol_deep": 1}),
     },
     "sqlite_migration": {
         "token-saver": ("single_delegate", {"gpt56_terra_deep": 1}),
@@ -419,8 +419,15 @@ def route_audit(strict: bool = False) -> int:
     router = _load_router()
     rows = []
     for name, prompt, expected_route, expected_mode in ROUTE_PROBES:
-        decision = router.classify_prompt(prompt, "gpt-5.6-luna", "low", "balanced")
-        passed = decision["route"] == expected_route and decision["orchestration"]["mode"] == expected_mode
+        decision = router.classify_prompt(
+            prompt, "gpt-6-luna", "low", "balanced", enforce_active_root=True
+        )
+        expected_active_route = router._ACTIVE_ROUTE_ALIASES.get(expected_route, expected_route)
+        passed = (
+            decision["route"] == expected_active_route
+            and decision["orchestration"]["mode"] == expected_mode
+            and (decision["route"] != "current" or not decision["orchestration"]["required_agents"])
+        )
         rows.append((name, decision["route"], decision["orchestration"]["mode"], passed))
     width = max(len(row[0]) for row in rows)
     for name, route, mode, passed in rows:
@@ -1184,8 +1191,8 @@ def parser() -> argparse.ArgumentParser:
     live.add_argument("--execute", action="store_true", help="acknowledge real model execution and token use")
     live.add_argument("--trust-reviewed-hooks", action="store_true", help="acknowledge Codex hook trust bypass for the isolated run")
     live.add_argument("--codex", default="codex")
-    live.add_argument("--root-model", default="gpt-5.6-sol")
-    live.add_argument("--root-effort", choices=("low", "medium", "high", "xhigh"), default="high")
+    live.add_argument("--root-model", default="gpt-6-luna")
+    live.add_argument("--root-effort", choices=("low", "medium", "high", "xhigh"), default="low")
     live.add_argument("--service-tier", default="priority")
     live.add_argument("--timeout", type=int, default=1800)
     outsider = sub.add_parser("review", help="run the private GLM and DeepSeek blind reviewer panel")

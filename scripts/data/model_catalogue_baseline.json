@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "revision": "codex-models-0.155.0-2026-09-22.1",
+  "reviewed_at": "2026-09-22T20:07:45Z",
+  "catalogue_fetched_at": "2026-09-22T20:07:45Z",
+  "client_version": "0.155.0",
+  "models": [
+    {"id":"codex-auto-review","visibility":"hide","efforts":["high","low","max","medium","xhigh"],"service_tiers":["priority"],"upgrade_model":null,"retirement_at":null},
+    {"id":"gpt-5.5","visibility":"list","efforts":["high","low","medium","xhigh"],"service_tiers":["priority"],"upgrade_model":"gpt-5.6-sol","retirement_at":"2026-10-14T19:00:00Z"},
+    {"id":"gpt-5.6-luna","visibility":"list","efforts":["high","low","max","medium","xhigh"],"service_tiers":["priority"],"upgrade_model":"gpt-6-luna","retirement_at":null},
+    {"id":"gpt-5.6-sol","visibility":"list","efforts":["high","low","max","medium","ultra","xhigh"],"service_tiers":["priority"],"upgrade_model":"gpt-6-sol","retirement_at":null},
+    {"id":"gpt-5.6-terra","visibility":"list","efforts":["high","low","max","medium","ultra","xhigh"],"service_tiers":["priority"],"upgrade_model":"gpt-6-sol","retirement_at":null},
+    {"id":"gpt-6-astra","visibility":"list","efforts":["high","low","max","medium","ultra","xhigh"],"service_tiers":["priority"],"upgrade_model":null,"retirement_at":null},
+    {"id":"gpt-6-luna","visibility":"list","efforts":["high","low","max","medium","xhigh"],"service_tiers":["priority"],"upgrade_model":null,"retirement_at":null},
+    {"id":"gpt-6-sol","visibility":"list","efforts":["high","low","max","medium","ultra","xhigh"],"service_tiers":["priority"],"upgrade_model":null,"retirement_at":null},
+    {"id":"gpt-reserve","visibility":"hide","efforts":["high","low","max","medium","xhigh"],"service_tiers":["priority"],"upgrade_model":null,"retirement_at":null}
+  ]
+}

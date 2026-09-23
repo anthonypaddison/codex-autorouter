@@ -19,7 +19,7 @@
   "interface": {
     "displayName": "Autorouter",
     "shortDescription": "The right model and effort for every Codex task",
-    "longDescription": "Profiles each task, chooses an appropriate Luna, Terra, or Sol model and reasoning effort, exposes GPT-6 Astra only through an explicit or attested frontier gate, orchestrates bounded subagents, preserves Fast or Standard, and requires proportionate verification.",
+    "longDescription": "Profiles each task, chooses an appropriate GPT-6 Luna or Sol model and reasoning effort, exposes GPT-6 Astra only through an explicit or attested frontier gate, orchestrates bounded subagents, preserves Fast or Standard, and requires proportionate verification.",
     "developerName": "Alchemist",
     "category": "Developer Tools",
     "websiteURL": "https://github.com/anthonypaddison/Codex-Autorouter",

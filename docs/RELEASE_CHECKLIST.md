@@ -7,15 +7,15 @@ Record candidate-specific proof in `RELEASE_EVIDENCE.md`; never infer a checked 
 - [ ] Plugin manifest, immutable-ref, attribution, documentation, skill, and source-integrity validation pass.
 - [ ] Router, compatibility-adapter, lifecycle, health, standalone, benchmark, and release-contract tests pass on the supported Python/OS matrix.
 - [ ] Deterministic routing fuzzing passes without weakening high-consequence or verification gates.
-- [ ] `UserPromptSubmit.model` is authoritative in Luna, Terra, Sol, and Astra root-policy tests; config/App Server evidence never overrides it.
-- [ ] Luna stays Luna for routine work, may use Terra for normal work, and may use Sol for hard work.
-- [ ] Terra stays Terra for routine/normal work and may use Sol only for hard work.
+- [ ] `UserPromptSubmit.model` is authoritative in GPT-6 Luna, Sol, and Astra root-policy tests; config/App Server evidence never overrides it. GPT-5.6 remains historical/transition evidence only.
+- [ ] GPT-6 Luna Low stays Luna for routine work, may use GPT-6 Sol Medium for justified normal work, and may use GPT-6 Sol High for justified hard work.
+- [ ] GPT-6 Sol roots never route downward; Sol Medium may use Sol High for justified hard work and same-capability parallel work requires independent bounded justification.
 - [ ] Sol never delegates downward merely to satisfy the classifier; separately justified parallel work remains bounded.
 - [ ] Astra remains the final owner; generic severity, keywords, and Max Quality never select it.
 - [ ] Explicit Astra defaults to Medium, accepts Medium/High/Extra High/Max, and rejects Low/Ultra without substitution.
 - [ ] The only automatic Astra path is an authoritative exact-child Sol `ROUTE_UP` to Medium; insufficient evidence and automatic effort retries are rejected.
 - [ ] User-intent ambiguity asks one concise clarification without escalation; technical uncertainty in an otherwise clear task can escalate.
-- [ ] All direct Terra/Sol/Astra spawn construction, schema detection, capability handling, and fallback live behind the tested compatibility adapter.
+- [ ] All direct GPT-6 Sol/Astra spawn construction, schema detection, capability handling, and fallback live behind the tested compatibility adapter.
 - [ ] Capability receipts bind plugin version, observable Codex runtime/build, Desktop or CLI host, platform, observed child model, effort intent, schema/signature, and timestamp.
 - [ ] Runtime/build mismatch changes `READY` to `DEGRADED` and no health/status path launches an automatic paid probe.
 - [ ] Missing legacy custom-agent TOMLs do not reduce health; normal installation/activation does not install them.
@@ -30,7 +30,7 @@ Record candidate-specific proof in `RELEASE_EVIDENCE.md`; never infer a checked 
 
 Complete every row with the exact immutable marketplace snapshot or release archive. Follow `HOST_ACCEPTANCE.md` and retain the stated receipt/runtime evidence.
 
-| OS | Surface | Exact install/cache | Hook trust | Luna root | Direct Terra/Sol | Rare Astra gate | Receipt health | Result |
+| OS | Surface | Exact install/cache | Hook trust | Luna root | Direct Sol | Rare Astra gate | Receipt health | Result |
 |---|---|---:|---:|---:|---:|---:|---:|---|
 | macOS | Desktop | required | required | required | required | required | required | pending |
 | macOS | CLI | required | required | required | required | required | required | pending |

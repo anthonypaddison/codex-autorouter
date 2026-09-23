@@ -10,7 +10,7 @@ import spawn_compat
 class SpawnCompatibilityTests(unittest.TestCase):
     def test_observed_contract_requires_every_adapter_field(self) -> None:
         valid = spawn_compat.build_arguments(
-            model="gpt-5.6-terra", effort="medium", task_name="bounded", message="Inspect only.",
+            model="gpt-6-sol", effort="medium", task_name="bounded", message="Inspect only.",
         )
         validator = getattr(spawn_compat, "validate_arguments", None)
         self.assertTrue(callable(validator), "observed spawn validator is missing")
@@ -23,7 +23,7 @@ class SpawnCompatibilityTests(unittest.TestCase):
                 self.assertIn("missing_" + field, result["reasons"])
         for field, value in (
             ("fork_turns", "all"), ("task_name", " \t"), ("message", ""),
-            ("model", "gpt-5.6-luna"), ("reasoning_effort", "ultra"),
+            ("model", "gpt-6-luna"), ("reasoning_effort", "ultra"),
             ("model", []), ("reasoning_effort", {}), ("message", None),
         ):
             with self.subTest(field=field, value=value):
@@ -37,14 +37,14 @@ class SpawnCompatibilityTests(unittest.TestCase):
         observe = getattr(spawn_compat, "observe_nested_calls", None)
         self.assertTrue(callable(observe), "nested observed-call parser is missing")
         arguments = spawn_compat.build_arguments(
-            model="gpt-5.6-sol", effort="high", task_name="bounded", message="Inspect only.",
+            model="gpt-6-sol", effort="high", task_name="bounded", message="Inspect only.",
         )
         source = "text(await tools.multi_agent_v1__spawn_agent(" + json.dumps(arguments) + "));"
         self.assertTrue(observe(source)[0]["spawn_contract_valid"])
         malformed = (
             'const msg="fork_turns: none, task_name: fake"; '
-            'await Promise.all([tools.multi_agent_v1__spawn_agent({message:msg, model:"gpt-5.6-terra", reasoning_effort:"medium"}),'
-            'tools.multi_agent_v1__spawn_agent({message:msg, model:"gpt-5.6-terra", reasoning_effort:"medium"})]);'
+            'await Promise.all([tools.multi_agent_v1__spawn_agent({message:msg, model:"gpt-6-sol", reasoning_effort:"medium"}),'
+            'tools.multi_agent_v1__spawn_agent({message:msg, model:"gpt-6-sol", reasoning_effort:"medium"})]);'
         )
         observations = observe(malformed)
         self.assertEqual(2, len(observations))
@@ -61,7 +61,7 @@ class SpawnCompatibilityTests(unittest.TestCase):
     def test_dynamic_duplicate_and_partial_arguments_never_prove_compliance(self) -> None:
         observe = getattr(spawn_compat, "observe_nested_calls", None)
         self.assertTrue(callable(observe), "nested observed-call parser is missing")
-        prefix = 'model:"gpt-5.6-terra",reasoning_effort:"medium",fork_turns:"none",task_name:"x",message:"ok"'
+        prefix = 'model:"gpt-6-sol",reasoning_effort:"medium",fork_turns:"none",task_name:"x",message:"ok"'
         for body in (prefix + ',...overrides', prefix + ',fork_turns:"all"', prefix + '+suffix',
                      prefix.replace('"ok"', 'dynamicMessage'), prefix + ',[computed]:"none"'):
             with self.subTest(body=body):
@@ -72,22 +72,22 @@ class SpawnCompatibilityTests(unittest.TestCase):
         self.assertFalse(any(item["spawn_contract_valid"] for item in partial))
 
     def test_nested_parser_rejects_incomplete_comments_and_oversized_input(self) -> None:
-        args = spawn_compat.build_arguments(model="gpt-5.6-terra", effort="medium", task_name="bounded", message="Inspect.")
+        args = spawn_compat.build_arguments(model="gpt-6-sol", effort="medium", task_name="bounded", message="Inspect.")
         call = 'tools.multi_agent_v1__spawn_agent(' + json.dumps(args) + ')'
         for source in ('/* never closed ' + call, ' ' * (256 * 1024) + call):
             self.assertFalse(any(item["spawn_contract_valid"] for item in spawn_compat.observe_nested_calls(source)))
 
     def test_nested_message_with_spawn_code_is_not_a_second_call(self) -> None:
-        args = spawn_compat.build_arguments(model="gpt-5.6-terra", effort="medium", task_name="bounded",
-                                           message='Example: tools.spawn_agent({model:"gpt-5.6-sol",fork_turns:"all"})')
+        args = spawn_compat.build_arguments(model="gpt-6-sol", effort="medium", task_name="bounded",
+                                           message='Example: tools.spawn_agent({model:"gpt-6-sol",fork_turns:"all"})')
         observed = spawn_compat.observe_nested_calls('text(await tools.spawn_agent(' + json.dumps(args) + '));')
         self.assertEqual(1, len(observed))
         self.assertTrue(observed[0]["spawn_contract_valid"])
 
     def test_builds_supported_direct_model_calls(self) -> None:
         for model, effort in (
-            ("gpt-5.6-terra", "medium"),
-            ("gpt-5.6-sol", "high"),
+            ("gpt-6-sol", "medium"),
+            ("gpt-6-sol", "high"),
             ("gpt-6-astra", "medium"),
             ("gpt-6-astra", "high"),
             ("gpt-6-astra", "xhigh"),
@@ -109,9 +109,10 @@ class SpawnCompatibilityTests(unittest.TestCase):
 
     def test_rejects_luna_unknown_models_and_invalid_effort(self) -> None:
         for model, effort in (
-            ("gpt-5.6-luna", "low"),
+            ("gpt-6-luna", "low"),
+            ("gpt-5.6-sol", "medium"),
             ("gpt-5.6-unknown", "medium"),
-            ("gpt-5.6-terra", "ultra"),
+            ("gpt-6-sol", "ultra"),
             ("gpt-6-astra", "low"),
             ("gpt-6-astra", "ultra"),
         ):
@@ -170,6 +171,62 @@ class SpawnCompatibilityTests(unittest.TestCase):
         self.assertEqual("current", fallback["route"])
         self.assertEqual("DEGRADED", fallback["readiness"])
         self.assertIn("model override rejected", fallback["reason"])
+
+    def test_internal_policy_validation_preserves_supported_spawn_schema(self) -> None:
+        build = getattr(spawn_compat, "build_policy_arguments", None)
+        self.assertTrue(callable(build), "typed policy-selection boundary is missing")
+        args = build(
+            profile_id="balanced", model="gpt-6-sol", effort="medium",
+            discovery_state="available", root_model="gpt-6-luna", root_effort="low",
+            task_name="bounded", message="Inspect only.",
+        )
+        self.assertEqual(
+            {"fork_turns", "task_name", "message", "model", "reasoning_effort"},
+            set(args),
+        )
+        with self.assertRaisesRegex(ValueError, "policy selection denied"):
+            build(
+                profile_id="balanced", model="gpt-6-sol", effort="medium",
+                discovery_state="available", root_model="gpt-6-luna", root_effort="low",
+                requested_model_id="gpt-5.6-sol", task_name="bounded", message="Inspect.",
+            )
+        with self.assertRaisesRegex(ValueError, "policy selection denied"):
+            build(
+                profile_id="high", model="gpt-6-sol", effort="xhigh",
+                discovery_state="available", root_model="gpt-6-sol", root_effort=None,
+                task_name="bounded", message="Inspect.",
+            )
+
+    def test_explicit_independent_council_allows_same_profile_without_allowing_downward_spawns(self) -> None:
+        args = spawn_compat.build_policy_arguments(
+            profile_id="balanced", model="gpt-6-sol", effort="medium",
+            discovery_state="available", root_model="gpt-6-sol", root_effort="medium",
+            task_name="independent-advisor", message="Assess the separate bounded question.",
+            independent_parallel=True,
+        )
+        self.assertEqual("gpt-6-sol", args["model"])
+        self.assertEqual("medium", args["reasoning_effort"])
+        with self.assertRaisesRegex(ValueError, "policy selection denied"):
+            spawn_compat.build_policy_arguments(
+                profile_id="balanced", model="gpt-6-sol", effort="medium",
+                discovery_state="available", root_model="gpt-6-sol", root_effort="high",
+                task_name="downward", message="Must not route down.",
+                independent_parallel=True,
+            )
+    def test_explicit_astra_uses_its_separate_effort_policy(self) -> None:
+        build = getattr(spawn_compat, "build_explicit_astra_arguments", None)
+        self.assertTrue(callable(build), "explicit Astra policy boundary is missing")
+        args = build(
+            effort="high", discovery_state="available", root_model="gpt-6-luna",
+            task_name="frontier", message="Run this bounded explicit request.",
+        )
+        self.assertEqual("gpt-6-astra", args["model"])
+        self.assertEqual("high", args["reasoning_effort"])
+        with self.assertRaisesRegex(ValueError, "policy selection denied"):
+            build(
+                effort="low", discovery_state="available", root_model="gpt-6-luna",
+                task_name="frontier", message="Run this bounded request.",
+            )
 
 
 if __name__ == "__main__":

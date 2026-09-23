@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic GPT-5.6 routing and verification hooks for Codex."""
+"""Deterministic GPT-6 routing and verification hooks for Codex."""
 
 from __future__ import annotations
 
@@ -25,6 +25,10 @@ if str(SCRIPT_ROOT) not in sys.path:
     sys.path.insert(0, str(SCRIPT_ROOT))
 
 import spawn_compat
+import model_policy
+import sys
+sys.path.insert(0, str(SCRIPT_ROOT.parents[2] / "scripts"))
+import model_catalogue
 
 try:
     import fcntl
@@ -48,6 +52,8 @@ PLUGIN_IDENTITY_FILES = (
     "skills/route-gpt-5-6-work/SKILL.md",
     "skills/route-gpt-5-6-work/scripts/router_hook.py",
     "skills/route-gpt-5-6-work/scripts/spawn_compat.py",
+    "skills/route-gpt-5-6-work/scripts/model_policy.py",
+    "scripts/model_catalogue.py",
 )
 
 
@@ -86,7 +92,7 @@ CONFIG_PATH = CODEX_HOME / "config.toml"
 PROFILE_PATH = CODEX_HOME / "gpt-5-6-router" / "routing-profile.json"
 HEALTH_ROOT = CODEX_HOME / "gpt-5-6-router"
 ROOT_OBSERVATION_PATH = HEALTH_ROOT / "root-observation-v1.json"
-CAPABILITY_PATH = HEALTH_ROOT / "capability-v2.json"
+CAPABILITY_PATH = HEALTH_ROOT / "capability-v3.json"
 PROFILE_SCHEMA = 1
 ROUTING_PROFILES = {
     "token-saver": "Token Saver",
@@ -118,24 +124,27 @@ OPAQUE_PROMPT_EVENT_KEY = re.compile(r"(?:event-[0-9]{6,}|resolved:ambiguity-[0-
 LEGACY_PROMPT_EVENT_HASH = re.compile(r"[0-9a-f]{24}")
 ROUTES = {
     "current": {"model": "current", "effort": "current", "delegate": False},
-    "gpt56_luna_worker": {"model": "gpt-5.6-luna", "effort": "low", "delegate": True},
-    "gpt56_terra_worker": {"model": "gpt-5.6-terra", "effort": "medium", "delegate": True},
-    "gpt56_terra_deep": {"model": "gpt-5.6-terra", "effort": "high", "delegate": True},
-    "gpt56_sol_owner": {"model": "gpt-5.6-sol", "effort": "medium", "delegate": True},
-    "gpt56_sol_deep": {"model": "gpt-5.6-sol", "effort": "high", "delegate": True},
-    "gpt56_sol_xhigh": {"model": "gpt-5.6-sol", "effort": "xhigh", "delegate": True},
-    "gpt6_astra_medium": {"model": "gpt-6-astra", "effort": "medium", "delegate": True},
-    "gpt6_astra_high": {"model": "gpt-6-astra", "effort": "high", "delegate": True},
-    "gpt6_astra_xhigh": {"model": "gpt-6-astra", "effort": "xhigh", "delegate": True},
-    "gpt6_astra_max": {"model": "gpt-6-astra", "effort": "max", "delegate": True},
+    "gpt56_luna_worker": {"model": "gpt-6-luna", "effort": "low", "delegate": False, "profile": "cheap"},
+    "gpt56_terra_worker": {"model": "gpt-6-sol", "effort": "medium", "delegate": True, "profile": "balanced"},
+    "gpt56_terra_deep": {"model": "gpt-6-sol", "effort": "high", "delegate": True, "profile": "high"},
+    "gpt56_sol_owner": {"model": "gpt-6-sol", "effort": "medium", "delegate": True, "profile": "balanced"},
+    "gpt56_sol_deep": {"model": "gpt-6-sol", "effort": "high", "delegate": True, "profile": "high"},
+    "gpt56_sol_xhigh": {"model": "gpt-6-sol", "effort": "xhigh", "delegate": True, "profile": "high"},
+    "gpt6_sol_balanced": {"model": "gpt-6-sol", "effort": "medium", "delegate": True, "profile": "balanced"},
+    "gpt6_sol_high": {"model": "gpt-6-sol", "effort": "high", "delegate": True, "profile": "high"},
+    "gpt6_sol_xhigh": {"model": "gpt-6-sol", "effort": "xhigh", "delegate": True, "profile": "high"},
+    "gpt6_astra_medium": {"model": "gpt-6-astra", "effort": "medium", "delegate": True, "profile": "frontier"},
+    "gpt6_astra_high": {"model": "gpt-6-astra", "effort": "high", "delegate": True, "profile": "frontier"},
+    "gpt6_astra_xhigh": {"model": "gpt-6-astra", "effort": "xhigh", "delegate": True, "profile": "frontier"},
+    "gpt6_astra_max": {"model": "gpt-6-astra", "effort": "max", "delegate": True, "profile": "frontier"},
 }
+HISTORICAL_MODEL_IDS = frozenset({
+    "gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.5",
+})
 ROUTE_UP = {
-    "gpt56_luna_worker": "gpt56_terra_worker",
-    "gpt56_terra_worker": "gpt56_terra_deep",
-    "gpt56_terra_deep": "gpt56_sol_owner",
-    "gpt56_sol_owner": "gpt6_astra_medium",
-    "gpt56_sol_deep": "gpt6_astra_medium",
-    "gpt56_sol_xhigh": "gpt6_astra_medium",
+    "gpt6_sol_balanced": "gpt6_sol_high",
+    "gpt6_sol_high": "gpt6_astra_medium",
+    "gpt6_sol_xhigh": "gpt6_astra_medium",
 }
 
 ASTRA_ROLES = frozenset({
@@ -658,9 +667,7 @@ def _service_tier(data: dict[str, Any]) -> dict[str, Any]:
 
 def _active_effort(data: dict[str, Any]) -> str:
     raw = data.get("model_reasoning_effort")
-    if not isinstance(raw, str):
-        raw = _toml_scalar(CONFIG_PATH, "model_reasoning_effort")
-    return str(raw or "unknown").lower()
+    return raw.lower() if isinstance(raw, str) and raw.lower() in model_policy.ROOT_EFFORTS else "unknown"
 
 
 def _effort_evidence(data: dict[str, Any], decision: dict[str, Any]) -> str:
@@ -668,9 +675,7 @@ def _effort_evidence(data: dict[str, Any], decision: dict[str, Any]) -> str:
         return "owned_agent_config_intent"
     if isinstance(data.get("model_reasoning_effort"), str):
         return "hook_observed"
-    if _toml_scalar(CONFIG_PATH, "model_reasoning_effort"):
-        return "local_config_reported"
-    return "default_assumed"
+    return "unavailable"
 
 
 def _toml_scalar(path: Path, key: str) -> str | None:
@@ -1078,9 +1083,25 @@ def _record_capability(state: dict[str, Any], agent_id: str) -> bool:
     ):
         return False
     identity = state.get("runtime_identity") if isinstance(state.get("runtime_identity"), dict) else {}
+    route_profile = str(ROUTES[role].get("profile") or "")
+    effort_intent = str(agent.get("requested_effort") or ROUTES[role]["effort"])
+    try:
+        capability_key = model_policy.capability_key(observed_model, route_profile, effort_intent)
+    except ValueError:
+        return False
+    if capability_key not in {
+        model_policy.capability_key("gpt-6-sol", "balanced", "medium"),
+        model_policy.capability_key("gpt-6-sol", "high", "high"),
+        model_policy.capability_key("gpt-6-sol", "high", "xhigh"),
+        model_policy.capability_key("gpt-6-astra", "frontier", "medium"),
+    }:
+        return False
     receipt = {
-        "schema_version": 2,
+        "schema_version": 3,
         "capability_signature": spawn_compat.CAPABILITY_SIGNATURE,
+        "policy_revision": model_policy.POLICY_REVISION,
+        "capability_key": capability_key,
+        "route_profile": route_profile,
         "plugin_version": PLUGIN_VERSION,
         "plugin_identity": PLUGIN_IDENTITY,
         "runtime_version": identity.get("runtime_version"),
@@ -1101,7 +1122,7 @@ def _record_capability(state: dict[str, Any], agent_id: str) -> bool:
         "child_turn_id": agent.get("child_turn_id"),
         "requested_child_model": requested_model,
         "observed_child_model": observed_model,
-        "effort_intent": agent.get("requested_effort") or ROUTES[role]["effort"],
+        "effort_intent": effort_intent,
         "observed_effort": agent.get("observed_effort"),
         "route_purpose": agent.get("purpose"),
         "timestamp": int(time.time()),
@@ -1111,8 +1132,9 @@ def _record_capability(state: dict[str, Any], agent_id: str) -> bool:
         existing = json.loads(CAPABILITY_PATH.read_text(encoding="utf-8"))
     except FileNotFoundError:
         document = {
-            "schema_version": 2,
+            "schema_version": 3,
             "capability_signature": spawn_compat.CAPABILITY_SIGNATURE,
+            "policy_revision": model_policy.POLICY_REVISION,
             "capabilities": {},
         }
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
@@ -1120,16 +1142,23 @@ def _record_capability(state: dict[str, Any], agent_id: str) -> bool:
     else:
         if (
             not isinstance(existing, dict)
-            or existing.get("schema_version") != 2
+            or existing.get("schema_version") != 3
             or existing.get("capability_signature") != spawn_compat.CAPABILITY_SIGNATURE
+            or existing.get("policy_revision") != model_policy.POLICY_REVISION
             or not isinstance(existing.get("capabilities"), dict)
         ):
             return False
         document = existing
     capabilities = document["capabilities"]
-    if any(model not in spawn_compat.SUPPORTED_EFFORTS for model in capabilities):
+    allowed_capability_keys = {
+        model_policy.capability_key("gpt-6-sol", "balanced", "medium"),
+        model_policy.capability_key("gpt-6-sol", "high", "high"),
+        model_policy.capability_key("gpt-6-sol", "high", "xhigh"),
+        model_policy.capability_key("gpt-6-astra", "frontier", "medium"),
+    }
+    if any(key not in allowed_capability_keys for key in capabilities):
         return False
-    capabilities[observed_model] = receipt
+    capabilities[capability_key] = receipt
     _write_health_record(CAPABILITY_PATH, document)
     agent["receipt_recorded"] = True
     return True
@@ -1177,7 +1206,10 @@ def _visible_route(decision: dict[str, Any], data: dict[str, Any]) -> str:
         )
         effort_label = (
             "Effort unknown"
-            if route == "current" and decision.get("effort_evidence") == "default_assumed"
+            if route == "current" and (
+                decision.get("effort_evidence") in {"default_assumed", "unavailable"}
+                or effort.lower() == "unknown"
+            )
             else {"low": "Low", "medium": "Medium", "high": "High", "xhigh": "Extra High"}.get(effort.lower(), effort.title())
         )
         return f"{family} {effort_label} {speed}"
@@ -1188,7 +1220,16 @@ def _visible_route(decision: dict[str, Any], data: dict[str, Any]) -> str:
         role, count = next(iter(plan["required_agents"].items()))
         return f"{label(role)} ×{count}"
     if mode == "evidence_then_owner":
-        return f"{label('gpt56_terra_worker')} ×2 → {label(plan['synthesis_role'])}"
+        synthesis_role = str(plan.get("synthesis_role") or plan.get("synthesis_owner") or "root")
+        evidence_slots = [
+            (role, int(count)) for role, count in plan.get("required_agents", {}).items()
+            if role != synthesis_role
+        ]
+        if not evidence_slots:
+            return label("current")
+        evidence_role, evidence_count = evidence_slots[0]
+        owner_label = label("current") if synthesis_role == "root" else label(synthesis_role)
+        return f"{label(evidence_role)} ×{evidence_count} → {owner_label}"
     if mode == "routing_council":
         advisors = " + ".join(label(role) for role in plan["advisor_roles"])
         selected = plan.get("selected_execution_role")
@@ -1231,18 +1272,11 @@ def _product_profile(text: str) -> dict[str, Any]:
 def _meets_route(active_model: str, active_effort: str, route: str) -> bool:
     if route == "current":
         return True
-    model_rank = {
-        "gpt-5.6-luna": 1,
-        "gpt-5.6-terra": 2,
-        "gpt-5.6-sol": 3,
-        "gpt-6-astra": 4,
-    }
-    effort_rank = {"low": 1, "medium": 2, "high": 3, "xhigh": 4, "max": 5, "ultra": 6}
     target = ROUTES[route]
-    return (
-        model_rank.get(active_model, 0) >= model_rank.get(str(target["model"]), 99)
-        and effort_rank.get(active_effort, 0) >= effort_rank.get(str(target["effort"]), 99)
-    )
+    profile = str(target.get("profile") or "")
+    return bool(profile) and model_policy.root_profile_satisfaction(
+        active_model, active_effort, profile
+    ) == model_policy.RootSatisfaction.SATISFIED
 
 
 def _attach_plan(decision: dict[str, Any], profile: dict[str, Any]) -> dict[str, Any]:
@@ -1746,89 +1780,279 @@ def _apply_routing_profile(
     return decision
 
 
-def _apply_actual_root_policy(decision: dict[str, Any], active_model: str) -> dict[str, Any]:
-    """Apply the authoritative per-turn root policy after capability classification."""
+_ACTIVE_ROUTE_ALIASES = {
+    "gpt56_luna_worker": "current",
+    "gpt56_terra_worker": "gpt6_sol_balanced",
+    "gpt56_terra_deep": "gpt6_sol_high",
+    "gpt56_sol_owner": "gpt6_sol_balanced",
+    "gpt56_sol_deep": "gpt6_sol_high",
+    "gpt56_sol_xhigh": "gpt6_sol_xhigh",
+}
+
+
+def _normalize_active_routes(decision: dict[str, Any]) -> None:
+    """Translate historical classifier role labels to current GPT-6 profiles."""
+    def alias(value: Any) -> Any:
+        return _ACTIVE_ROUTE_ALIASES.get(value, value) if isinstance(value, str) else value
+
+    decision["route"] = alias(decision.get("route"))
+    for field in ("candidate_route", "capability_target"):
+        if decision.get(field) is not None:
+            decision[field] = alias(decision[field])
+    plan = decision.get("orchestration")
+    if not isinstance(plan, dict):
+        return
+    staged_owner_count = 0
+    if plan.get("mode") == "evidence_then_owner" and plan.get("synthesis_role") == "gpt56_sol_owner":
+        required_agents = plan.get("required_agents")
+        if isinstance(required_agents, dict):
+            staged_owner_count = max(0, int(required_agents.get("gpt56_sol_owner", 0)))
+    for field in ("synthesis_owner", "synthesis_role", "execution_agent_id"):
+        if field in plan:
+            plan[field] = "root" if alias(plan[field]) == "current" else alias(plan[field])
+    for field in ("allowed_agents", "advisor_roles"):
+        if isinstance(plan.get(field), list):
+            plan[field] = list(dict.fromkeys(mapped for value in plan[field] if (mapped := alias(value)) != "current"))
+    if isinstance(plan.get("candidate_routes"), list):
+        plan["candidate_routes"] = list(dict.fromkeys(alias(value) for value in plan["candidate_routes"]))
+    if isinstance(plan.get("required_agents"), dict):
+        required: dict[str, int] = {}
+        for role, count in plan["required_agents"].items():
+            target = alias(role)
+            if target == "current":
+                continue
+            required[target] = required.get(target, 0) + int(count)
+        if staged_owner_count:
+            balanced_count = required.get("gpt6_sol_balanced", 0)
+            if balanced_count >= staged_owner_count:
+                remaining_balanced = balanced_count - staged_owner_count
+                if remaining_balanced:
+                    required["gpt6_sol_balanced"] = remaining_balanced
+                else:
+                    required.pop("gpt6_sol_balanced", None)
+                required["gpt6_sol_high"] = required.get("gpt6_sol_high", 0) + staged_owner_count
+                plan["synthesis_role"] = "gpt6_sol_high"
+                plan["synthesis_owner"] = "gpt6_sol_high"
+                plan["allowed_agents"] = list(dict.fromkeys(
+                    list(plan.get("allowed_agents", [])) + ["gpt6_sol_high"]
+                ))
+        plan["required_agents"] = required
+    decision["orchestration"] = plan
+
+
+def _preserve_non_downward_parallel_plan(decision: dict[str, Any], root_effort: str) -> None:
+    """Keep justified evidence workers only when their capability is not below a Sol root."""
+    if root_effort == "high":
+        plan = decision.get("orchestration")
+        if not isinstance(plan, dict) or plan.get("mode") != "evidence_then_owner":
+            return
+        required = plan.get("required_agents")
+        if not isinstance(required, dict):
+            return
+        balanced_count = int(required.get("gpt6_sol_balanced", 0))
+        high_count = int(required.get("gpt6_sol_high", 0))
+        synthesis_role = str(plan.get("synthesis_role") or plan.get("synthesis_owner") or "")
+        if synthesis_role in {"gpt6_sol_high", "gpt6_sol_xhigh"} and high_count:
+            high_count -= 1
+        worker_count = balanced_count + high_count
+        if not worker_count:
+            _force_single_plan(decision)
+            return
+        plan["required_agents"] = {"gpt6_sol_high": worker_count}
+        plan["allowed_agents"] = ["gpt6_sol_high"]
+        plan["candidate_routes"] = ["gpt6_sol_high"]
+        plan["synthesis_role"] = "root"
+        plan["synthesis_owner"] = "root"
+        plan["max_workers"] = min(int(plan.get("max_workers", worker_count)), worker_count)
+        return
+    if root_effort in {"xhigh", "max", "ultra"}:
+        plan = decision.get("orchestration")
+        if isinstance(plan, dict) and plan.get("mode") == "evidence_then_owner":
+            _force_single_plan(decision)
+
+
+def _availability_for(model_id: str, discovery_state: str) -> str:
+    if discovery_state != "host":
+        return discovery_state
+    catalogue = model_catalogue.discover_catalogue()
+    return catalogue.availability(model_id).value
+
+
+def _apply_actual_root_policy(
+    decision: dict[str, Any], active_model: str, active_effort: str | None = None,
+    discovery_state: str = "available",
+) -> dict[str, Any]:
+    """Apply authoritative model ownership and independent profile/discovery gates."""
+    source_route_before_normalization = str(decision.get("route") or "current")
+    _normalize_active_routes(decision)
     if "root_policy_route" not in decision:
         decision["root_policy_route"] = str(decision["route"])
         decision["root_policy_orchestration"] = json.loads(json.dumps(decision["orchestration"]))
         decision["root_policy_reason"] = str(decision["reason"])
         decision["root_policy_parallel"] = bool(decision.get("parallel"))
         decision["root_policy_max_workers"] = int(decision.get("max_workers", 1))
+        if decision["root_policy_route"] == "current" and source_route_before_normalization != "current":
+            _force_single_plan(decision)
     else:
-        target = str(decision["root_policy_route"])
+        source_route = str(decision["root_policy_route"])
+        target = _ACTIVE_ROUTE_ALIASES.get(source_route, source_route)
+        if target not in ROUTES:
+            target = "current"
+        decision["root_policy_route"] = target
         _set_route_fields(decision, target)
         decision["orchestration"] = json.loads(json.dumps(decision["root_policy_orchestration"]))
+        _normalize_active_routes(decision)
         decision["reason"] = str(decision["root_policy_reason"])
         decision["parallel"] = bool(decision["root_policy_parallel"])
         decision["max_workers"] = int(decision["root_policy_max_workers"])
+        if target == "current" and source_route != "current":
+            _force_single_plan(decision)
+
+    effort = active_effort if isinstance(active_effort, str) else "unknown"
     decision["task_profile"]["active_model"] = active_model
+    decision["task_profile"]["active_effort"] = effort
     requires_clarification = bool(decision["task_profile"].get("requires_clarification"))
     decision["requires_clarification"] = requires_clarification
     decision["actual_root_model"] = active_model or None
     decision["root_model_evidence"] = "UserPromptSubmit.model" if active_model else "unavailable"
+
     if requires_clarification:
         _set_route_fields(decision, "current")
         reason = str(decision.get("reason") or "")
         if decision.get("astra_gate") != "unsupported_explicit_effort":
             reason = "user intent is insufficiently specified for safe routing"
-        decision.update({
-            "reason": reason,
-            "verification": "confirm the requested outcome before task execution",
-            "parallel": False,
-            "max_workers": 1,
-        })
-        decision["orchestration"] = {
-            "mode": "clarify",
-            "synthesis_owner": "root",
-            "final_acceptance_owner": "root",
-            "allowed_agents": [],
-            "required_agents": {},
-            "max_workers": 1,
-            "max_depth": 1,
-        }
+        decision.update({"reason": reason, "verification": "confirm the requested outcome before task execution"})
+        _force_single_plan(decision)
+        decision["orchestration"]["mode"] = "clarify"
+        decision["requires_clarification"] = True
+    elif active_model and active_model not in model_policy.ACTIVE_MODELS:
+        _set_route_fields(decision, "current")
+        _force_single_plan(decision)
+        decision["capability_eligible"] = False
+        decision["profile_satisfaction"] = model_policy.RootSatisfaction.UNPROVEN.value
+        decision["route_policy_outcome"] = model_policy.PolicyOutcome.POLICY_UNAPPROVED.value
+        decision["reason"] = "unsupported or historical root is preserved without a current route target"
+    elif not active_model:
+        _set_route_fields(decision, "current")
+        _force_single_plan(decision)
+        decision["capability_eligible"] = False
+        decision["profile_satisfaction"] = model_policy.RootSatisfaction.UNPROVEN.value
+        decision["route_policy_outcome"] = model_policy.PolicyOutcome.PROFILE_UNAPPROVED.value
+        decision["route_transition"] = model_policy.TransitionKind.NONE.value
+        decision["reason"] = "active root model is unavailable; preserve the current owner without escalation"
     elif active_model == "gpt-6-astra":
         _set_route_fields(decision, "current")
         _force_single_plan(decision)
+        decision["profile_satisfaction"] = model_policy.root_profile_satisfaction(
+            active_model, effort, "frontier"
+        ).value
+        decision["route_policy_outcome"] = model_policy.PolicyOutcome.APPROVED.value
         decision["reason"] = "active Astra root remains the final owner without downward delegation"
+    elif decision.get("astra_gate") == "explicit_user_request" and str(decision.get("route")) in ASTRA_ROLES:
+        target = ROUTES[str(decision["route"])]
+        availability = _availability_for("gpt-6-astra", discovery_state)
+        if (
+            availability == model_policy.DiscoveryState.AVAILABLE.value
+            and str(target.get("effort")) in model_policy.ACTIVE_MODELS["gpt-6-astra"].explicit_child_efforts
+        ):
+            decision["catalogue_availability"] = availability
+            decision["profile_satisfaction"] = model_policy.RootSatisfaction.UNSATISFIED.value
+            decision["route_policy_outcome"] = model_policy.PolicyOutcome.APPROVED.value
+            decision["route_transition"] = model_policy.TransitionKind.MODEL_ROUTE_UP.value
+            decision["policy_revision"] = model_policy.POLICY_REVISION
+            decision["capability_eligible"] = True
+        else:
+            _set_route_fields(decision, "current")
+            _force_single_plan(decision)
+            decision["route_policy_outcome"] = model_policy.PolicyOutcome.AVAILABILITY_UNPROVEN.value
+            decision["reason"] = "explicit Astra request is unavailable in current host discovery; preserve current owner"
     elif (
-        active_model == "gpt-5.6-sol"
-        and str(decision["model"]) != "gpt-6-astra"
-        and not decision["task_profile"].get("needs_consensus")
-    ):
-        _set_route_fields(decision, "current")
-        _force_single_plan(decision)
-        decision["reason"] = "active Sol root already satisfies the selected capability"
-    elif (
-        active_model == "gpt-5.6-terra"
-        and not decision["task_profile"].get("needs_consensus")
-        and str(decision["model"]) in {"current", "gpt-5.6-luna", "gpt-5.6-terra"}
-    ):
-        _set_route_fields(decision, "current")
-        _force_single_plan(decision)
-        decision["reason"] = "active Terra root handles routine and normal work without downward delegation"
-    elif active_model == "gpt-5.6-luna" and str(decision["model"]) != "gpt-6-astra" and (
-        str(decision["model"]) == "gpt-5.6-luna"
-        or (
-            decision["task_profile"].get("risk") == "normal"
-            and (
-                bool(decision["task_profile"].get("trivial"))
-                or bool(decision["task_profile"].get("low_stakes_surface"))
-                or (
-                    bool(decision["task_profile"].get("clear_spec"))
-                    and decision["task_profile"].get("ambiguity") == "low"
-                )
-                or decision["task_profile"].get("task_type") in {"explanation", "content_documentation"}
+        active_model == "gpt-6-luna"
+        and decision["task_profile"].get("risk") == "normal"
+        and (
+            bool(decision["task_profile"].get("trivial"))
+            or bool(decision["task_profile"].get("low_stakes_surface"))
+            or (
+                bool(decision["task_profile"].get("clear_spec"))
+                and decision["task_profile"].get("ambiguity") == "low"
             )
+            or decision["task_profile"].get("task_type") in {
+                "explanation", "content_documentation", "mechanical_batch"
+            }
         )
+        and str(decision["route"]) != "gpt6_astra_medium"
     ):
         _set_route_fields(decision, "current")
         _force_single_plan(decision)
-        decision["reason"] = "active Luna root handles routine work without child delegation"
-    decision["credit_efficiency"] = "READY" if active_model == "gpt-5.6-luna" else "DEGRADED"
+        decision["profile_satisfaction"] = model_policy.RootSatisfaction.SATISFIED.value
+        decision["route_policy_outcome"] = model_policy.PolicyOutcome.APPROVED.value
+        decision["route_transition"] = model_policy.TransitionKind.NONE.value
+        decision["reason"] = "routine normal-risk work stays on the GPT-6 Luna root"
+        decision["capability_eligible"] = True
+    else:
+        route = str(decision["route"])
+        profile_id = str(ROUTES[route].get("profile") or ("cheap" if active_model == "gpt-6-luna" else "balanced"))
+        if route == "current":
+            satisfaction_profile = "cheap" if active_model == "gpt-6-luna" else "balanced"
+            satisfaction = model_policy.root_profile_satisfaction(active_model, effort, satisfaction_profile)
+            decision["profile_satisfaction"] = satisfaction.value
+            decision["route_policy_outcome"] = (
+                model_policy.PolicyOutcome.PROFILE_UNAPPROVED.value
+                if satisfaction == model_policy.RootSatisfaction.UNPROVEN
+                else model_policy.PolicyOutcome.APPROVED.value
+            )
+            decision["route_transition"] = model_policy.TransitionKind.NONE.value
+        else:
+            target_spec = ROUTES[route]
+            availability = _availability_for(str(target_spec["model"]), discovery_state)
+            selection = model_policy.select_target(
+                profile_id,
+                root_model=active_model,
+                root_effort=effort,
+                discovery_state=availability,
+                requested_model_id=str(target_spec["model"]),
+                requested_effort=str(target_spec["effort"]),
+                deep_high=str(target_spec["effort"]) == "xhigh",
+            )
+            decision["catalogue_availability"] = availability
+            decision["profile_satisfaction"] = selection.satisfaction.value
+            decision["route_policy_outcome"] = selection.outcome.value
+            decision["route_transition"] = selection.transition.value
+            decision["policy_revision"] = model_policy.POLICY_REVISION
+            if selection.satisfaction == model_policy.RootSatisfaction.SATISFIED:
+                plan_mode = str(decision.get("orchestration", {}).get("mode") or "")
+                if plan_mode == "routing_council":
+                    _set_route_fields(decision, "current")
+                elif plan_mode == "evidence_then_owner":
+                    _set_route_fields(decision, "current")
+                    if active_model == "gpt-6-sol":
+                        _preserve_non_downward_parallel_plan(decision, effort)
+                else:
+                    _set_route_fields(decision, "current")
+                    _force_single_plan(decision)
+                decision["route_policy_outcome"] = model_policy.PolicyOutcome.APPROVED.value
+                decision["reason"] = "authoritative root already satisfies the selected GPT-6 profile"
+            elif selection.satisfaction == model_policy.RootSatisfaction.UNPROVEN:
+                _set_route_fields(decision, "current")
+                _force_single_plan(decision)
+                decision["reason"] = "root profile satisfaction is unproven; preserve owner without spending on missing evidence"
+            elif not selection.approved:
+                _set_route_fields(decision, "current")
+                _force_single_plan(decision)
+                decision["reason"] = f"GPT-6 target unavailable or unapproved ({selection.outcome.value}); preserve current owner"
+            else:
+                decision["model"] = selection.target_model_id
+                decision["effort"] = selection.target_effort
+                decision["delegate"] = True
+                decision["route_policy_outcome"] = model_policy.PolicyOutcome.APPROVED.value
+                decision["policy_revision"] = model_policy.POLICY_REVISION
+        decision["capability_eligible"] = True
+
+    decision["credit_efficiency"] = "READY" if active_model == "gpt-6-luna" else "DEGRADED"
     decision["credit_efficiency_reason"] = (
-        "actual turn root is Luna"
-        if active_model == "gpt-5.6-luna"
-        else "actual turn root is not Luna; substantial credit-saving behaviour is reduced"
+        "actual turn root is GPT-6 Luna"
+        if active_model == "gpt-6-luna"
+        else "actual turn root is not GPT-6 Luna; substantial credit-saving behaviour is reduced"
     )
     return decision
 
@@ -1856,6 +2080,8 @@ def classify_prompt(
     active_effort: str = "medium",
     routing_profile: str = "balanced",
     routing_profile_source: str = "explicit",
+    discovery_state: str = "available",
+    enforce_active_root: bool = False,
 ) -> dict[str, Any]:
     """Classify trusted user text, then apply profile and actual-root policy."""
     decision = _apply_routing_profile(
@@ -1877,7 +2103,21 @@ def classify_prompt(
             decision["reason"] = f"Astra {astra_effort or 'unknown'} is not supported by the explicit effort policy"
             decision["astra_gate"] = "unsupported_explicit_effort"
             decision["task_profile"]["requires_clarification"] = True
-    return _apply_actual_root_policy(decision, active_model)
+    if decision["task_profile"].get("requires_clarification"):
+        _set_route_fields(decision, "current")
+        _force_single_plan(decision)
+        decision["orchestration"]["mode"] = "clarify"
+        decision["requires_clarification"] = True
+        decision["verification"] = "confirm the requested outcome before task execution"
+        if decision.get("astra_gate") != "unsupported_explicit_effort":
+            decision["reason"] = "user intent is insufficiently specified for safe routing"
+    if enforce_active_root:
+        return _apply_actual_root_policy(decision, active_model, active_effort, discovery_state)
+    decision["requires_clarification"] = bool(decision["task_profile"].get("requires_clarification"))
+    decision["actual_root_model"] = None
+    decision["root_model_evidence"] = "unavailable"
+    decision["capability_eligible"] = False
+    return decision
 
 
 def _safe(value: Any) -> str:
@@ -2341,6 +2581,17 @@ def _context(decision: dict[str, Any]) -> str:
     decision.setdefault("speed_evidence", "default_assumed")
     decision.setdefault("announce_route", False)
     decision.setdefault("visible_route", _visible_route(decision, {}))
+    if decision.get("capability_eligible") is not True:
+        if decision.get("requires_clarification"):
+            return (
+                "User intent is insufficiently specified; do not mutate files or state, do not run a mutating shell "
+                "command, do not take an external action, and do not delegate to a child or routing council. "
+                "Ask one concise clarification question and wait before task execution."
+            )
+        return (
+            "No authoritative supported root/profile evidence permits escalation on this turn. "
+            "Continue as the current root, do not spawn a child, and do not claim the requested profile is satisfied."
+        )
     envelope = json.dumps(decision, separators=(",", ":"), sort_keys=True)
     plan = decision["orchestration"]
     mode = plan["mode"]
@@ -2348,12 +2599,24 @@ def _context(decision: dict[str, Any]) -> str:
     for role, count in plan["required_agents"].items():
         for index in range(count):
             spec = ROUTES[role]
-            required_call_shapes.append(spawn_compat.render_call(spawn_compat.build_arguments(
-                model=str(spec["model"]),
-                effort=str(spec["effort"]),
-                task_name=f"<unique-{index + 1}>",
-                message="<distilled-task>",
-            )))
+            model = str(spec["model"])
+            effort = str(spec["effort"])
+            discovery = str(decision.get("catalogue_availability") or "available")
+            root_model = str(decision.get("actual_root_model") or "")
+            if model == "gpt-6-astra" and decision.get("astra_gate") == "explicit_user_request":
+                arguments = spawn_compat.build_explicit_astra_arguments(
+                    effort=effort, discovery_state=discovery, root_model=root_model,
+                    task_name=f"<unique-{index + 1}>", message="<distilled-task>",
+                )
+            else:
+                arguments = spawn_compat.build_policy_arguments(
+                    profile_id=str(spec.get("profile") or ""), model=model, effort=effort,
+                    discovery_state=discovery, root_model=root_model,
+                    root_effort=str(decision.get("task_profile", {}).get("active_effort") or "unknown"),
+                    task_name=f"<unique-{index + 1}>", message="<distilled-task>",
+                    independent_parallel=mode in {"routing_council", "evidence_then_owner"},
+                )
+            required_call_shapes.append(spawn_compat.render_call(arguments))
     spawn_contract = (
         "MANDATORY SPAWN ARGUMENT CONTRACT: use only compatibility adapter schema "
         f"`{spawn_compat.CAPABILITY_SIGNATURE}`. Copy these exact call shapes and replace only angle-bracket values: "
@@ -2382,13 +2645,38 @@ def _context(decision: dict[str, Any]) -> str:
         )
     elif mode == "evidence_then_owner":
         synthesis_role = str(plan["synthesis_role"])
-        execution = (
-            "First spawn two `gpt-5.6-terra` leaf agents at `medium` effort with distinct evidence `task_name` values. After both return, "
-            f"spawn one `{ROUTES[synthesis_role]['model']}` agent at `{ROUTES[synthesis_role]['effort']}` effort with a new synthesis `task_name`, passing only their distilled evidence plus the final contract."
-        )
+        evidence_slots = [
+            (role, int(count)) for role, count in plan["required_agents"].items()
+            if role != synthesis_role
+        ]
+        if not evidence_slots:
+            execution = "No independent evidence workers are required; synthesize in the root."
+        else:
+            evidence_role, evidence_count = evidence_slots[0]
+            evidence_spec = ROUTES[evidence_role]
+            synthesis_spec = ROUTES.get(synthesis_role)
+            synthesis_step = (
+                "After both return, synthesize in the current root."
+                if synthesis_role == "root" or synthesis_spec is None
+                else (
+                    f"After they return, spawn one `{synthesis_spec['model']}` agent at "
+                    f"`{synthesis_spec['effort']}` effort with a new synthesis `task_name`, "
+                    "passing only their distilled evidence plus the final contract."
+                )
+            )
+            execution = (
+                f"First spawn {evidence_count} `{evidence_spec['model']}` evidence leaf agents at "
+                f"`{evidence_spec['effort']}` effort with distinct evidence `task_name` values. "
+                + synthesis_step
+            )
     elif mode == "routing_council":
+        advisor_labels = [
+            f"`{ROUTES[role]['model']}` at `{ROUTES[role]['effort']}` effort"
+            for role in plan["advisor_roles"]
+        ]
         execution = (
-            "Before task execution, spawn one Terra Medium cost advisor and one Terra High risk advisor using the exact adapter call shapes; give them distinct `task_name` values. "
+            "Before task execution, spawn one cost advisor and one risk advisor using the exact adapter call shapes "
+            f"({advisor_labels[0]} and {advisor_labels[1]}); give them distinct `task_name` values. "
             f"Give both the same redacted routing packet and candidate allow-list {plan['candidate_routes']}; advisors are read-only and must not solve or mutate the task. "
             "Each must return `Route recommendation: <role>` plus nonempty `Evidence:`, `Verification:`, and `Uncertainty:`. "
             "After both return, compute the deterministic transition from their visible recommendations: execute in current only on exact current agreement, "
@@ -2402,7 +2690,8 @@ def _context(decision: dict[str, Any]) -> str:
             "spawn so children inherit the parent task's current UI Fast setting. Do not allow recursive delegation."
         )
         execution += (
-            " If a worker returns an explicit `ROUTE_UP` capability-limit signal, advance exactly one step on the router ladder, "
+            " If a worker returns an explicit `ROUTE_UP` capability-limit signal, advance exactly one step on the GPT-6 ladder "
+            "(Sol Medium → Sol High → Astra Medium), "
             "reuse its distilled evidence, and do not repeat discovery; the hook records and checks that transition. "
             "Sol can reach Astra Medium only after the hook authoritatively attests the exact child and escalation evidence."
         )
@@ -2799,7 +3088,7 @@ def _authoritative_route_up(state: dict[str, Any], agent_id: str, role: str) -> 
 
 def _route_recommendation(message: str, candidates: list[str]) -> str | None:
     match = re.search(
-        r"Route recommendation:[ \t]*(current|gpt56_(?:luna_worker|terra_worker|terra_deep|sol_owner|sol_deep|sol_xhigh))\b",
+        r"Route recommendation:[ \t]*(current|gpt6_(?:sol_balanced|sol_high|sol_xhigh))\b",
         message,
         re.I,
     )
@@ -3620,6 +3909,24 @@ def _subagent_completed_role_counts(state: dict[str, Any], context: dict[str, An
     return counts
 
 
+def _staged_prerequisites_satisfied(plan: dict[str, Any], completed_by_role: dict[str, int]) -> bool:
+    """Check completed non-synthesis slots using the plan's active role identities."""
+    if plan.get("mode") != "evidence_then_owner":
+        return True
+    synthesis_role = str(plan.get("synthesis_role") or "")
+    required = plan.get("required_agents")
+    if not synthesis_role or not isinstance(required, dict):
+        return False
+    prerequisites = {
+        str(role): max(0, int(count))
+        for role, count in required.items()
+        if str(role) != synthesis_role
+    }
+    return bool(prerequisites) and all(
+        completed_by_role.get(role, 0) >= count for role, count in prerequisites.items()
+    )
+
+
 def _record_scanned_spawn(state: dict[str, Any], context: dict[str, Any], role: str, tier_overridden: bool) -> None:
     context["spawn_count"] += 1
     if context["spawn_count"] > TRANSCRIPT_MAX_CALLS:
@@ -3637,7 +3944,9 @@ def _record_scanned_spawn(state: dict[str, Any], context: dict[str, Any], role: 
         candidate for candidate in context["valid_plans"]
         if candidate.get("mode") == "evidence_then_owner" and role == candidate.get("synthesis_role")
     ), None)
-    if staged and _subagent_completed_role_counts(state, context).get("gpt56_terra_worker", 0) < 2:
+    if staged and not _staged_prerequisites_satisfied(
+        staged, _subagent_completed_role_counts(state, context)
+    ):
         violations.append(f"ordering_violation:{staged['mode']}:{role}")
     for violation in violations:
         if violation not in state["violations"]:
@@ -3953,7 +4262,9 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
                 state["status"] = "RUNNING"
                 decision = state["decision"]
                 selected_execution = decision.get("orchestration", {}).get("selected_execution_role")
-                decision = _apply_actual_root_policy(decision, str(data.get("model") or ""))
+                decision = _apply_actual_root_policy(
+                    decision, str(data.get("model") or ""), _active_effort(data), "host"
+                )
                 if selected_execution:
                     _set_route_fields(decision, str(selected_execution))
                     _force_single_plan(decision)
@@ -3972,6 +4283,8 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             _active_effort(data),
             routing_profile,
             routing_profile_source,
+            discovery_state="host",
+            enforce_active_root=True,
         )
         previous = _latest_session_state(data.get("session_id"), data.get("turn_id"))
         inherited_from_turn = None
@@ -3983,7 +4296,9 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             decision["confidence"] = max(float(decision.get("confidence", 0)), 0.97)
             inherited_from_turn = previous.get("turn_id")
             selected_execution = decision.get("orchestration", {}).get("selected_execution_role")
-            decision = _apply_actual_root_policy(decision, str(data.get("model") or ""))
+            decision = _apply_actual_root_policy(
+                decision, str(data.get("model") or ""), _active_effort(data), "host"
+            )
             prior_plan = decision.get("orchestration", {})
             if selected_execution:
                 selected = str(selected_execution)
@@ -4116,7 +4431,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         ordering_violation = (
             plan["mode"] == "evidence_then_owner"
             and role == plan.get("synthesis_role")
-            and completed_by_role.get("gpt56_terra_worker", 0) < 2
+            and not _staged_prerequisites_satisfied(plan, completed_by_role)
         ) or (
             council
             and council_phase != "advisory"
@@ -4135,7 +4450,13 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             and direct_model == expected_spec.get("model")
             and (not direct_effort or direct_effort == expected_spec.get("effort"))
         )
-        observed_lifecycle = bool(supplied_agent_id and direct_model in spawn_compat.SUPPORTED_EFFORTS)
+        # Preserve identity-bound observations of historical/runtime models.
+        # This improves correlation only; active receipt gates still require
+        # the supported direct-spawn contract.
+        observed_lifecycle = bool(
+            supplied_agent_id
+            and (direct_model in spawn_compat.SUPPORTED_EFFORTS or direct_model in HISTORICAL_MODEL_IDS)
+        )
         state["agents"][agent_id] = {
             **{key: value for key, value in state["agents"].get(agent_id, {}).items()
                if key in {"spawn_call_key", "spawn_contract_valid", "spawn_contract_reasons", "spawn_binding_conflict"}},
@@ -4605,7 +4926,7 @@ def main() -> int:
             _json_output(output)
         return 0
     except Exception as exc:  # Fail open: routing must never brick Codex.
-        _json_output({"continue": True, "systemMessage": f"GPT-5.6 router failed open: {type(exc).__name__}"})
+        _json_output({"continue": True, "systemMessage": f"Codex Autorouter failed open: {type(exc).__name__}"})
         return 0
 
 

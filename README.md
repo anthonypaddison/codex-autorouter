@@ -18,7 +18,7 @@
 
 ## Start here
 
-Autorouter is designed around a cheap Luna root. Describe what you want built, fixed, researched, or reviewed; the active root remains authoritative for the turn and Autorouter escalates only when the task warrants it.
+Autorouter is designed around a cheap GPT-6 Luna root. Describe what you want built, fixed, researched, or reviewed; the active root remains authoritative for the turn and Autorouter escalates only when the task warrants it.
 
 ### What you need
 
@@ -28,10 +28,10 @@ Autorouter is designed around a cheap Luna root. Describe what you want built, f
 
 ### 1. Select Luna once
 
-In Codex Desktop, select **GPT-5.6 Luna** as the model before starting a new task. For a personal CLI default, use these top-level entries in your Codex `config.toml`:
+In Codex Desktop, select **GPT-6 Luna** as the model before starting a new task. For a personal CLI default, use these top-level entries in your Codex `config.toml`:
 
 ```toml
-model = "gpt-5.6-luna"
+model = "gpt-6-luna"
 model_reasoning_effort = "low"
 ```
 
@@ -75,13 +75,13 @@ python3 scripts/check_hooks.py
 
 The command returns one of three top-level health states:
 
-- `READY`: Luna is the observed root for the current task and at least one model-keyed, non-stale receipt proves a successful Terra, Sol, or Astra escalation through the same plugin candidate and versioned Codex runtime/build identity.
+- `READY`: GPT-6 Luna is the observed root for the current task and at least one model-keyed, non-stale receipt proves a successful GPT-6 Sol or Astra escalation through the same plugin candidate and versioned Codex runtime/build identity.
 - `DEGRADED`: Autorouter remains usable, but the active root was not Luna or current escalation capability is not proven. When the root is not Luna, credit-saving behaviour will be substantially reduced.
 - `UNAVAILABLE`: the supported hooks or direct child-routing path cannot operate.
 
 The hook's `UserPromptSubmit.model` is authoritative for every actual turn. Desktop, app-server, and config evidence can explain health, but cannot override that active-model evidence. Follow the [troubleshooting guide](docs/TROUBLESHOOTING.md) for any state other than `READY`.
 
-Readiness receipts are earned only after an expected child is observed on the exact requested Terra, Sol, or Astra model and the same `agent_id` completes successfully. Receipts are stored by model tier, so one tier's proof cannot silently attest another. The exact bounded child transcript may supply authoritative model, effort, and turn evidence when Desktop omits a child prompt hook; missing, contradictory, malformed, or oversized evidence creates no receipt. Receipts bind the plugin content identity, plugin version, Codex runtime/build where exposed, Desktop or CLI host type, platform, observed child model, effort intent, capability/schema signature, and timestamp. At least one matching versioned runtime/build identifier is mandatory for `READY`; null never matches null. Identity-null receipts remain visible as `ESCALATION PREVIOUSLY OBSERVED` but cannot establish current-runtime capability. Receipts expire for readiness after 30 days but remain available as history. A runtime/build or plugin-candidate change invalidates `READY` until normal work produces a fresh successful receipt; the health check never launches an automatic paid probe.
+Readiness receipts are earned only after an expected child is observed on the exact requested GPT-6 Sol or Astra model and the same `agent_id` completes successfully. Receipts are stored by model tier, so one tier's proof cannot silently attest another. The exact bounded child transcript may supply authoritative model, effort, and turn evidence when Desktop omits a child prompt hook; missing, contradictory, malformed, or oversized evidence creates no receipt. Receipts bind the plugin content identity, plugin version, Codex runtime/build where exposed, Desktop or CLI host type, platform, observed child model, effort intent, capability/schema signature, and timestamp. At least one matching versioned runtime/build identifier is mandatory for `READY`; null never matches null. Identity-null receipts remain visible as `ESCALATION PREVIOUSLY OBSERVED` but cannot establish current-runtime capability. Receipts expire for readiness after 30 days but remain available as history. A runtime/build or plugin-candidate change invalidates `READY` until normal work produces a fresh successful receipt; the health check never launches an automatic paid probe.
 
 ## Your first task
 
@@ -95,7 +95,7 @@ files yet. Choose the best model and effort automatically, and tell me the
 route in one short line before you begin.
 ```
 
-You should see a simple label such as `Terra High Fast` or `Sol Medium Standard`. You can then stop thinking about model selection and focus on the work.
+You should see a simple label such as `Sol High Fast` or `Sol Medium Standard`. You can then stop thinking about model selection and focus on the work.
 
 ## Pick your optimization style
 
@@ -135,7 +135,7 @@ Fast/Standard is a Codex speed preference. It is separate from Token Saver, Bala
 
 In Codex Desktop, change Fast/Standard from the visible UI control. Typing `/fast on` or `/fast off` into a task does not change the Desktop setting; Autorouter cannot toggle it from a prompt.
 
-If you turn Fast on in the UI, the next routed request can appear as `Terra High Fast`. Turn it off in the UI and the route will use Standard, such as `Terra High Standard`. If your current Codex model or account does not offer Fast, Codex simply keeps Standard available.
+If you turn Fast on in the UI, the next routed request can appear as `Sol High Fast`. Turn it off in the UI and the route will use Standard, such as `Sol High Standard`. If your current Codex model or account does not offer Fast, Codex simply keeps Standard available.
 
 **A useful default:** keep Balanced + Standard for normal background work. Turn Fast on for interactive building sessions. Use Max Quality when the outcome matters more than speed or token use.
 
@@ -144,33 +144,33 @@ See the official [Codex speed guide](https://learn.chatgpt.com/docs/agent-config
 ## What Autorouter chooses
 
 <p align="center">
-  <img src="assets/readme/routing-map.svg" alt="Luna repeats checked work, Terra builds and investigates, Sol owns hard outcomes, and Astra is a gated frontier" width="100%">
+  <img src="assets/readme/routing-map.svg" alt="GPT-6 Luna handles routine work, GPT-6 Sol handles balanced and high-capability work, and Astra is a gated frontier" width="100%">
 </p>
 
 The model reported by `UserPromptSubmit.model` determines what is allowed for that turn:
 
 | Active root | Routine work | Normal work | Hard work | Credit health |
 |---|---|---|---|---|
-| **Luna** | Stay on Luna | May escalate to Terra | May escalate to Sol | Efficient root; eligible for `READY` |
-| **Terra** | Stay on Terra | Stay on Terra | May escalate to Sol | `DEGRADED` for the turn |
-| **Sol** | Stay on Sol | Stay on Sol | Stay on Sol; Astra only through an explicit request or attested `ROUTE_UP` | `DEGRADED` for the turn |
-| **Astra** | Stay on Astra | Stay on Astra | Stay on Astra | `DEGRADED` for the turn |
+| **GPT-6 Luna Low** | Stay on Luna | May escalate to GPT-6 Sol Medium | May escalate to GPT-6 Sol High | Efficient root; eligible for `READY` |
+| **GPT-6 Sol Medium** | Stay on Sol | Stay on Sol | May escalate to GPT-6 Sol High; Astra only through an explicit request or attested `ROUTE_UP` | `DEGRADED` for the turn |
+| **GPT-6 Sol High/xHigh** | Stay on Sol | Stay on Sol | Stay on Sol; Astra only through an explicit request or attested `ROUTE_UP` | `DEGRADED` for the turn |
+| **GPT-6 Astra** | Stay on Astra | Stay on Astra | Stay on Astra | `DEGRADED` for the turn |
 
-Sol and Astra are never delegated downward merely to satisfy the classifier. Independent parallel work may still justify a child when it has its own bounded reason. User-intent ambiguity does not justify a stronger model: Luna asks one concise clarification. Technical uncertainty inside an otherwise clear task may justify Terra or Sol.
+Sol and Astra are never delegated downward merely to satisfy the classifier. Independent parallel work may still justify same-capability Sol children when each has its own bounded workstream. User-intent ambiguity does not justify a stronger model: Luna asks one concise clarification. Technical uncertainty inside an otherwise clear task may justify GPT-6 Sol Medium or High.
 
 Astra is deliberately rare. Generic task severity, frontier-sounding keywords, and Max Quality do not select it. An explicit request supports Astra Medium, High, Extra High, or Max and defaults to Medium when unqualified; explicit Low and Ultra are rejected. The only automatic path is an authoritative, same-task, successfully attested Sol `ROUTE_UP`, and it always requests Astra Medium. There are no automatic Astra effort retries.
 
 ## When subagents help
 
 <p align="center">
-  <img src="assets/readme/orchestration.svg" alt="Autorouter stays direct, splits matching parallel workers, or gathers Terra evidence before one Sol owner" width="100%">
+  <img src="assets/readme/orchestration.svg" alt="Autorouter stays direct, splits bounded GPT-6 Sol workers, or gathers Sol Medium evidence before Sol High synthesis" width="100%">
 </p>
 
 Small tasks stay in one agent. Larger tasks may split into a few independent pieces, or gather evidence before one agent owns the final result. Autorouter keeps this bounded so a simple request does not turn into an expensive swarm.
 
 ## Tips for better results
 
-1. **Describe the outcome, not the model.** Say what you want built or fixed; let Autorouter choose Luna, Terra, or Sol. Request Astra explicitly only when you intentionally want the frontier tier.
+1. **Describe the outcome, not the model.** Say what you want built or fixed; let Autorouter choose GPT-6 Luna or Sol. Request Astra explicitly only when you intentionally want the frontier tier.
 2. **Include “done when.”** Mention the test, behavior, or visible result that should prove completion.
 3. **Start with Balanced.** Move to Token Saver or Max Quality only when you have a reason.
 4. **Use Fast for active collaboration.** Standard is a good default for work that can run in the background.
@@ -180,7 +180,7 @@ Small tasks stay in one agent. Larger tasks may split into a few independent pie
 
 ## What Autorouter will—and will not—do
 
-- It chooses a cost-effective Luna, Terra, or Sol route for each task and exposes Astra only through its narrow frontier gate.
+- It chooses a cost-effective GPT-6 Luna or Sol route for each task and exposes Astra only through its narrow frontier gate.
 - It can use a small number of specialized subagents when they materially help.
 - It keeps important work on appropriately capable routes, even in Token Saver.
 - It verifies file-changing work before reporting success.

@@ -1,14 +1,33 @@
 from __future__ import annotations
 
 import json
+import subprocess
 import unittest
 from pathlib import Path
 
+import validate_release
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReleaseContractTests(unittest.TestCase):
+    def test_ignored_generated_runtime_artifacts_do_not_become_candidate_drift(self) -> None:
+        paths = validate_release.candidate_source_paths(
+            {"src/keep.py"},
+            {"src/new.py", "src/__pycache__/new.cpython-314.pyc", "src/.DS_Store"},
+        )
+        self.assertEqual({"src/keep.py", "src/new.py"}, {path.as_posix() for path in paths})
+
+    def test_tracked_or_packaged_generated_artifacts_remain_release_failures(self) -> None:
+        with self.assertRaisesRegex(AssertionError, "generated artifact"):
+            validate_release.candidate_source_paths({"src/__pycache__/tracked.pyc"}, set())
+        self.assertEqual(
+            {"src/generated.py"},
+            {path.as_posix() for path in validate_release.candidate_source_paths(
+                {"src/generated.py"}, {"src/__pycache__/generated.pyc"}
+            )},
+        )
+
     def test_marketplace_uses_fork_and_immutable_candidate_ref(self) -> None:
         marketplace = json.loads((ROOT / ".agents/plugins/marketplace.json").read_text(encoding="utf-8"))
         source = marketplace["plugins"][0]["source"]
@@ -33,7 +52,7 @@ class ReleaseContractTests(unittest.TestCase):
         )
 
         for required in (
-            'model = "gpt-5.6-luna"',
+            'model = "gpt-6-luna"',
             'model_reasoning_effort = "low"',
             "python3 scripts/check_hooks.py",
             "READY",
@@ -73,6 +92,15 @@ class ReleaseContractTests(unittest.TestCase):
         ):
             self.assertIn(required, skill + "\n" + operator_docs)
         self.assertIn("gpt-6", manifest["keywords"])
+
+    def test_plugin_surface_uses_the_current_gpt6_routing_policy(self) -> None:
+        manifest = json.loads((ROOT / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))
+        hooks = json.loads((ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))
+        prompt_hook = hooks["hooks"]["UserPromptSubmit"][0]["hooks"][0]
+        self.assertIn("GPT-6 Luna or Sol", manifest["interface"]["longDescription"])
+        self.assertNotIn("Terra", manifest["interface"]["longDescription"])
+        self.assertIn("GPT-6", prompt_hook["statusMessage"])
+        self.assertNotIn("GPT-5.6", prompt_hook["statusMessage"])
 
 
 if __name__ == "__main__":

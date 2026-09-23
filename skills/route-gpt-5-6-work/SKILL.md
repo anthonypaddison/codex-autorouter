@@ -1,9 +1,9 @@
 ---
 name: route-gpt-5-6-work
-description: Automatically profile and route Codex work from a cheap GPT-5.6 Luna root to supported Terra or Sol children, with GPT-6 Astra available only as a rare explicitly requested or Sol-attested frontier tier. Select an appropriate reasoning effort, product-building specialization, bounded subagent plan, and verification contract. Use for product discovery, strategy, requirements, UX/UI, frontend, backend, databases, mobile, AI, integrations, payments, QA, analytics, growth, accessibility, localization, DevOps, reliability, launch, maintenance, coding, debugging, review, research, security, privacy, architecture, migration, performance, data, batch, or multi-agent tasks when model choice, cost, latency, verification, or delegation should be automatic.
+description: Automatically profile and route Codex work from a cheap GPT-6 Luna root to supported GPT-6 Sol children, with GPT-6 Astra available only as a rare explicitly requested or Sol-attested frontier tier. Select an appropriate reasoning effort, product-building specialization, bounded subagent plan, and verification contract. Use for product discovery, strategy, requirements, UX/UI, frontend, backend, databases, mobile, AI, integrations, payments, QA, analytics, growth, accessibility, localization, DevOps, reliability, launch, maintenance, coding, debugging, review, research, security, privacy, architecture, migration, performance, data, batch, or multi-agent tasks when model choice, cost, latency, verification, or delegation should be automatic.
 ---
 
-# Route GPT-5.6 Work
+# Route GPT-6 Work
 
 Choose the least expensive route likely to produce a correct result. Optimize total cost to a verified outcome, not price per request.
 
@@ -29,11 +29,11 @@ Plugin installation makes the skill and hook definitions discoverable. Normal ro
 
 `routerctl` keeps transactional ownership/recovery support for explicitly requested legacy compatibility. Plain `activate` does not install legacy agents; only `activate --legacy-agents` does. `status` never creates or repairs state. Mutating `repair`, legacy activation/deactivation, profile, and offline sanitize operations remain explicit. The legacy `install_router.py` is a compatibility wrapper and must not be presented as the preferred workflow.
 
-The router has three persistent preferences, changed with `python3 scripts/routerctl.py profile <token-saver|balanced|max-quality>` and inspected with `python3 scripts/routerctl.py profile`. `balanced` is the fail-safe default. `token-saver` permits at most one worker, removes optional fan-out and routing councils, and steps only normal-risk work down one cost tier; it must never weaken security, payment, privacy, production, destructive-action, or other safety floors. `max-quality` steps nontrivial work up one capability tier, uses Terra evidence workers before consequential Sol execution when useful, and reserves Sol Extra High for the hardest security, deep-debugging, research, and critical-change tasks. It leaves trivial tasks direct and retains depth 1 / three-agent limits. A changed preference applies to the next new task; continuations retain their in-flight contract. The preference is separate from Fast/Standard and must never toggle the UI speed tier.
+The router has three persistent preferences, changed with `python3 scripts/routerctl.py profile <token-saver|balanced|max-quality>` and inspected with `python3 scripts/routerctl.py profile`. `balanced` is the fail-safe default. `token-saver` permits at most one worker, removes optional fan-out and routing councils, and steps only normal-risk work down one cost tier; it must never weaken security, payment, privacy, production, destructive-action, or other safety floors. `max-quality` steps nontrivial work up one capability tier, uses GPT-6 Sol Medium evidence workers before Sol High synthesis when useful, and reserves Sol xHigh for the hardest security, deep-debugging, research, and critical-change tasks. It leaves trivial tasks direct and retains depth 1 / three-agent limits. A changed preference applies to the next new task; continuations retain their in-flight contract. The preference is separate from Fast/Standard and must never toggle the UI speed tier.
 
 When a user explicitly asks to set Token Saver, Balanced, or Max Quality, run the matching `routerctl profile` command and report the stored label. Do not ask them to choose a model or effort afterward. Treat the envelope's `routing_profile` fields as authoritative for an active task.
 
-Treat readiness failures as real deployment blockers. `scripts/check_hooks.py` reports `READY`, `DEGRADED`, or `UNAVAILABLE` from App Server discovery/trust, current `[agents].enabled`, the current task's authoritative `UserPromptSubmit.model` observation, and model-keyed non-stale plugin-candidate/runtime-bound successful Terra, Sol, or Astra capability receipts. It never runs a paid probe. Another task's root, absent task context, a changed or unobservable versioned runtime/build, candidate mismatch, unknown/non-Luna turn root, receipt older than 30 days, or no current receipt is `DEGRADED`; blocked hooks/plugin/subagents are `UNAVAILABLE`. Missing proof for one tier does not erase current proof for another tier, and health reports each tier separately.
+Treat readiness failures as real deployment blockers. `scripts/check_hooks.py` reports `READY`, `DEGRADED`, or `UNAVAILABLE` from App Server discovery/trust, current `[agents].enabled`, the current task's authoritative `UserPromptSubmit.model` observation, and model-keyed non-stale plugin-candidate/runtime-bound successful GPT-6 Sol or Astra capability receipts. GPT-5.6 is historical/transition evidence only and cannot satisfy current readiness. It never runs a paid probe. Another task's root, absent task context, a changed or unobservable versioned runtime/build, candidate mismatch, unknown/non-Luna turn root, receipt older than 30 days, or no current receipt is `DEGRADED`; blocked hooks/plugin/subagents are `UNAVAILABLE`. Missing proof for one tier does not erase current proof for another tier, and health reports each tier separately.
 
 Require Python 3.10 or newer. Plugin hooks use relocatable `${PLUGIN_ROOT}` and `%PLUGIN_ROOT%` commands, while runtime state uses Codex's writable `${PLUGIN_DATA}` location.
 
@@ -45,15 +45,15 @@ Choose one capability route and one orchestration plan before starting substanti
 
 - `current`: keep the already-running agent; do not delegate.
 - `current`: keep the actual root reported by `UserPromptSubmit.model`.
-- Terra Medium/High: direct supported child calls for normal work or technical uncertainty.
-- Sol Medium/High/Extra High: direct supported child calls for hard, consequential, or exceptionally difficult work.
+- GPT-6 Sol Medium: the Balanced profile for bounded normal work and independent evidence gathering.
+- GPT-6 Sol High/xHigh: the High profile for hard or consequential work; xHigh only when the approved deep/high policy justifies it.
 - Astra Medium/High/Extra High/Max: a rare frontier child only after an explicit user request, or Astra Medium only after an authoritative attested Sol `ROUTE_UP`.
 
 Never describe a model as active when the work remains in the root. A non-`current` route requires a genuine matching direct child call; do not merely recommend or claim it.
 
 Use only factual public route labels in the form `{Model} {Effort} {Speed}`. If hook evidence omits the current model, effort, or tier, say `Current model unknown`, `Effort unknown`, or `Speed unknown`. Announce every genuine non-current route and plan transition as `Route: {factual plan}`. Keep internal route IDs out of normal user-facing copy.
 
-For routed children, use only the exact call shape generated by the compatibility adapter: `fork_turns: "none"`, unique `task_name`, nonempty self-contained `message`, selected Terra, Sol, or Astra `model`, and selected `reasoning_effort`. Never request Luna as a child. Omit `service_tier`, require a distilled return containing `Evidence:`, `Verification:`, and `Uncertainty:`, and do not delegate recursively. If the visible tool rejects direct model/effort selection, fail open in the current root, disclose `DEGRADED` escalation capability, preserve verification, and never claim a child started.
+For routed children, use only the exact call shape generated by the compatibility adapter: `fork_turns: "none"`, unique `task_name`, nonempty self-contained `message`, selected GPT-6 Sol or Astra `model`, and selected `reasoning_effort`. Never request Luna as a child. Omit `service_tier`, require a distilled return containing `Evidence:`, `Verification:`, and `Uncertainty:`, and do not delegate recursively. If the visible tool rejects direct model/effort selection, fail open in the current root, disclose `DEGRADED` escalation capability, preserve verification, and never claim a child started.
 
 Because `fork_turns: "none"` intentionally supplies no parent prompt or history, every child `message` must be self-contained. Include the bounded contract, required inputs, ownership boundary, dependencies, and acceptance checks; never assume the child can infer them from the parent task.
 
@@ -81,7 +81,7 @@ Use the current agent for a small, single-path task that it can complete and ver
 
 ### Luna root
 
-Luna is the required cheap root. Routine work stays in that root when all are true:
+GPT-6 Luna Low is the required cheap root. Routine work stays in that root when all are true:
 
 - the task is narrow and low consequence;
 - instructions are explicit;
@@ -90,29 +90,17 @@ Luna is the required cheap root. Routine work stays in that root when all are tr
 
 Typical work: mechanical edits, formatting, extraction into a fixed schema, repeated transformations, candidate generation, or test-case expansion from a complete specification. Do not spawn a Luna child merely to satisfy the classifier.
 
-Do not use Luna for open-ended discovery, architecture, root-cause analysis, security-sensitive work, broad synthesis, or consequential ownership.
+Do not use Luna for open-ended discovery, architecture, root-cause analysis, security-sensitive work, broad synthesis, or consequential ownership. Clear normal work may escalate to GPT-6 Sol Medium; hard work may escalate to GPT-6 Sol High when the capability or consequence warrants it.
 
-### Terra Medium: `gpt56_terra_worker`
+### Balanced: GPT-6 Sol Medium
 
-Use for cost-efficient supporting work: read-heavy scans, codebase exploration, document processing, ordinary implementation with good tests, and bounded analysis that needs real context.
+Use as the active Balanced profile for bounded normal work: read-heavy scans, codebase exploration, document processing, ordinary implementation with good tests, and bounded analysis that needs real context. Sol roots stay on Sol; same-capability children are permitted only for separately justified independent work.
 
-### Terra High: `gpt56_terra_deep`
+### High: GPT-6 Sol High
 
-Use when Terra-level capability is sufficient but ambiguity, edge cases, or validation complexity require more reasoning. Prefer this before escalating capability when the issue is uncertainty rather than a model ceiling.
+Use for hard technical work, root-cause analysis, consequential implementation, or substantial edge-case reasoning. User-intent ambiguity is not a reason to spend: ask one concise clarification instead. Technical uncertainty within a clear task can justify Sol High.
 
-Use Terra High for intermittent or CI-only failures by default. Escalate unresolved root-cause work to Sol only when it is high consequence, Terra has failed with evidence, or the capability ceiling—not ordinary uncertainty—is the limit.
-
-### Sol Medium: `gpt56_sol_owner`
-
-Use for demanding, ambiguous, multi-step work requiring planning, tool use, validation, synthesis, or follow-through across a large context. Use for architecture, migrations, stubborn debugging, consequential changes, and final ownership of complex work.
-
-### Sol High: `gpt56_sol_deep`
-
-Use selectively for difficult security analysis, expensive-to-reverse work, adversarial testing, or deep execution where missing an edge case would be costly. This route owns the bounded task itself; it is not a separate approval stage.
-
-### Sol Extra High: `gpt56_sol_xhigh`
-
-Use only in Max Quality for the hardest security/code-review, deep-research, long-running agentic, critical-change, or challenging coding tasks where the extra reasoning is likely to improve the verified result enough to justify its token and latency cost. Do not select it merely because Max Quality is enabled.
+Use xHigh only under the approved deep/high policy for the hardest security/code-review, deep-research, critical-change, or challenging coding tasks. Do not select it merely because Max Quality is enabled.
 
 ### GPT-6 Astra: `gpt6_astra_*`
 
@@ -122,26 +110,23 @@ The only non-explicit Astra entry is one authoritative same-task Sol `ROUTE_UP`,
 
 ## Effort routing
 
-- Use `low` only for straightforward, objectively checked work.
-- Use `medium` as the default.
-- Use `high` when tracing complex logic, challenging assumptions, or covering edge cases.
-- Use `xhigh` only for the narrow Sol Max Quality cases described above, or an explicit Astra Extra High request.
-- Use `max` only for an explicit Astra Max request.
+- GPT-6 Luna Low is the preferred cheap-root effort.
+- GPT-6 Sol Medium is the Balanced profile.
+- GPT-6 Sol High is the High profile; xHigh is allowed only for the narrow deep/high cases above.
+- Automatic Astra uses Medium only. Explicit Astra supports Medium, High, xHigh, and Max; Low and Ultra are rejected.
 
-Automatic Terra/Sol routing exposes configured `medium`, `high`, and `xhigh` child routes. Automatic Astra uses Medium only. Explicit Astra supports Medium, High, Extra High, and Max; Astra Low and Ultra are unsupported. No automatic Astra effort retry is permitted without later measured evidence and a separately reviewed policy change.
-
-Raise effort for uncertainty. Raise the model tier for capability.
+Do not treat unknown root effort as proof that a profile is satisfied or as a reason to spend. Preserve the actual root until authoritative evidence supports a profile transition.
 
 ## Delegation policy
 
-Delegate only concrete, bounded work. The root is always the orchestrator and final acceptance owner; all subagents are depth-1 leaves. In an evidence-then-owner plan, the selected Sol executor performs the demanding synthesis or implementation and the root verifies coverage, resolves remaining conflicts, and accepts or rejects it.
+Delegate only concrete, bounded work. The root is always the orchestrator and final acceptance owner; all subagents are depth-1 leaves. In an evidence-then-owner plan, GPT-6 Sol Medium workers independently gather evidence, then Sol High may synthesize when the task warrants it; the root verifies coverage, resolves remaining conflicts, and accepts or rejects it.
 
 Use one of four executable plans:
 
-- **Single delegate:** one matching Terra, Sol, or eligible Astra child selected through the adapter returns a distilled result.
-- **Parallel leaves:** two or three identical Terra workers receive unique task names, non-overlapping unit IDs, and objective acceptance checks; root verifies coverage and resolves conflicts.
-- **Evidence then owner:** two Terra Medium workers independently gather evidence, then one selected Sol Medium, High, or Extra High executor receives only their distilled returns and the final contract. The root preserves the third slot for that Sol execution.
-- **Routing council:** only when independently justified or explicitly requested, one Terra Medium cost advisor and one Terra High risk advisor independently choose from a frozen candidate list. Ambiguous user intent alone never justifies this plan; ask one concise clarification instead. Both advisors are read-only.
+- **Single delegate:** one matching GPT-6 Sol or eligible Astra child selected through the adapter returns a distilled result.
+- **Parallel leaves:** two or three GPT-6 Sol workers at a capability not below the actual Sol root receive unique task names, non-overlapping unit IDs, and objective acceptance checks; root verifies coverage and resolves conflicts.
+- **Evidence then owner:** two GPT-6 Sol Medium workers independently gather evidence, then a GPT-6 Sol High executor may synthesize when justified. If the actual Sol High root already satisfies the plan, retain only same-capability High evidence workers and synthesize in the root. Never dispatch a lower-capability child merely to match an older role label.
+- **Routing council:** only when independently justified or explicitly requested, one GPT-6 Sol Medium cost advisor and one GPT-6 Sol High risk advisor independently choose from a frozen candidate list. Ambiguous user intent alone never justifies this plan; ask one concise clarification instead. Both advisors are read-only.
 
 Require explicit unit boundaries, dependencies, read/write ownership, acceptance checks, and a conflict rule before fan-out. Serialize work that touches shared mutable state or has prerequisites. Never use more than three subagents or depth greater than one.
 
@@ -149,18 +134,18 @@ For a routing council, require `Route recommendation: <role>` plus nonempty `Evi
 
 Treat `current` as the actual active root route, not an extra model choice. Do not include a duplicate custom route when current already has the same model and effort.
 
-Permit one evidence-backed `ROUTE_UP` transition per turn: Terra Medium → Terra High → Sol Medium → Sol High → Sol Extra High → Astra Medium. The Sol-to-Astra transition requires the authoritative exact-child evidence above; it does not inherit permission from generic severity or keyword classification. Preserve completed evidence and avoid repeated discovery. Do not route up merely because a worker is slow or user intent is unclear; require a demonstrated technical capability limit or unresolved high-consequence technical uncertainty.
+Permit one evidence-backed `ROUTE_UP` transition per turn: GPT-6 Sol Medium → GPT-6 Sol High → GPT-6 Astra Medium. The Sol-to-Astra transition requires the authoritative exact-child evidence above; it does not inherit permission from generic severity or keyword classification. Preserve completed evidence and avoid repeated discovery. Do not route up merely because a worker is slow or user intent is unclear; require a demonstrated technical capability limit or unresolved high-consequence technical uncertainty.
 
 Use these patterns:
 
 - **Routine task:** current root.
 - **Ambiguous user intent:** ask one concise clarification in the current root.
-- **Clear task with technical uncertainty:** Terra High; escalate to Sol only if consequence or capability evidence justifies it.
-- **High-stakes task:** `gpt56_sol_owner` or `gpt56_sol_deep`; in Max Quality, use `gpt56_sol_xhigh` only when the task matches the narrow extra-high criteria. Do not infer Astra eligibility from stakes alone.
-- **High-volume verified batch:** Luna root processes it directly when cheap objective verification is strong; use Terra only when context/coordination repays handoff.
-- **Parallel research:** two Terra Medium leaves gather independent evidence; add the selected Sol executor when the result requires architecture, migration planning, demanding synthesis, or consequential ownership.
+- **Clear task with technical uncertainty:** GPT-6 Sol High when the technical difficulty warrants it; effort uncertainty alone does not escalate.
+- **High-stakes task:** GPT-6 Sol Medium/High according to difficulty; use xHigh only for the narrow deep/high cases. Do not infer Astra eligibility from stakes alone.
+- **High-volume verified batch:** Luna root processes it directly when cheap objective verification is strong; use bounded Sol workers only when independent work repays handoff.
+- **Parallel research:** GPT-6 Sol Medium leaves gather independent evidence; add GPT-6 Sol High synthesis only when the result requires demanding architecture, migration planning, or consequential ownership.
 
-Do not create a mandatory Luna-to-Terra-to-Sol-to-Astra pipeline. Model switching consumes context and tokens.
+Do not create a mandatory Luna-to-Sol-to-Astra pipeline. Model switching consumes context and tokens.
 
 ## Verification gate
 
@@ -184,7 +169,7 @@ Hook enforcement covers only lifecycle and tool events that Codex actually emits
 ## Boundaries
 
 - A skill cannot change the already-running root model in place. `UserPromptSubmit.model` is authoritative for every actual turn. Configuration/App Server evidence may support health but cannot override it.
-- Luna root: routine stays Luna, normal may use Terra, hard may use Sol. Terra root: routine/normal stay Terra and hard may use Sol. Sol root: stay Sol unless the user explicitly requests Astra or an authoritative Sol route-up proves the frontier need. Astra root: stay Astra. Never delegate downward merely to satisfy the classifier.
+- GPT-6 Luna Low root: routine work stays Luna, normal work may use GPT-6 Sol Medium, and hard work may use GPT-6 Sol High. GPT-6 Sol roots remain Sol; same-capability independent parallel work is allowed only with its own bounded justification, while lower-capability children are prohibited. Astra is available only by explicit request or an authoritative Sol route-up. GPT-6 Astra roots stay Astra. Never delegate downward merely to satisfy the classifier.
 - Any non-Luna actual root is credit-efficiency `DEGRADED` for that turn and substantially reduces expected savings.
 - Luna Low is preferred, not immutable. A later controlled host acceptance may compare Low with Medium if Low cannot reliably follow the routing contract; Autorouter never changes that setting itself.
 - Hook inputs expose the child model but do not currently expose live reasoning effort or the per-task Fast toggle. Describe effort as configured intent and speed as reported configuration, never UI-attested runtime fact.

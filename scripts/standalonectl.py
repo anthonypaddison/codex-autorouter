@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import time
@@ -241,6 +242,32 @@ def _normalized_mode(info: os.stat_result) -> int:
     return 0 if os.name == "nt" else stat.S_IMODE(info.st_mode) & 0o777
 
 
+def _generated_relative(relative: str) -> bool:
+    path = Path(relative.rstrip("/"))
+    return path.name == ".DS_Store" or "__pycache__" in path.parts or path.suffix in {".pyc", ".pyo"}
+
+
+def _tracked_source_paths() -> set[str] | None:
+    """Return tracked paths relative to SOURCE, or None outside a Git checkout."""
+    try:
+        top = subprocess.run(
+            ["git", "-C", str(PLUGIN_ROOT), "rev-parse", "--show-toplevel"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        source_prefix = SOURCE.resolve().relative_to(Path(top).resolve()).as_posix().rstrip("/") + "/"
+        listed = subprocess.run(
+            ["git", "-C", top, "ls-files", "-z", "--", source_prefix],
+            check=True, capture_output=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError, ValueError):
+        return None
+    return {
+        item.decode("utf-8")[len(source_prefix):]
+        for item in listed.split(b"\0")
+        if item and item.decode("utf-8").startswith(source_prefix)
+    }
+
+
 def _tree_hashes(root: Path, *, reject_generated: bool = False, require_skill: bool = True) -> dict[str, dict[str, Any]]:
     if _is_linklike(root) or not root.is_dir():
         raise StandaloneError(f"invalid skill tree: {root}")
@@ -283,7 +310,17 @@ def _tree_hashes(root: Path, *, reject_generated: bool = False, require_skill: b
 
 
 def _source_inventory() -> dict[str, dict[str, Any]]:
-    return _tree_hashes(SOURCE, reject_generated=True)
+    tracked = _tracked_source_paths()
+    if tracked is None:
+        return _tree_hashes(SOURCE, reject_generated=True)
+    tracked_generated = sorted(path for path in tracked if _generated_relative(path))
+    if tracked_generated:
+        raise StandaloneError(f"skill source contains a generated artifact: {tracked_generated[0]}")
+    inventory = _tree_hashes(SOURCE)
+    return {
+        path: item for path, item in inventory.items()
+        if path == "./" or not _generated_relative(path)
+    }
 
 
 def _validate_files(value: Any) -> dict[str, dict[str, Any]]:
@@ -960,7 +997,7 @@ def main() -> int:
     if sys.version_info < (3, 10):
         print(json.dumps({"status": "error", "error": "standalonectl requires Python 3.10 or newer"}))
         return 2
-    parser = argparse.ArgumentParser(description="Manage the advisory standalone GPT-5.6 Router skill")
+    parser = argparse.ArgumentParser(description="Manage the advisory standalone Codex Autorouter skill")
     parser.add_argument("command", choices=("install", "status", "uninstall", "purge"))
     args = parser.parse_args()
     try:

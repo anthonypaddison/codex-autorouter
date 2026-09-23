@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Transactional activation for GPT-5.6 Router custom-agent definitions.
+"""Transactional activation for Codex Autorouter legacy custom-agent definitions.
 
 Plugin hooks are owned by Codex. This helper only manages the namespaced
 custom-agent TOMLs that Codex currently discovers outside plugin bundles.
@@ -1028,7 +1028,7 @@ def main() -> int:
     if sys.version_info < (3, 10):
         print("routerctl requires Python 3.10 or newer", file=sys.stderr)
         return 2
-    parser = argparse.ArgumentParser(description="Manage GPT-5.6 Router custom-agent activation")
+    parser = argparse.ArgumentParser(description="Manage Codex Autorouter legacy custom-agent activation")
     subparsers = parser.add_subparsers(dest="command", required=True)
     activate_parser = subparsers.add_parser("activate")
     activate_parser.add_argument("--replace-conflicts", action="store_true")

@@ -48,6 +48,56 @@ class StandaloneCtlTests(unittest.TestCase):
             check=False,
         )
 
+    def _git_backed_plugin_copy(self) -> Path:
+        plugin = self.root / "plugin"
+        (plugin / ".codex-plugin").mkdir(parents=True)
+        (plugin / "scripts").mkdir()
+        (plugin / "skills").mkdir()
+        shutil.copy2(SCRIPT.parents[1] / ".codex-plugin" / "plugin.json", plugin / ".codex-plugin" / "plugin.json")
+        shutil.copy2(SCRIPT, plugin / "scripts" / "standalonectl.py")
+        shutil.copytree(
+            SCRIPT.parents[1] / "skills" / "route-gpt-5-6-work",
+            plugin / "skills" / "route-gpt-5-6-work",
+            ignore=shutil.ignore_patterns(".DS_Store", "__pycache__", "*.pyc", "*.pyo"),
+        )
+        subprocess.run(["git", "init", "-q"], cwd=plugin, check=True)
+        subprocess.run(["git", "add", "."], cwd=plugin, check=True)
+        return plugin
+
+    def test_untracked_generated_skill_files_do_not_block_install(self) -> None:
+        plugin = self._git_backed_plugin_copy()
+        skill = plugin / "skills" / "route-gpt-5-6-work"
+        cache = skill / "scripts" / "__pycache__"
+        cache.mkdir()
+        (cache / "router_hook.cpython-314.pyc").write_bytes(b"local bytecode")
+        (skill / "scripts" / ".DS_Store").write_bytes(b"local metadata")
+        env = {
+            **self.env,
+            "CODEX_HOME": str(self.root / "codex-home-copy"),
+            "GPT56_STANDALONE_DATA": str(self.root / "standalone-data-copy"),
+        }
+
+        result = self.run_script(plugin / "scripts" / "standalonectl.py", "install", env=env)
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertTrue((Path(env["CODEX_HOME"]) / "skills" / "route-gpt-5-6-work" / "SKILL.md").is_file())
+
+    def test_tracked_generated_skill_file_blocks_install(self) -> None:
+        plugin = self._git_backed_plugin_copy()
+        bytecode = plugin / "skills" / "route-gpt-5-6-work" / "scripts" / "tracked.pyc"
+        bytecode.write_bytes(b"tracked bytecode")
+        subprocess.run(["git", "add", str(bytecode.relative_to(plugin))], cwd=plugin, check=True)
+        env = {
+            **self.env,
+            "CODEX_HOME": str(self.root / "codex-home-copy"),
+            "GPT56_STANDALONE_DATA": str(self.root / "standalone-data-copy"),
+        }
+
+        result = self.run_script(plugin / "scripts" / "standalonectl.py", "install", env=env)
+
+        self.assertEqual(2, result.returncode)
+        self.assertIn("generated artifact", result.stdout)
+
     def payload(self, result: subprocess.CompletedProcess[str]) -> dict:
         self.assertTrue(result.stdout, result.stderr)
         return json.loads(result.stdout)

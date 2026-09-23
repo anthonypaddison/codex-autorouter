@@ -17,10 +17,10 @@ The suite deliberately includes work where different behavior should emerge:
 
 | Case | Capability under test | Expected Autorouter behavior |
 |---|---|---|
-| `locale_batch` | repeated, objectively checked transformation | two Luna leaves |
-| `webhook_race` | ambiguous concurrency debugging | Terra High unless the root already satisfies it |
+| `locale_batch` | repeated, objectively checked transformation | direct Luna execution |
+| `webhook_race` | difficult concurrency debugging | Sol High when the root does not already satisfy the profile |
 | `sqlite_migration` | reversible, expensive-to-get-wrong ownership | Sol ownership and migration/rollback evidence |
-| `parallel_audit` | independent security, accessibility, and data review | Terra evidence followed by one Sol owner |
+| `parallel_audit` | independent security, accessibility, and data review | Sol evidence gathering with root-owned synthesis when appropriate |
 
 Route-only probes also exercise ordinary implementation, unclear multi-area
 work, protected security floors, profile changes, high-volume delegation,
@@ -62,14 +62,14 @@ Saver, Balanced, and Max Quality in turn. Each arm starts from a fresh copy of
 the same fixture, run order rotates across repetitions, and the user's original
 Autorouter profile is restored even if the run fails.
 
-Defaults match the release test environment (`gpt-5.6-sol`, `high`,
-`priority`). Override them only when comparing another controlled root:
+Defaults match ordinary cheap-root operation (`gpt-6-luna`, `low`,
+`priority`). Override them only when comparing another controlled GPT-6 root:
 
 ```bash
 python3 benchmarks/autorouter_bench.py run \
   --output /tmp/autorouter-arena \
   --execute --trust-reviewed-hooks \
-  --root-model gpt-5.6-terra --root-effort medium --service-tier default
+  --root-model gpt-6-sol --root-effort medium --service-tier priority
 ```
 
 Run one case while iterating:
@@ -151,4 +151,4 @@ computed without relying on screenshots or memory.
   comparable without baking changing prices into the repository.
 - A skill cannot replace the already-running root model. The benchmark makes
   this visible: savings on a Sol root must come from useful bounded delegation,
-  not from claiming the root silently became Terra or Luna.
+  not from claiming the root silently became Sol or Luna.

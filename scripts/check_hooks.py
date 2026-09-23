@@ -10,6 +10,7 @@ import os
 import queue
 import re
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -18,19 +19,24 @@ from typing import Any
 
 EXPECTED_EVENTS = {"postToolUse", "userPromptSubmit", "subagentStart", "subagentStop", "stop"}
 CHECKER_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(CHECKER_ROOT / "skills" / "route-gpt-5-6-work" / "scripts"))
+import model_policy
 CAPABILITY_SCHEMA_VERSION = 1
 CAPABILITY_SIGNATURE = "direct-model-spawn-v1"
 ROOT_OBSERVATION_FILE = "root-observation-v1.json"
 ROOT_OBSERVATIONS_DIRECTORY = "root-observations-v1"
 CAPABILITY_FILE = "capability-v1.json"
 CAPABILITY_FILE_V2 = "capability-v2.json"
+CAPABILITY_FILE_V3 = "capability-v3.json"
 CAPABILITY_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
-CAPABILITY_MODELS = ("gpt-5.6-terra", "gpt-5.6-sol", "gpt-6-astra")
-CAPABILITY_EFFORTS = {
-    "gpt-5.6-terra": frozenset({"medium", "high"}),
-    "gpt-5.6-sol": frozenset({"medium", "high", "xhigh"}),
-    "gpt-6-astra": frozenset({"medium", "high", "xhigh", "max"}),
+CAPABILITY_SPECS = {
+    model_policy.capability_key("gpt-6-sol", "balanced", "medium"): ("gpt-6-sol", "balanced", "medium"),
+    model_policy.capability_key("gpt-6-sol", "high", "high"): ("gpt-6-sol", "high", "high"),
+    model_policy.capability_key("gpt-6-sol", "high", "xhigh"): ("gpt-6-sol", "high", "xhigh"),
+    model_policy.capability_key("gpt-6-astra", "frontier", "medium"): ("gpt-6-astra", "frontier", "medium"),
 }
+CAPABILITY_MODELS = tuple(CAPABILITY_SPECS)
+CAPABILITY_EFFORTS = {key: frozenset({spec[2]}) for key, spec in CAPABILITY_SPECS.items()}
 PLUGIN_IDENTITY_FILES = (
     ".codex-plugin/plugin.json",
     "hooks/hooks.json",
@@ -39,6 +45,8 @@ PLUGIN_IDENTITY_FILES = (
     "skills/route-gpt-5-6-work/SKILL.md",
     "skills/route-gpt-5-6-work/scripts/router_hook.py",
     "skills/route-gpt-5-6-work/scripts/spawn_compat.py",
+    "skills/route-gpt-5-6-work/scripts/model_policy.py",
+    "scripts/model_catalogue.py",
 )
 
 
@@ -171,43 +179,51 @@ def _timestamp(value: Any) -> int | None:
 def _capability_receipts(
     data_root: Path,
 ) -> tuple[dict[str, dict[str, Any] | None], list[str]]:
-    """Read model-keyed receipts plus one exact-tier legacy receipt."""
-    receipts: dict[str, dict[str, Any] | None] = {model: None for model in CAPABILITY_MODELS}
+    """Read only current exact model/profile/effort receipts; older schemas are history."""
+    receipts: dict[str, dict[str, Any] | None] = {key: None for key in CAPABILITY_MODELS}
     errors: list[str] = []
-    document, document_error = _read_json_object(data_root / CAPABILITY_FILE_V2)
+    document, document_error = _read_json_object(data_root / CAPABILITY_FILE_V3)
     if document_error:
-        errors.append(f"Model-keyed capability evidence is unreadable ({document_error}).")
+        errors.append(f"Profile-keyed capability evidence is unreadable ({document_error}).")
     elif document is not None:
         capabilities = document.get("capabilities")
         if (
-            document.get("schema_version") != 2
+            document.get("schema_version") != 3
             or document.get("capability_signature") != CAPABILITY_SIGNATURE
+            or document.get("policy_revision") != model_policy.POLICY_REVISION
             or not isinstance(capabilities, dict)
-            or any(model not in CAPABILITY_MODELS for model in capabilities)
+            or any(key not in CAPABILITY_MODELS for key in capabilities)
         ):
-            errors.append("Model-keyed capability evidence has an incompatible schema or model key.")
+            errors.append("Profile-keyed capability evidence has an incompatible schema, revision, or key.")
         else:
-            for model, receipt in capabilities.items():
+            for key, receipt in capabilities.items():
                 if not isinstance(receipt, dict):
-                    errors.append(f"Capability evidence for {model} has an invalid shape.")
+                    errors.append(f"Capability evidence for {key} has an invalid shape.")
                 else:
-                    receipts[model] = {**receipt, "_container_schema_version": 2}
-
-    legacy, legacy_error = _read_json_object(data_root / CAPABILITY_FILE)
-    if legacy_error:
-        errors.append(f"Legacy capability receipt is unreadable ({legacy_error}).")
-    elif legacy is not None:
-        model = legacy.get("observed_child_model")
-        if model in {"gpt-5.6-terra", "gpt-5.6-sol"} and receipts[model] is None:
-            receipts[model] = legacy
-        elif model not in {"gpt-5.6-terra", "gpt-5.6-sol"}:
-            errors.append("Legacy capability receipt does not attest an exact Terra or Sol tier.")
+                    receipts[key] = {**receipt, "_container_schema_version": 3}
     return receipts, errors
+
+
+def _has_historical_capability(data_root: Path) -> bool:
+    """Recognize legacy evidence as history only; never promote it to current proof."""
+    for filename, schema in ((CAPABILITY_FILE_V2, 2), (CAPABILITY_FILE, 1)):
+        document, error = _read_json_object(data_root / filename)
+        if error or not isinstance(document, dict):
+            continue
+        if document.get("schema_version") != schema:
+            continue
+        if schema == 2:
+            capabilities = document.get("capabilities")
+            if isinstance(capabilities, dict) and any(isinstance(item, dict) for item in capabilities.values()):
+                return True
+        elif document.get("observed_child_model"):
+            return True
+    return False
 
 
 def _capability_status(
     receipt: dict[str, Any] | None,
-    model: str,
+    capability: str,
     observation: dict[str, Any] | None,
     observation_compatible: bool,
     plugin_version: str,
@@ -215,16 +231,17 @@ def _capability_status(
 ) -> tuple[str, list[str]]:
     if receipt is None:
         return "UNPROVEN", []
+    model, profile, effort = CAPABILITY_SPECS[capability]
     reasons: list[str] = []
     compatible = observation_compatible
     receipt_schema = receipt.get("schema_version")
-    if receipt.get("_container_schema_version") == 2 and receipt_schema != 2:
-        reasons.append("model-keyed receipt schema is unsupported")
+    if receipt.get("_container_schema_version") == 3 and receipt_schema != 3:
+        reasons.append("profile-keyed receipt schema is unsupported")
         compatible = False
-    elif receipt_schema not in {1, 2}:
+    elif receipt_schema != 3:
         reasons.append("receipt schema is unsupported")
         compatible = False
-    elif receipt_schema == 2:
+    else:
         required_identities = (
             "agent_id", "spawn_call_key", "parent_session_id", "parent_turn_id", "child_turn_id",
         )
@@ -234,6 +251,7 @@ def _capability_status(
         required_gates = (
             "spawn_contract_valid", "lifecycle_complete", "completion_structured",
             "ambiguity_clear", "model_evidence_consistent", "attestation_matched",
+            "profile_policy_valid",
         )
         if any(receipt.get(field) is not True for field in required_gates):
             reasons.append("execution gate binding is incomplete")
@@ -254,8 +272,16 @@ def _capability_status(
     if requested is not None and requested != model:
         reasons.append("requested child model does not match its capability key")
         compatible = False
-    if receipt.get("effort_intent") not in CAPABILITY_EFFORTS[model]:
+    if receipt.get("effort_intent") not in CAPABILITY_EFFORTS[capability]:
         reasons.append("effort intent is absent or unsupported")
+        compatible = False
+    if (
+        receipt.get("route_profile") != profile
+        or receipt.get("effort_intent") != effort
+        or receipt.get("policy_revision") != model_policy.POLICY_REVISION
+        or receipt.get("capability_key") != capability
+    ):
+        reasons.append("model/profile/effort policy binding differs")
         compatible = False
     receipt_timestamp = _timestamp(receipt.get("timestamp"))
     if receipt_timestamp is None:
@@ -340,7 +366,7 @@ def _routing_health(
     if any(
         receipt is not None and _timestamp(receipt.get("timestamp")) is not None
         for receipt in receipts.values()
-    ):
+    ) or _has_historical_capability(data_root):
         historical_escalation_state = "ESCALATION PREVIOUSLY OBSERVED"
 
     if not effective.get("available"):
@@ -376,7 +402,7 @@ def _routing_health(
 
         if not isinstance(root_model, str) or not root_model:
             reasons.append("The effective root model is unknown.")
-        elif not root_model.lower().endswith("luna"):
+        elif root_model != "gpt-6-luna":
             if observation is not None and session_id:
                 current_task_root_state = "DEGRADED_NON_LUNA"
                 reasons.append(
@@ -409,7 +435,7 @@ def _routing_health(
         if receipt_errors:
             reasons.extend(receipt_errors)
         if not any(receipt is not None for receipt in receipts.values()):
-            reasons.append("No successful Terra/Sol/Astra escalation receipt exists; no automatic paid probe was performed.")
+            reasons.append("No successful GPT-6 Sol/Astra escalation receipt exists; no automatic paid probe was performed.")
         elif not current_tiers:
             reasons.extend(dict.fromkeys(
                 reason
@@ -553,7 +579,7 @@ def inspect(cwd: Path, plugin_prefix: str) -> dict[str, Any]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Check GPT-5.6 Router hook discovery and trust")
+    parser = argparse.ArgumentParser(description="Check Codex Autorouter hook discovery and trust")
     parser.add_argument("--cwd", type=Path, default=Path.cwd())
     parser.add_argument("--plugin", default="gpt-5-6-router")
     args = parser.parse_args()

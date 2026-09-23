@@ -19,18 +19,18 @@ For every row in `RELEASE_CHECKLIST.md`, record:
 - ledger status, continuation count, verification evidence, and violations;
 - any warning, retry, manual intervention, or environmental limitation.
 
-A passing delegated route requires the expected model/effort intent, no unplanned children, satisfied verification, no unresolved violation, and a model-keyed receipt created only after the same `agent_id` starts, is observed on the exact compatible model, and completes genuine Terra, Sol, or Astra work. A successful-looking final answer or an accepted spawn request is insufficient.
+A passing delegated route requires the expected model/effort intent, no unplanned children, satisfied verification, no unresolved violation, and a model-keyed receipt created only after the same `agent_id` starts, is observed on the exact compatible GPT-6 Sol or Astra model, and completes successfully. A successful-looking final answer or an accepted spawn request is insufficient.
 
 ## Cheap-root setup and health boundary
 
-1. Select GPT-5.6 Luna in Desktop, or set the personal top-level CLI configuration:
+1. Select GPT-6 Luna in Desktop, or set the personal top-level CLI configuration:
 
    ```toml
-   model = "gpt-5.6-luna"
+   model = "gpt-6-luna"
    model_reasoning_effort = "low"
    ```
 
-2. Start a fresh task and prove that `UserPromptSubmit.model` observed `gpt-5.6-luna`. Config and App Server evidence may support the report but may not override the hook field.
+2. Start a fresh task and prove that `UserPromptSubmit.model` observed `gpt-6-luna`. Config and App Server evidence may support the report but may not override the hook field.
 3. Trust the five exact plugin hooks.
 4. From the exact installed cache root, run:
 
@@ -42,14 +42,14 @@ A passing delegated route requires the expected model/effort intent, no unplanne
 
 Luna Low is the preferred starting point. If it fails to follow routing instructions, construct bounded child contracts, or synthesise the escalated result, repeat the same bounded cases with Luna Medium and record the comparison. Do not change the architectural requirement that Luna remains the cheap root.
 
-## Direct Terra/Sol capability smoke
+## Direct Sol capability smoke
 
-Use two clear, bounded, non-mutating prompts: one normal technical task expected to justify Terra and one hard technical task expected to justify Sol. Avoid user-intent ambiguity; ambiguity must cause a concise clarification from Luna rather than stronger-model spend.
+Use two clear, bounded, non-mutating prompts: one normal technical task expected to justify GPT-6 Sol Medium and one hard technical task expected to justify GPT-6 Sol High. Avoid user-intent ambiguity; ambiguity must cause a concise clarification from Luna rather than stronger-model spend.
 
 For each run:
 
 1. Start a fresh Luna task and confirm the hook's actual active model.
-2. Confirm the router constructs the direct child request through the single compatibility adapter, with `fork_turns: "none"`, the requested Terra or Sol model, bounded task name/message, and effort intent supported by the runtime.
+2. Confirm the router constructs the direct child request through the single compatibility adapter, with `fork_turns: "none"`, the requested GPT-6 Sol model, bounded task name/message, and effort intent supported by the runtime.
 3. Confirm no obsolete custom `agent_type` is required and no legacy TOML is installed as a prerequisite.
 4. Require the child's `UserPromptSubmit.model` to be recorded under the exact started `agent_id` without replacing the parent/root observation. Require the same `agent_id` to stop with returned evidence matching the contract. Exercise the adapter's unsupported-schema fallback separately without launching a paid child.
 5. After a genuine successful escalation, run `python3 scripts/check_hooks.py` again in the same task context. Require `READY` only when the receipt matches the plugin candidate, is no more than 30 days old, shares at least one authoritative versioned Codex runtime/build identifier, and records platform, child model, effort intent, capability/schema signature, and timestamp. If no versioned runtime/build field is available, require `DEGRADED — runtime identity unavailable; capability compatibility unproven`; the receipt may show `ESCALATION PREVIOUSLY OBSERVED` but cannot prove current capability.
@@ -63,20 +63,20 @@ Run the matrix only with explicit acceptance authorization because non-Luna sele
 
 | Hook-observed root | Routine | Normal | Hard | Expected turn health |
 |---|---|---|---|---|
-| Luna | remain Luna | Terra allowed | Sol allowed | eligible for `READY` with a current receipt |
-| Terra | remain Terra | remain Terra | Sol allowed | `DEGRADED` |
-| Sol | remain Sol | remain Sol | remain Sol; Astra only through explicit request or attested route-up | `DEGRADED` |
-| Astra | remain Astra | remain Astra | remain Astra | `DEGRADED` |
+| GPT-6 Luna Low | remain Luna | GPT-6 Sol Medium allowed | GPT-6 Sol High allowed | eligible for `READY` with a current receipt |
+| GPT-6 Sol Medium | remain Sol Medium | remain Sol Medium | GPT-6 Sol High allowed | `DEGRADED` |
+| GPT-6 Sol High/xHigh | remain Sol | remain Sol | remain Sol; xHigh only under approved deep/high policy | `DEGRADED` |
+| GPT-6 Astra | remain Astra | remain Astra | remain Astra | `DEGRADED` |
 
 Sol and Astra must not delegate downward merely to satisfy the classifier. A lower-tier child is permissible only for separately justified independent parallel work. A non-Luna actual root must report that credit-saving behaviour is substantially reduced for that turn.
 
 ## Rare Astra frontier smoke
 
-Do not fold Astra into the normal Terra/Sol smoke. In a fresh exact-candidate process, prove separately that generic difficult prompts and Astra keyword noise do not select Astra; an explicit unqualified request selects Astra Medium; explicit High, Extra High, and Max retain the requested effort; and explicit Low or Ultra is rejected without substitution. If a bounded paid acceptance is authorised, launch at most one Astra child and bind its model-keyed receipt to the exact lifecycle, model, effort intent, plugin identity, and observable runtime identity. Test the automatic path without a paid probe by replaying an authoritative same-task Sol `ROUTE_UP`; insufficient or contradictory evidence must not route to Astra. No automatic High, Extra High, Max, or effort retry is allowed.
+Do not fold Astra into the normal Sol smoke. In a fresh exact-candidate process, prove separately that generic difficult prompts and Astra keyword noise do not select Astra; an explicit unqualified request selects Astra Medium; explicit High, xHigh, and Max retain the requested effort; and explicit Low or Ultra is rejected without substitution. If a bounded paid acceptance is authorised, launch at most one Astra child and bind its model-keyed receipt to the exact lifecycle, model, effort intent, plugin identity, and observable runtime identity. Test the automatic path without a paid probe by replaying an authoritative same-task Sol `ROUTE_UP`; insufficient or contradictory evidence must not route to Astra. No automatic High, xHigh, Max, or effort retry is allowed.
 
 ## Desktop-specific smoke
 
-Use the Codex Desktop UI to test Fast on and off in separate fresh Luna tasks. Do not type `/fast on` or `/fast off` into a task. The router must preserve the UI setting and must never claim UI attestation when only persisted configuration is available.
+Use the Codex Desktop UI to test Fast on and off in separate fresh GPT-6 Luna tasks. Do not type `/fast on` or `/fast off` into a task. The router must preserve the UI setting and must never claim UI attestation when only persisted configuration is available.
 
 Desktop acceptance is manual when UI automation policy prevents another task from controlling the Codex app. Do not replace this row with a CLI run against the bundled Desktop binary.
 

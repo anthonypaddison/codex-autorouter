@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import re
 import struct
+import subprocess
 import sys
 from pathlib import Path
 
@@ -38,6 +39,26 @@ def png_dimensions(path: Path) -> tuple[int, int]:
     data = path.read_bytes()
     require(data.startswith(b"\x89PNG\r\n\x1a\n") and len(data) >= 24, f"invalid PNG: {path.name}")
     return struct.unpack(">II", data[16:24])
+
+
+def candidate_source_paths(tracked: set[str], untracked: set[str]) -> list[Path]:
+    """Select release inputs without treating ignored runtime debris as candidate files."""
+    generated = lambda name: (
+        Path(name).name == ".DS_Store"
+        or "__pycache__" in Path(name).parts
+        or Path(name).suffix in {".pyc", ".pyo"}
+    )
+    for name in tracked:
+        require(not generated(name), f"release contains generated artifact: {name}")
+    return [Path(name) for name in sorted(tracked | {name for name in untracked if not generated(name)})]
+
+
+def _git_paths(*args: str) -> set[str]:
+    result = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files", "-z", *args],
+        check=True, capture_output=True,
+    )
+    return {item.decode("utf-8") for item in result.stdout.split(b"\0") if item}
 
 
 def main() -> int:
@@ -126,17 +147,21 @@ def main() -> int:
     )
 
     forbidden = (re.compile(r"/Users/[A-Za-z0-9._-]+/"), re.compile(r"[A-Za-z]:\\Users\\[^\\]+\\"))
-    for path in ROOT.rglob("*"):
-        require(not path.is_symlink(), f"release contains symlink: {path.relative_to(ROOT)}")
-        if path.is_dir():
-            require(path.name != "__pycache__", "release contains __pycache__")
+    paths = candidate_source_paths(_git_paths("--cached"), _git_paths("--others", "--exclude-standard"))
+    for relative in paths:
+        path = ROOT / relative
+        require(not path.is_symlink(), f"release contains symlink: {relative}")
+        if not path.exists():
             continue
-        require(path.suffix not in {".pyc", ".pyo"}, f"release contains bytecode: {path.name}")
+        if path.is_dir():
+            continue
+        if path.suffix in {".pyc", ".pyo"} or path.name == ".DS_Store" or "__pycache__" in relative.parts:
+            require(False, f"release contains generated artifact: {relative}")
         if path.suffix.lower() in {".md", ".json", ".toml", ".py", ".yaml", ".yml", ".svg"}:
             text = path.read_text(encoding="utf-8")
             for pattern in forbidden:
-                require(not pattern.search(text), f"source-machine path in {path.relative_to(ROOT)}")
-            require(("[" + "TODO:") not in text, f"placeholder in {path.relative_to(ROOT)}")
+                require(not pattern.search(text), f"source-machine path in {relative}")
+            require(("[" + "TODO:") not in text, f"placeholder in {relative}")
 
     print(f"release validation passed: {ROOT}")
     return 0
