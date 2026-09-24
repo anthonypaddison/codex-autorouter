@@ -4,30 +4,32 @@ Route each work unit independently. Do not assign one model to an entire product
 
 | Area or stage | Default | Raise the route when |
 |---|---|---|
-| Discovery and user research | Terra High | Cross-product synthesis or a consequential bet needs Sol Medium |
+| Discovery and user research | GPT-6 Sol High | Cross-product synthesis or a consequential bet needs Sol Medium/High according to difficulty |
 | Strategy, prioritization, MVP, pricing | Sol Medium | Deep analysis of an expensive decision needs Sol High |
-| Requirements and acceptance criteria | Terra Medium | Stakeholders, states, or edge cases are unclear: Terra High |
-| UX, flows, information architecture | Terra High | Cross-product or consequential workflow ownership needs Sol Medium |
-| Approved UI and frontend implementation | Terra Medium | Hydration, offline state, subtle interaction, or performance dominates: Terra High |
-| Backend and APIs | Terra Medium | Concurrency, idempotency, authorization, or distributed boundaries dominate: Terra High or Sol Medium |
-| Databases and data models | Terra Medium | Online migration, locking, backfill, or rollback complexity: Terra High or Sol Medium |
-| Mobile | Terra Medium | Offline sync, lifecycle, background work, stores, or cross-platform architecture: Terra High or Sol Medium |
-| AI prompts and evals | Terra Medium | Retrieval, tool use, eval ambiguity, or safety: Terra High; system architecture: Sol Medium |
-| Third-party integrations | Terra Medium | OAuth, retries, webhooks, vendor inconsistency, identity, or money movement: Terra High or Sol Medium |
-| Payments and billing changes | Sol Medium | Proration, ledgers, reconciliation, refunds, entitlements, fraud, authorization, or compliance: Sol High when the task is especially difficult |
-| QA and test generation | Luna Low for complete repeated cases; otherwise Terra Medium | Flaky/CI-only or unclear coverage: Terra High; release ownership: Sol Medium |
-| Analytics instrumentation | Luna Low for exact repeated event insertion; otherwise Terra Medium | Attribution or identity ambiguity: Terra High |
-| Data and funnel analysis | Terra Medium | Causal ambiguity or conflicting metrics: Terra High; consequential decision: Sol Medium |
-| Growth experiments | Terra High | Pricing, brand, platform, or large-spend decision: Sol Medium |
-| Accessibility | Luna Low for exact repeated fixes; otherwise Terra Medium | Complex assistive interaction: Terra High; legal judgment: Sol High |
-| Localization | Luna Low for exact catalog transformations; otherwise Terra Medium | RTL or locale architecture: Terra High |
-| DevOps and CI | Terra Medium | Environment drift or flaky pipelines: Terra High; deployment architecture: Sol Medium |
-| Reliability and observability | Terra High | SLO architecture, incidents, or cascading failure ownership: Sol Medium |
-| Security and privacy | Terra High for bounded mapping | Sensitive changes: Sol Medium; difficult adversarial analysis: Sol High |
-| Launch readiness | Terra High | Cross-system go/no-go ownership or difficult failure-mode analysis: Sol Medium or Sol High |
-| Maintenance and dependencies | Luna Low for exact repeated bumps; otherwise Terra Medium | Breaking upgrades: Terra High; framework migration: Sol Medium |
+| Requirements and acceptance criteria | GPT-6 Sol Medium | Stakeholders, states, or edge cases are unclear: Sol High |
+| UX, flows, information architecture | GPT-6 Sol High | Cross-product or consequential workflow ownership needs Sol Medium/High according to difficulty |
+| Approved UI and frontend implementation | GPT-6 Sol Medium | Hydration, offline state, subtle interaction, or performance dominates: Sol High |
+| Backend and APIs | GPT-6 Sol Medium | Concurrency, idempotency, authorization, or distributed boundaries dominate: Sol High |
+| Databases and data models | GPT-6 Sol Medium | Online migration, locking, backfill, or rollback complexity: Sol High |
+| Mobile | GPT-6 Sol Medium | Offline sync, lifecycle, background work, stores, or cross-platform architecture: Sol High |
+| AI prompts and evals | GPT-6 Sol Medium | Retrieval, tool use, eval ambiguity, or safety: Sol High; system architecture: Sol High |
+| Third-party integrations | GPT-6 Sol Medium | OAuth, retries, webhooks, vendor inconsistency, identity, or money movement: Sol High when difficulty warrants it |
+| Payments and billing changes | GPT-6 Sol Medium | Proration, ledgers, reconciliation, refunds, entitlements, fraud, authorization, or compliance: Sol High when especially difficult |
+| QA and test generation | Luna Low for complete repeated cases; otherwise Sol Medium | Flaky/CI-only or unclear coverage: Sol High; release ownership: Sol High when consequential |
+| Analytics instrumentation | Luna Low for exact repeated event insertion; otherwise Sol Medium | Attribution or identity ambiguity: Sol High |
+| Data and funnel analysis | GPT-6 Sol Medium | Causal ambiguity or conflicting metrics: Sol High; consequential decision: Sol High |
+| Growth experiments | GPT-6 Sol High | Pricing, brand, platform, or large-spend decision: Sol High |
+| Accessibility | Luna Low for exact repeated fixes; otherwise Sol Medium | Complex assistive interaction: Sol High; legal judgment: Sol High |
+| Localization | Luna Low for exact catalog transformations; otherwise Sol Medium | RTL or locale architecture: Sol High |
+| DevOps and CI | GPT-6 Sol Medium | Environment drift or flaky pipelines: Sol High; deployment architecture: Sol High |
+| Reliability and observability | GPT-6 Sol High | SLO architecture, incidents, or cascading failure ownership: Sol High |
+| Security and privacy | GPT-6 Sol High for bounded mapping | Sensitive changes: Sol High; difficult adversarial analysis: Sol xHigh only under approved deep/high policy |
+| Launch readiness | GPT-6 Sol High | Cross-system go/no-go ownership or difficult failure-mode analysis: Sol High/xHigh only when justified |
+| Maintenance and dependencies | Luna Low for exact repeated bumps; otherwise Sol Medium | Breaking upgrades: Sol High; framework migration: Sol High |
 | Incidents | Sol Medium for diagnosis and mitigation ownership | Difficult security or customer-data incident: Sol High |
 
-Use Luna only when the rule is complete and objective verification is cheap. Raise effort for uncertainty and edge cases. Raise the model family for capability, scope, consequence, or synthesis ownership.
+Use GPT-6 Luna Low only when the rule is complete and objective verification is cheap. GPT-6 Sol Medium is Balanced; Sol High is the High profile. Raise capability for task complexity or consequence, not merely user-intent ambiguity.
 
-Keep work in `current` when the active root already meets the table's model and effort and delegation adds no useful parallelism, evidence gathering, or volume benefit. In Max Quality, reserve Sol Extra High for the hardest security/code-review, deep-research, critical-change, or challenging coding work; do not apply it to an entire product area by default. For mobile sync, use Terra High for one feature's bounded offline/lifecycle design; use Sol Medium when the task owns shared-data, cross-platform, migration, or distributed sync architecture. For design and strategy outputs, verify traceability, state/scenario coverage, assumptions, contradictions, decision criteria, and rollback or experiment guardrails rather than pretending a code test proves the artifact.
+Keep work in `current` when the active root already meets the table's model and effort and delegation adds no useful parallelism, evidence gathering, or volume benefit. In Max Quality, reserve Sol xHigh for the hardest security/code-review, deep-research, critical-change, or challenging coding work; do not apply it to an entire product area by default. For mobile sync, use Sol High for one feature's bounded offline/lifecycle design; use Sol Medium/High when the task owns shared-data, cross-platform, migration, or distributed sync architecture. For design and strategy outputs, verify traceability, state/scenario coverage, assumptions, contradictions, decision criteria, and rollback or experiment guardrails rather than pretending a code test proves the artifact.
+
+No product area or lifecycle stage selects GPT-6 Astra by itself. Astra requires an explicit user request, or an authoritative attested Sol `ROUTE_UP` to Astra Medium after the Sol child proves a capability limit. Generic severity and Max Quality remain Sol-bounded.

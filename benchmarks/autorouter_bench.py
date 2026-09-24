@@ -357,18 +357,18 @@ CASES = (
 
 EXPECTED_PLANS = {
     "locale_batch": {
-        "token-saver": ("single_delegate", {"gpt56_luna_worker": 1}),
-        "balanced": ("parallel_leaves", {"gpt56_luna_worker": 2}),
+        "token-saver": ("direct", {}),
+        "balanced": ("direct", {}),
         "max-quality": ("direct", {}),
     },
     "webhook_race": {
-        "token-saver": ("direct", {}),
-        "balanced": ("direct", {}),
-        "max-quality": ("evidence_then_owner", {"gpt56_terra_worker": 2, "gpt56_sol_owner": 1}),
+        "token-saver": ("single_delegate", {"gpt56_terra_worker": 1}),
+        "balanced": ("single_delegate", {"gpt56_terra_deep": 1}),
+        "max-quality": ("evidence_then_owner", {"gpt56_terra_worker": 2, "gpt56_sol_deep": 1}),
     },
     "sqlite_migration": {
-        "token-saver": ("direct", {}),
-        "balanced": ("direct", {}),
+        "token-saver": ("single_delegate", {"gpt56_terra_deep": 1}),
+        "balanced": ("single_delegate", {"gpt56_sol_owner": 1}),
         "max-quality": ("evidence_then_owner", {"gpt56_terra_worker": 2, "gpt56_sol_deep": 1}),
     },
     "parallel_audit": {
@@ -381,20 +381,27 @@ EXPECTED_PLANS = {
 
 ROUTE_PROBES = (
     ("trivial", "Fix a typo in README.", "current", "direct"),
-    ("batch", "Normalize 120 independent locale JSON catalogs using the exact schema and validator. Apply the same mechanical rule to every file.", "gpt56_luna_worker", "parallel_leaves"),
+    ("astra_explicit", "Use GPT-6 Astra for this task.", "gpt6_astra_medium", "single_delegate"),
+    (
+        "astra_keyword_noise",
+        "Review the telemetry field named gpt-6-astra without changing routing.",
+        "gpt56_terra_deep",
+        "single_delegate",
+    ),
+    ("batch", "Normalize 120 independent locale JSON catalogs using the exact schema and validator. Apply the same mechanical rule to every file.", "current", "direct"),
     (
         "delegated_fixture",
         """<codex_delegation>
 <source_thread_id>019f4ab3-2b7a-7932-a6a6-f401afced4e3</source_thread_id>
 <input>Generate exactly 1,200 synthetic JSONL fixture records in three independent 400-record shards using fixed formulas. One example projectSlug is billing-reliability. These are synthetic fixtures, not customer data. Add a strict validator, do not modify runtime or database schema, and run tests, typecheck, lint, and build. Record the routing ledger.</input>
 </codex_delegation>""",
-        "gpt56_luna_worker",
-        "parallel_leaves",
+        "current",
+        "direct",
     ),
-    ("ordinary", "Implement the bounded feedback tags API from complete acceptance tests.", "current", "direct"),
-    ("ambiguous", "Diagnose and fix an intermittent CI-only webhook deduplication failure involving unclear concurrency edge cases.", "current", "direct"),
-    ("critical", "Fix a critical authorization bypass in the production billing export endpoint and review adversarial edge cases.", "current", "direct"),
-    ("council", "We need to improve onboarding, but it is unclear whether this is a UX flow problem, analytics blind spot, or implementation defect.", "current", "routing_council"),
+    ("ordinary", "Implement the bounded feedback tags API from complete acceptance tests.", "gpt56_terra_worker", "single_delegate"),
+    ("ambiguous", "Diagnose and fix an intermittent CI-only webhook deduplication failure involving unclear concurrency edge cases.", "gpt56_terra_deep", "single_delegate"),
+    ("critical", "Fix a critical authorization bypass in the production billing export endpoint and review adversarial edge cases.", "gpt56_sol_deep", "evidence_then_owner"),
+    ("clarify", "We need to improve onboarding, but it is unclear whether this is a UX flow problem, analytics blind spot, or implementation defect.", "current", "clarify"),
     ("parallel", "Audit three independent workstreams in parallel: tenant security, accessibility, and database integrity. Create a prioritized report.", "gpt56_sol_deep", "evidence_then_owner"),
 )
 
@@ -412,8 +419,15 @@ def route_audit(strict: bool = False) -> int:
     router = _load_router()
     rows = []
     for name, prompt, expected_route, expected_mode in ROUTE_PROBES:
-        decision = router.classify_prompt(prompt, "gpt-5.6-sol", "high", "balanced")
-        passed = decision["route"] == expected_route and decision["orchestration"]["mode"] == expected_mode
+        decision = router.classify_prompt(
+            prompt, "gpt-6-luna", "low", "balanced", enforce_active_root=True
+        )
+        expected_active_route = router._ACTIVE_ROUTE_ALIASES.get(expected_route, expected_route)
+        passed = (
+            decision["route"] == expected_active_route
+            and decision["orchestration"]["mode"] == expected_mode
+            and (decision["route"] != "current" or not decision["orchestration"]["required_agents"])
+        )
         rows.append((name, decision["route"], decision["orchestration"]["mode"], passed))
     width = max(len(row[0]) for row in rows)
     for name, route, mode, passed in rows:
@@ -461,29 +475,51 @@ def _copy_starter(output: Path, case: Case, arm: str, repetition: int) -> Path:
     return target
 
 
-def _usage_from_events(event_path: Path) -> dict[str, int] | None:
-    candidates: list[dict[str, int]] = []
+def _usage_from_events(event_path: Path) -> dict[str, Any]:
+    aggregates: list[dict[str, int]] = []
+    observations: list[dict[str, int]] = []
 
-    def visit(value: Any) -> None:
+    def normalized(value: dict[str, Any]) -> dict[str, int] | None:
+        if not isinstance(value.get("input_tokens"), int) or not isinstance(value.get("output_tokens"), int):
+            return None
+        return {key: int(value.get(key, 0)) for key in (
+            "input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens", "total_tokens"
+        )}
+
+    def visit(value: Any, key: str = "") -> None:
         if isinstance(value, dict):
-            if isinstance(value.get("input_tokens"), int) and isinstance(value.get("output_tokens"), int):
-                candidates.append({key: int(value.get(key, 0)) for key in (
-                    "input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens", "total_tokens"
-                )})
-            for child in value.values():
-                visit(child)
+            usage = normalized(value)
+            if usage is not None:
+                (aggregates if key == "total_token_usage" else observations).append(usage)
+                return
+            for child_key, child in value.items():
+                visit(child, str(child_key))
         elif isinstance(value, list):
             for child in value:
-                visit(child)
+                visit(child, key)
 
     if not event_path.exists():
-        return None
+        return {"provenance": "UNAVAILABLE", "aggregation": "none", "total_tokens": None, "observations": []}
     for line in event_path.read_text(encoding="utf-8", errors="replace").splitlines():
         try:
             visit(json.loads(line))
         except json.JSONDecodeError:
             continue
-    return max(candidates, key=lambda item: item.get("total_tokens", 0), default=None)
+    if aggregates:
+        return {
+            **aggregates[-1],
+            "provenance": "TOKEN ESTIMATE",
+            "aggregation": "documented_total_token_usage",
+            "observations": observations,
+        }
+    if observations:
+        return {
+            "provenance": "TOKEN ESTIMATE",
+            "aggregation": "partial_per_thread",
+            "total_tokens": None,
+            "observations": observations,
+        }
+    return {"provenance": "UNAVAILABLE", "aggregation": "none", "total_tokens": None, "observations": []}
 
 
 def _thread_id_from_events(event_path: Path) -> str | None:
@@ -1155,8 +1191,8 @@ def parser() -> argparse.ArgumentParser:
     live.add_argument("--execute", action="store_true", help="acknowledge real model execution and token use")
     live.add_argument("--trust-reviewed-hooks", action="store_true", help="acknowledge Codex hook trust bypass for the isolated run")
     live.add_argument("--codex", default="codex")
-    live.add_argument("--root-model", default="gpt-5.6-sol")
-    live.add_argument("--root-effort", choices=("low", "medium", "high", "xhigh"), default="high")
+    live.add_argument("--root-model", default="gpt-6-luna")
+    live.add_argument("--root-effort", choices=("low", "medium", "high", "xhigh"), default="low")
     live.add_argument("--service-tier", default="priority")
     live.add_argument("--timeout", type=int, default=1800)
     outsider = sub.add_parser("review", help="run the private GLM and DeepSeek blind reviewer panel")

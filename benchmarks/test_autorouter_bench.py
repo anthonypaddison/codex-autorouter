@@ -26,8 +26,16 @@ class ArenaTests(unittest.TestCase):
         for case in bench.CASES:
             for profile in bench.AUTOROUTER_ARMS:
                 with self.subTest(case=case.case_id, profile=profile):
-                    decision = router.classify_prompt(case.prompt, "gpt-5.6-sol", "high", profile)
+                    decision = router.classify_prompt(
+                        case.prompt, "gpt-6-luna", "low", profile, enforce_active_root=True
+                    )
                     mode, roles = bench.EXPECTED_PLANS[case.case_id][profile]
+                    active_roles = {}
+                    for role, count in roles.items():
+                        active_role = router._ACTIVE_ROUTE_ALIASES.get(role, role)
+                        if active_role != "current":
+                            active_roles[active_role] = active_roles.get(active_role, 0) + count
+                    roles = active_roles
                     self.assertEqual(mode, decision["orchestration"]["mode"])
                     self.assertEqual(roles, decision["orchestration"]["required_agents"])
 
@@ -58,11 +66,33 @@ class ArenaTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
-            self.assertEqual(57, bench._usage_from_events(events)["total_tokens"])
+            usage = bench._usage_from_events(events)
+            self.assertEqual(57, usage["total_tokens"])
+            self.assertEqual("TOKEN ESTIMATE", usage["provenance"])
+            self.assertEqual("documented_total_token_usage", usage["aggregation"])
+
+    def test_usage_parser_preserves_partial_observations_without_fake_total(self):
+        with tempfile.TemporaryDirectory() as td:
+            events = Path(td) / "events.jsonl"
+            events.write_text(
+                json.dumps({"thread_id": "root", "usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12}})
+                + "\n"
+                + json.dumps({"thread_id": "child", "usage": {"input_tokens": 50, "output_tokens": 7, "total_tokens": 57}})
+                + "\n",
+                encoding="utf-8",
+            )
+            usage = bench._usage_from_events(events)
+            self.assertIsNone(usage["total_tokens"])
+            self.assertEqual("TOKEN ESTIMATE", usage["provenance"])
+            self.assertEqual("partial_per_thread", usage["aggregation"])
+            self.assertEqual(2, len(usage["observations"]))
+            self.assertNotIn(57, [usage["total_tokens"]])
 
     def test_live_run_requires_two_explicit_acknowledgements(self):
         parser = bench.parser()
         args = parser.parse_args(["run", "--case", "locale_batch"])
+        self.assertEqual("gpt-6-luna", args.root_model)
+        self.assertEqual("low", args.root_effort)
         with tempfile.TemporaryDirectory() as td:
             self.assertEqual(2, bench.run(args, Path(td), [bench.CASES[0]]))
         args = parser.parse_args(["run", "--case", "locale_batch", "--execute"])

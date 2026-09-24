@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="640" viewBox="0 0 1600 640" role="img" aria-labelledby="title desc">
   <title id="title">Autorouter</title>
-  <desc id="desc">A clean dark banner showing Luna, Terra, and Sol connected as three inputs to the Autorouter mark, with one selected route continuing forward.</desc>
+  <desc id="desc">A clean dark banner showing Luna and Sol as core Autorouter routes, with GPT-6 Astra separately marked as a gated frontier.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#090B11"/>
@@ -26,7 +26,7 @@
       <circle cx="18" cy="67" r="4.5" fill="#F8FAFC"/>
     </g>
     <text x="110" y="38" fill="#F8FAFC" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="30" font-weight="760" letter-spacing="0.5">AUTOROUTER</text>
-    <text x="110" y="70" fill="#8E9AAD" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="17" font-weight="500" letter-spacing="2.5">MADE FOR CODEX 5.6</text>
+    <text x="110" y="70" fill="#8E9AAD" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="17" font-weight="500" letter-spacing="2.5">MADE FOR CODEX</text>
   </g>
 
   <g transform="translate(92 258)" font-family="Inter, ui-sans-serif, system-ui, sans-serif">
@@ -36,7 +36,7 @@
   </g>
 
   <g font-family="Inter, ui-sans-serif, system-ui, sans-serif">
-    <text x="932" y="158" fill="#778399" font-size="14" font-weight="700" letter-spacing="2.2">THREE CAPABILITY ROUTES</text>
+    <text x="932" y="158" fill="#778399" font-size="14" font-weight="700" letter-spacing="2.2">CORE ROUTES + GATED FRONTIER</text>
 
     <!-- Each model is an explicit input to Autorouter. -->
     <path d="M1130 215C1194 215 1206 260 1267 260" fill="none" stroke="#A78BFA" stroke-width="4" stroke-linecap="round"/>
@@ -54,7 +54,7 @@
     <g transform="translate(930 270)">
       <rect width="200" height="70" rx="20" fill="#102126" stroke="#48D7E8" stroke-opacity="0.72"/>
       <circle cx="32" cy="28" r="8" fill="#48D7E8"/>
-      <text x="52" y="35" fill="#E8FDFF" font-size="22" font-weight="720">Terra</text>
+      <text x="52" y="35" fill="#E8FDFF" font-size="22" font-weight="720">Sol</text>
       <text x="32" y="56" fill="#9BB8BC" font-size="13">build + investigate</text>
       <circle cx="200" cy="35" r="5" fill="#48D7E8"/>
     </g>
@@ -81,6 +81,10 @@
     <text x="1472" y="298" text-anchor="middle" fill="#E2E8F0" font-size="13" font-weight="750" letter-spacing="1.5">BEST FIT</text>
     <text x="1308" y="390" text-anchor="middle" fill="#F8FAFC" font-size="15" font-weight="720">AUTOROUTER</text>
     <text x="1308" y="412" text-anchor="middle" fill="#7F8A9D" font-size="13">model · effort · agents</text>
+    <rect x="1130" y="454" width="354" height="60" rx="20" fill="#211427" stroke="#F472B6" stroke-opacity="0.72"/>
+    <circle cx="1162" cy="484" r="8" fill="#F472B6"/>
+    <text x="1182" y="480" fill="#FFF0FA" font-size="17" font-weight="720">GPT-6 Astra</text>
+    <text x="1182" y="500" fill="#CFA8C5" font-size="13">explicit or attested Sol route-up · Medium automatic</text>
   </g>
 
   <g transform="translate(92 518)" font-family="Inter, ui-sans-serif, system-ui, sans-serif" font-size="15" font-weight="650">

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -12,6 +13,7 @@ import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from unittest import mock
 
 
 SCRIPT = Path(__file__).with_name("standalonectl.py")
@@ -46,6 +48,56 @@ class StandaloneCtlTests(unittest.TestCase):
             check=False,
         )
 
+    def _git_backed_plugin_copy(self) -> Path:
+        plugin = self.root / "plugin"
+        (plugin / ".codex-plugin").mkdir(parents=True)
+        (plugin / "scripts").mkdir()
+        (plugin / "skills").mkdir()
+        shutil.copy2(SCRIPT.parents[1] / ".codex-plugin" / "plugin.json", plugin / ".codex-plugin" / "plugin.json")
+        shutil.copy2(SCRIPT, plugin / "scripts" / "standalonectl.py")
+        shutil.copytree(
+            SCRIPT.parents[1] / "skills" / "route-gpt-5-6-work",
+            plugin / "skills" / "route-gpt-5-6-work",
+            ignore=shutil.ignore_patterns(".DS_Store", "__pycache__", "*.pyc", "*.pyo"),
+        )
+        subprocess.run(["git", "init", "-q"], cwd=plugin, check=True)
+        subprocess.run(["git", "add", "."], cwd=plugin, check=True)
+        return plugin
+
+    def test_untracked_generated_skill_files_do_not_block_install(self) -> None:
+        plugin = self._git_backed_plugin_copy()
+        skill = plugin / "skills" / "route-gpt-5-6-work"
+        cache = skill / "scripts" / "__pycache__"
+        cache.mkdir()
+        (cache / "router_hook.cpython-314.pyc").write_bytes(b"local bytecode")
+        (skill / "scripts" / ".DS_Store").write_bytes(b"local metadata")
+        env = {
+            **self.env,
+            "CODEX_HOME": str(self.root / "codex-home-copy"),
+            "GPT56_STANDALONE_DATA": str(self.root / "standalone-data-copy"),
+        }
+
+        result = self.run_script(plugin / "scripts" / "standalonectl.py", "install", env=env)
+
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertTrue((Path(env["CODEX_HOME"]) / "skills" / "route-gpt-5-6-work" / "SKILL.md").is_file())
+
+    def test_tracked_generated_skill_file_blocks_install(self) -> None:
+        plugin = self._git_backed_plugin_copy()
+        bytecode = plugin / "skills" / "route-gpt-5-6-work" / "scripts" / "tracked.pyc"
+        bytecode.write_bytes(b"tracked bytecode")
+        subprocess.run(["git", "add", str(bytecode.relative_to(plugin))], cwd=plugin, check=True)
+        env = {
+            **self.env,
+            "CODEX_HOME": str(self.root / "codex-home-copy"),
+            "GPT56_STANDALONE_DATA": str(self.root / "standalone-data-copy"),
+        }
+
+        result = self.run_script(plugin / "scripts" / "standalonectl.py", "install", env=env)
+
+        self.assertEqual(2, result.returncode)
+        self.assertIn("generated artifact", result.stdout)
+
     def payload(self, result: subprocess.CompletedProcess[str]) -> dict:
         self.assertTrue(result.stdout, result.stderr)
         return json.loads(result.stdout)
@@ -66,6 +118,73 @@ class StandaloneCtlTests(unittest.TestCase):
         removed = self.payload(self.run_ctl("uninstall"))
         self.assertTrue(removed["changed"])
         self.assertFalse(self.target.exists())
+
+    def test_status_on_absent_roots_is_strictly_non_mutating(self) -> None:
+        self.assertFalse(self.home.exists())
+        self.assertFalse(self.data.exists())
+        status = self.payload(self.run_ctl("status"))
+        self.assertFalse(status["active"])
+        self.assertEqual([], status["recovery_required"])
+        self.assertFalse(self.home.exists())
+        self.assertFalse(self.data.exists())
+
+    def test_status_reports_interrupted_install_without_recovery(self) -> None:
+        crashed = self.run_ctl(
+            "install",
+            env={**self.env, "GPT56_STANDALONE_CRASH_AT": "install-target"},
+        )
+        self.assertEqual(97, crashed.returncode)
+        before = {
+            path.relative_to(self.root).as_posix(): (
+                "directory" if path.is_dir() else path.read_bytes()
+            )
+            for path in sorted(self.root.rglob("*"))
+        }
+        status = self.payload(self.run_ctl("status"))
+        self.assertEqual(["install"], status["recovery_required"])
+        self.assertIsNone(status["recovered"])
+        after = {
+            path.relative_to(self.root).as_posix(): (
+                "directory" if path.is_dir() else path.read_bytes()
+            )
+            for path in sorted(self.root.rglob("*"))
+        }
+        self.assertEqual(before, after)
+        recovered = self.payload(self.run_ctl("install"))
+        self.assertEqual("install", recovered["recovered"])
+
+    def test_status_on_active_state_is_strictly_non_mutating(self) -> None:
+        self.assertEqual(0, self.run_ctl("install").returncode)
+        before = {
+            path.relative_to(self.root).as_posix(): (
+                "directory" if path.is_dir() else path.read_bytes()
+            )
+            for path in sorted(self.root.rglob("*"))
+        }
+        self.assertEqual(0, self.run_ctl("status").returncode)
+        after = {
+            path.relative_to(self.root).as_posix(): (
+                "directory" if path.is_dir() else path.read_bytes()
+            )
+            for path in sorted(self.root.rglob("*"))
+        }
+        self.assertEqual(before, after)
+
+    def test_status_on_corrupt_state_fails_without_mutation(self) -> None:
+        self.data.mkdir(parents=True)
+        marker = self.data / ".state-root.json"
+        marker.write_text(json.dumps({
+            "schema_version": 1,
+            "purpose": "gpt-5-6-router-standalone",
+            "target_id": hashlib.sha256(os.fsencode(str(self.target))).hexdigest(),
+        }), encoding="utf-8")
+        active = self.data / "active.json"
+        active.write_text('{"schema_version":999}', encoding="utf-8")
+        before = active.read_bytes()
+        result = self.run_ctl("status")
+        self.assertEqual(2, result.returncode)
+        self.assertEqual(before, active.read_bytes())
+        self.assertFalse((self.data / "standalone.lock").exists())
 
     def test_purge_requires_uninstall_and_removes_valid_controllers(self) -> None:
         self.assertEqual(0, self.run_ctl("install").returncode)
@@ -139,7 +258,7 @@ class StandaloneCtlTests(unittest.TestCase):
         (self.home / "hooks" / "hooks.json").write_text('{"hooks":{}}', encoding="utf-8")
         routerctl = self.target / "scripts" / "routerctl.py"
         env = {**self.env, "PLUGIN_DATA": str(self.root / "agent-data")}
-        activated = subprocess.run([sys.executable, str(routerctl), "activate"], env=env, text=True, capture_output=True, check=False)
+        activated = subprocess.run([sys.executable, str(routerctl), "activate", "--legacy-agents"], env=env, text=True, capture_output=True, check=False)
         self.assertEqual(0, activated.returncode, activated.stdout + activated.stderr)
         status = subprocess.run([sys.executable, str(routerctl), "status"], env=env, text=True, capture_output=True, check=False)
         payload = json.loads(status.stdout)
@@ -167,6 +286,10 @@ class StandaloneCtlTests(unittest.TestCase):
                 self.assertEqual(97, crashed.returncode)
                 status = self.payload(self.run_ctl("status", env=env))
                 self.assertFalse(status["active"])
+                self.assertEqual(["controller"], status["recovery_required"])
+                self.assertTrue((base / "data" / "controller-pending.json").exists())
+                recovered = self.payload(self.run_ctl("install", env=env))
+                self.assertTrue(recovered["changed"])
                 self.assertFalse((base / "data" / "controller-pending.json").exists())
                 self.assertEqual([], list((base / "data" / "controllers").glob(".controller-stage-*")))
 
@@ -176,7 +299,10 @@ class StandaloneCtlTests(unittest.TestCase):
         pending = json.loads((self.data / "controller-pending.json").read_text(encoding="utf-8"))
         stage = self.data / "controllers" / pending["stage"]
         next(path for path in stage.rglob("*") if path.is_file()).unlink()
-        self.assertEqual(0, self.run_ctl("status").returncode)
+        status = self.payload(self.run_ctl("status"))
+        self.assertEqual(["controller"], status["recovery_required"])
+        self.assertTrue(stage.exists())
+        self.assertEqual(0, self.run_ctl("install").returncode)
         self.assertFalse(stage.exists())
 
     def test_post_crash_controller_stage_extra_is_preserved(self) -> None:
@@ -187,6 +313,8 @@ class StandaloneCtlTests(unittest.TestCase):
         extra = stage / "keep-me.txt"
         extra.write_text("post-crash edit\n", encoding="utf-8")
         result = self.run_ctl("status")
+        self.assertEqual(0, result.returncode)
+        result = self.run_ctl("install")
         self.assertEqual(2, result.returncode)
         self.assertTrue(extra.exists())
 
@@ -304,6 +432,24 @@ class StandaloneCtlTests(unittest.TestCase):
         )
         self.assertTrue(self.payload(self.run_ctl("status"))["active"])
 
+    def test_windows_canonical_check_retries_transient_resolution_instability(self) -> None:
+        spec = importlib.util.spec_from_file_location("standalonectl_lock_test", SCRIPT)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        path = mock.Mock()
+        path.resolve.side_effect = [PermissionError(13, "denied"), Path("different"), path]
+
+        with (
+            mock.patch.object(module.os, "name", "nt"),
+            mock.patch.object(module.time, "sleep") as slept,
+        ):
+            module._canonical(path)
+
+        self.assertEqual(3, path.resolve.call_count)
+        self.assertEqual([mock.call(0.01), mock.call(0.02)], slept.call_args_list)
+
     def test_concurrent_reader_waits_for_an_incomplete_exclusive_state_claim(self) -> None:
         self.data.mkdir(parents=True)
         marker = self.data / ".state-root.json"
@@ -352,10 +498,11 @@ class StandaloneCtlTests(unittest.TestCase):
         self.assertEqual(97, crashed.returncode)
         status = self.payload(self.run_ctl("status"))
         self.assertFalse(status["active"])
-        self.assertEqual("install", status["recovered"])
-        self.assertFalse((self.data / "pending.json").exists())
-        self.assertFalse(self.target.exists())
-        self.assertEqual(0, self.run_ctl("install").returncode)
+        self.assertEqual(["install"], status["recovery_required"])
+        self.assertTrue((self.data / "pending.json").exists())
+        self.assertTrue(self.target.exists())
+        installed = self.payload(self.run_ctl("install"))
+        self.assertEqual("install", installed["recovered"])
 
     def test_post_crash_user_edit_is_preserved_and_recovery_fails_closed(self) -> None:
         crashed = self.run_ctl("install", env={**self.env, "GPT56_STANDALONE_CRASH_AT": "install-target"})
@@ -363,6 +510,8 @@ class StandaloneCtlTests(unittest.TestCase):
         marker = self.target / "SKILL.md"
         marker.write_text(marker.read_text(encoding="utf-8") + "\npost-crash user edit\n", encoding="utf-8")
         result = self.run_ctl("status")
+        self.assertEqual(0, result.returncode)
+        result = self.run_ctl("install")
         self.assertEqual(2, result.returncode)
         self.assertIn("preserves", result.stdout)
         self.assertIn("post-crash user edit", marker.read_text(encoding="utf-8"))
@@ -373,9 +522,10 @@ class StandaloneCtlTests(unittest.TestCase):
         self.assertEqual(97, crashed.returncode)
         status = self.payload(self.run_ctl("status"))
         self.assertTrue(status["active"])
-        self.assertEqual("uninstall", status["recovered"])
-        self.assertTrue(self.target.exists())
-        self.assertEqual(0, self.run_ctl("uninstall").returncode)
+        self.assertEqual(["uninstall"], status["recovery_required"])
+        self.assertFalse(self.target.exists())
+        removed = self.payload(self.run_ctl("uninstall"))
+        self.assertEqual("uninstall", removed["recovered"])
 
     def test_modified_uninstall_quarantine_is_preserved(self) -> None:
         self.assertEqual(0, self.run_ctl("install").returncode)
@@ -386,6 +536,8 @@ class StandaloneCtlTests(unittest.TestCase):
         marker = quarantines[0] / "SKILL.md"
         marker.write_text(marker.read_text(encoding="utf-8") + "\npost-crash edit\n", encoding="utf-8")
         result = self.run_ctl("status")
+        self.assertEqual(0, result.returncode)
+        result = self.run_ctl("uninstall")
         self.assertEqual(2, result.returncode)
         self.assertTrue(quarantines[0].exists())
         self.assertIn("post-crash edit", marker.read_text(encoding="utf-8"))
@@ -424,10 +576,12 @@ class StandaloneCtlTests(unittest.TestCase):
         crashed = self.run_script(script, "install", env={**self.env, "GPT56_STANDALONE_CRASH_AT": "update-target"})
         self.assertEqual(97, crashed.returncode)
         status = self.payload(self.run_script(script, "status"))
-        self.assertEqual("update", status["recovered"])
+        self.assertEqual(["update"], status["recovery_required"])
+        recovered = self.payload(self.run_script(script, "install"))
+        self.assertEqual("update", recovered["recovered"])
         after = {path.relative_to(self.target).as_posix(): path.read_bytes() for path in self.target.rglob("*") if path.is_file()}
-        self.assertEqual(before, after)
-        self.assertTrue(status["update_required"])
+        self.assertNotEqual(before, after)
+        self.assertFalse(self.payload(self.run_script(script, "status"))["update_required"])
 
     def test_update_crash_after_manifest_commits_new_tree(self) -> None:
         distribution = self.root / "distribution"
@@ -443,7 +597,9 @@ class StandaloneCtlTests(unittest.TestCase):
         crashed = self.run_script(script, "install", env={**self.env, "GPT56_STANDALONE_CRASH_AT": "update-active"})
         self.assertEqual(97, crashed.returncode)
         status = self.payload(self.run_script(script, "status"))
-        self.assertEqual("update", status["recovered"])
+        self.assertEqual(["update"], status["recovery_required"])
+        recovered = self.payload(self.run_script(script, "install"))
+        self.assertEqual("update", recovered["recovered"])
         self.assertFalse(status["update_required"])
         self.assertIn("committed-version", (self.target / "SKILL.md").read_text(encoding="utf-8"))
 
@@ -455,8 +611,11 @@ class StandaloneCtlTests(unittest.TestCase):
                 crashed = self.run_ctl("install", env={**env, "GPT56_STANDALONE_CRASH_AT": point})
                 self.assertEqual(97, crashed.returncode)
                 status = self.payload(self.run_ctl("status", env=env))
-                self.assertEqual("install", status["recovered"])
+                self.assertEqual(["install"], status["recovery_required"])
                 self.assertEqual(point == "install-active", status["active"])
+                recovered = self.payload(self.run_ctl("install", env=env))
+                self.assertEqual("install", recovered["recovered"])
+                self.assertTrue(self.payload(self.run_ctl("status", env=env))["active"])
 
     def test_every_uninstall_crash_boundary_recovers_deterministically(self) -> None:
         for point in ("uninstall-prepared", "uninstall-renamed", "uninstall-inactive"):
@@ -467,8 +626,10 @@ class StandaloneCtlTests(unittest.TestCase):
                 crashed = self.run_ctl("uninstall", env={**env, "GPT56_STANDALONE_CRASH_AT": point})
                 self.assertEqual(97, crashed.returncode)
                 status = self.payload(self.run_ctl("status", env=env))
-                self.assertEqual("uninstall", status["recovered"])
-                self.assertEqual(point != "uninstall-inactive", status["active"])
+                self.assertEqual(["uninstall"], status["recovery_required"])
+                removed = self.payload(self.run_ctl("uninstall", env=env))
+                self.assertEqual("uninstall", removed["recovered"])
+                self.assertFalse(self.payload(self.run_ctl("status", env=env))["active"])
 
     def test_every_update_crash_boundary_rolls_back_or_commits(self) -> None:
         distribution = self.root / "boundary-distribution"
@@ -491,21 +652,21 @@ class StandaloneCtlTests(unittest.TestCase):
                 crashed = self.run_script(script, "install", env={**env, "GPT56_STANDALONE_CRASH_AT": point})
                 self.assertEqual(97, crashed.returncode)
                 status = self.payload(self.run_script(script, "status", env=env))
-                self.assertEqual("update", status["recovered"])
-                if point == "update-active":
-                    self.assertIn(point.encode(), target.read_bytes())
-                    self.assertFalse(status["update_required"])
-                else:
-                    self.assertEqual(old_bytes, target.read_bytes())
-                    self.assertTrue(status["update_required"])
+                self.assertEqual(["update"], status["recovery_required"])
+                recovered = self.payload(self.run_script(script, "install", env=env))
+                self.assertEqual("update", recovered["recovered"])
+                self.assertIn(point.encode(), target.read_bytes())
+                self.assertNotEqual(old_bytes, target.read_bytes())
+                self.assertFalse(self.payload(self.run_script(script, "status", env=env))["update_required"])
 
     def test_pre_stage_failure_is_safely_retried(self) -> None:
         failed = self.run_ctl("install", env={**self.env, "GPT56_STANDALONE_FAIL_AT": "install-prepared"})
         self.assertEqual(2, failed.returncode)
         status = self.payload(self.run_ctl("status"))
         self.assertFalse(status["active"])
-        self.assertEqual("install", status["recovered"])
-        self.assertEqual(0, self.run_ctl("install").returncode)
+        self.assertEqual(["install"], status["recovery_required"])
+        recovered = self.payload(self.run_ctl("install"))
+        self.assertEqual("install", recovered["recovered"])
 
     def test_partial_transaction_stage_cleanup_is_resumable(self) -> None:
         crashed = self.run_ctl("install", env={**self.env, "GPT56_STANDALONE_CRASH_AT": "install-prepared"})
@@ -515,7 +676,10 @@ class StandaloneCtlTests(unittest.TestCase):
         partial.mkdir(parents=True)
         shutil.copy2(SCRIPT.parents[1] / "skills" / "route-gpt-5-6-work" / "SKILL.md", partial / "SKILL.md")
         status = self.payload(self.run_ctl("status"))
-        self.assertEqual("install", status["recovered"])
+        self.assertEqual(["install"], status["recovery_required"])
+        self.assertTrue(partial.exists())
+        recovered = self.payload(self.run_ctl("install"))
+        self.assertEqual("install", recovered["recovered"])
         self.assertFalse(partial.exists())
         self.assertFalse(status["active"])
 
@@ -527,6 +691,8 @@ class StandaloneCtlTests(unittest.TestCase):
         extra = stage / "keep-me.txt"
         extra.write_text("post-crash edit\n", encoding="utf-8")
         result = self.run_ctl("status")
+        self.assertEqual(0, result.returncode)
+        result = self.run_ctl("install")
         self.assertEqual(2, result.returncode)
         self.assertTrue(extra.exists())
 

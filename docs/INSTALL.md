@@ -1,41 +1,54 @@
 # Installation and lifecycle
 
-This page covers full plugin mode for Desktop and CLI. For IDE extensions or another surface without plugin support, use [Standalone advisory mode](STANDALONE.md).
+This page covers the supported plugin path for Desktop and CLI. Autorouter routes through Codex's direct child capability; the bundled custom-agent TOMLs are not required. For a surface without plugin support, use [Standalone advisory mode](STANDALONE.md).
 
-## Install from a marketplace
+## Select the cheap root once
+
+Select **GPT-6 Luna** in Codex Desktop before starting a new task. For a personal CLI default, use top-level Codex configuration:
+
+```toml
+model = "gpt-6-luna"
+model_reasoning_effort = "low"
+```
+
+Low is the preferred initial effort, not an immutable requirement. If controlled acceptance shows that Luna Low cannot reliably follow routing instructions, create bounded child contracts, or synthesise escalated results, compare Luna Low with Luna Medium before changing the recommendation.
+
+This is a user-controlled one-time selection. Autorouter never edits global/root model configuration, and install, update, activate, deactivate, repair, and uninstall never claim to configure Luna.
+
+## Install the immutable reviewed release
+
+After the reviewed `v0.2.0` tag exists:
 
 ```bash
-codex plugin marketplace add vibeforge1111/Codex-Autorouter --ref main
+codex plugin marketplace add anthonypaddison/Codex-Autorouter --ref v0.2.0
 codex plugin add gpt-5-6-router@codex-autorouter
 ```
 
-The repository is private during beta, so the GitHub marketplace requires repository access. After public-directory approval, users can instead install **Autorouter** directly from the universal plugin directory.
+Do not substitute `main`: a moving branch does not identify the reviewed bytes. Start a new task after installation or update so Codex reloads plugin skills and hooks.
 
-Start a new task after installation or update so Codex reloads plugin skills and hooks.
+## Trust the bundled hooks and check health
 
-## Trust the bundled hooks
+Open `/hooks`, inspect the five lifecycle entries, and trust the exact current definitions. Installation and enablement do not imply trust. Each command must execute only the router under its own `${PLUGIN_ROOT}` or `%PLUGIN_ROOT%`; it must not search sibling caches or contain a publisher source-machine path.
 
-Open `/hooks`, inspect the five lifecycle entries, and trust the exact current definitions. Installation and enablement do not imply trust. The commands must resolve through `${PLUGIN_ROOT}` or `%PLUGIN_ROOT%`; they must not contain the publisher's source-machine path.
-
-After review, query Codex's authoritative discovered-hook state:
+From the exact installed plugin root, run:
 
 ```bash
 python3 scripts/check_hooks.py
 ```
 
-The check passes only when the namespaced plugin skill and the exact five plugin hooks are discovered from the installed cache, enabled, trusted, warning-free, and error-free. It also reads Codex's effective merged configuration and requirements through app-server and refuses readiness when the plugin or hooks are disabled, multi-agent work or child depth is unavailable, or managed-hooks-only policy blocks user plugin hooks.
+The combined check reports:
 
-## Activate custom agents
+- `READY` when the current task observed GPT-6 Luna and at least one model-keyed non-stale capability receipt proves a genuine successful GPT-6 Sol or Astra escalation against the same plugin candidate and at least one matching versioned Codex runtime/build identifier;
+- `DEGRADED` when Autorouter works but the observed root is not Luna, the runtime/build changed, or current escalation capability is not yet proven; a non-Luna root substantially reduces credit-saving behaviour;
+- `ADVISORY` when hooks or the supported direct child path cannot enforce the complete contract.
 
-Use the `Installed plugin root` printed by `codex plugin add`, change into that version directory, and verify that it contains `.codex-plugin/plugin.json`. `codex plugin list` is useful for checking the installed version, but its `PATH` column may identify the marketplace source rather than the installed cache. Then run:
+`UserPromptSubmit.model` is authoritative for the active root on every actual turn. Root observations carry task and turn identity, and `CODEX_SESSION_ID`/`CODEX_THREAD_ID` selects current-task evidence; another task's Luna observation cannot establish readiness. Without authoritative task context the global report remains conservative. App Server and config evidence may support health reporting but cannot override hook evidence. Each GPT-6 Sol or Astra receipt binds only its exact model tier plus plugin content identity, plugin version, Codex runtime/build where exposed, Desktop or CLI host type, platform, effort intent, capability/schema signature, and timestamp. Null runtime identity never proves compatibility, and receipts older than 30 days are history rather than current capability. The check reports each tier separately and never launches an automatic paid probe.
 
-```bash
-python3 skills/route-gpt-5-6-work/scripts/routerctl.py status
-python3 skills/route-gpt-5-6-work/scripts/routerctl.py activate
-python3 skills/route-gpt-5-6-work/scripts/routerctl.py status
-```
+Astra is not part of normal automatic classification. Explicit Astra requests default to Medium and may select Medium, High, Extra High, or Max; Low and Ultra are rejected. The sole automatic Astra path is an authoritative attested Sol `ROUTE_UP`, always to Astra Medium, with no automatic effort retry.
 
-Balanced is used when no routing preference has been stored. To select or inspect a persistent preference:
+## Routing preference
+
+Balanced is used when no preference has been stored. To select or inspect the persistent profile:
 
 ```bash
 python3 skills/route-gpt-5-6-work/scripts/routerctl.py profile token-saver
@@ -44,42 +57,44 @@ python3 skills/route-gpt-5-6-work/scripts/routerctl.py profile max-quality
 python3 skills/route-gpt-5-6-work/scripts/routerctl.py profile
 ```
 
-The preference is stored under `CODEX_HOME/gpt-5-6-router`, survives plugin replacement, and applies to the next new task. It does not modify Codex's Fast/Standard setting.
+The preference is stored under `CODEX_HOME/gpt-5-6-router`, survives plugin replacement, and applies to the next new task. It does not modify the active model, root effort, or Fast/Standard setting.
 
-Review conflicts before using `activate --replace-conflicts`. That flag snapshots the original definitions and restores them during clean deactivation.
+## Optional legacy custom agents
 
-`routerctl status` always remains `ADVISORY` outside managed blocking, even when `local_agent_ready` is true: an extracted archive and an installed plugin can have the same filesystem shape. Only `scripts/check_hooks.py` may report full readiness after it binds app-server discovery, hook trust, and six active current agent definitions to the exact checker build.
+Normal installation and activation do not install custom-agent TOMLs. Their absence is expected and does not cause `DEGRADED`. The files remain available only for compatibility testing or an intentionally selected older host path.
 
-## Repair
+To enter that mode explicitly after reviewing every definition:
 
 ```bash
-python3 skills/route-gpt-5-6-work/scripts/routerctl.py repair
+python3 skills/route-gpt-5-6-work/scripts/routerctl.py activate --legacy-agents
+python3 skills/route-gpt-5-6-work/scripts/routerctl.py status
 ```
 
-Repair recreates missing owned files only when the bundled checksum matches the active version. It refuses locally modified files and will not silently resolve ownership conflicts.
+Legacy ownership conflicts fail closed. `--replace-conflicts` is available only with an explicit legacy activation after reviewing the original and bundled definitions. `deactivate`, `repair`, and modified-file preservation apply only to files previously managed through this legacy path. Legacy state never contributes to supported-path readiness.
 
 ## Update
 
-1. Update or reinstall the plugin from the marketplace.
-2. Start a new task. This one-time boundary is required for tasks created by builds before the stale-cache launcher fix; tasks created by the fixed build can follow later cache replacements automatically, but a new task remains the supported way to pick up changed skill instructions.
-3. Review and trust changed hooks in `/hooks`.
-4. Run `routerctl.py activate` again. Upgrade proceeds only when every currently managed file still matches its recorded installed hash.
-5. Run `routerctl.py status` and the smoke prompts in the release checklist.
+1. Install the new reviewed immutable marketplace version.
+2. Start a new task.
+3. Review and trust any changed hook definitions in `/hooks`.
+4. Run `python3 scripts/check_hooks.py`.
+5. Expect `DEGRADED` after an observable runtime/build change until a genuine paid escalation occurs during normal or controlled acceptance work; do not probe automatically.
+
+No lifecycle step changes the user-selected Luna root. If legacy agents were never explicitly enabled, there is nothing to activate, repair, or deactivate.
 
 ## Uninstall
 
-Deactivate external custom-agent files before removing the plugin:
+Optionally purge routing ledgers, then remove the plugin:
 
 ```bash
 python3 skills/route-gpt-5-6-work/scripts/router_hook.py --purge-ledgers
-python3 skills/route-gpt-5-6-work/scripts/routerctl.py deactivate
 codex plugin remove gpt-5-6-router
 ```
 
-If a managed definition was edited, normal deactivation refuses. Use `deactivate --keep-modified` only when you intentionally want to preserve that file and relinquish plugin ownership.
+If explicit legacy mode was used, deactivate its owned files before plugin removal:
 
-Plugin removal disables plugin-native hooks. Orphaned custom-agent TOMLs are inert unless another workflow explicitly spawns their names, but clean deactivation remains the supported uninstall path.
+```bash
+python3 skills/route-gpt-5-6-work/scripts/routerctl.py deactivate
+```
 
-The ledger purge is optional but is the supported way to remove routing metadata immediately rather than waiting for opportunistic age cleanup. See [Local routing data and privacy](PRIVACY.md).
-
-If the plugin was removed first by mistake, reinstall the same candidate version from the same marketplace, run `routerctl.py deactivate`, confirm the owned agents are gone or restored, and then remove the plugin again. Do not install a different candidate over orphaned ownership state as a recovery shortcut.
+If a legacy managed definition was edited, deactivation refuses to discard it. Use `deactivate --keep-modified` only when you intentionally preserve that file and relinquish ownership. Plugin removal disables plugin-native hooks but does not change the global/root model selection. See [Local routing data and privacy](PRIVACY.md) for ledger retention.

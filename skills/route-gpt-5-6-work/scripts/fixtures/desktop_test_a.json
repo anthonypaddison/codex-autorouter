@@ -1,0 +1,50 @@
+{
+  "classifier_regression": {
+    "prompt": "Read README.md and tell me which Python versions the CI matrix supports. Do not modify anything.",
+    "expected_mutation": false,
+    "expected_route": "current"
+  },
+  "lifecycle_provenance": "Sanitized Test A Desktop event ordering and identifiers. The task text is replaced with a normal Terra task so the lifecycle remains expected after the classifier defect is fixed.",
+  "lifecycle_events": [
+    {
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "desktop-test-a-session",
+      "turn_id": "desktop-test-a-parent-turn",
+      "model": "gpt-5.6-luna",
+      "model_reasoning_effort": "low",
+      "prompt": "Implement a bounded parser with explicit error handling and targeted unit tests."
+    },
+    {
+      "hook_event_name": "SubagentStart",
+      "session_id": "desktop-test-a-session",
+      "turn_id": "desktop-test-a-parent-turn",
+      "agent_id": "desktop-test-a-terra-child",
+      "model": "gpt-5.6-terra",
+      "reasoning_effort": "medium"
+    },
+    {
+      "hook_event_name": "UserPromptSubmit",
+      "session_id": "desktop-test-a-session",
+      "turn_id": "desktop-test-a-child-turn",
+      "model": "gpt-5.6-terra",
+      "model_reasoning_effort": "medium",
+      "prompt": "Implement the bounded parser contract supplied by the parent and return focused verification evidence."
+    },
+    {
+      "hook_event_name": "SubagentStop",
+      "session_id": "desktop-test-a-session",
+      "turn_id": "desktop-test-a-child-turn",
+      "agent_id": "desktop-test-a-terra-child",
+      "model": "gpt-5.6-terra",
+      "reasoning_effort": "medium",
+      "stop_hook_active": false,
+      "last_assistant_message": "Evidence: bounded parser implemented\nVerification: focused unit tests passed\nUncertainty: none"
+    },
+    {
+      "hook_event_name": "Stop",
+      "session_id": "desktop-test-a-session",
+      "turn_id": "desktop-test-a-parent-turn",
+      "stop_hook_active": false
+    }
+  ]
+}

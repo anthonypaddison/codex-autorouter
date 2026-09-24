@@ -1,34 +1,55 @@
 # Troubleshooting
 
-## Status says `ADVISORY`
+## Run the health check
 
-Run `routerctl.py status` and inspect these fields:
+From the exact installed plugin root, run:
 
-- `agents_active`: run explicit activation after reviewing the definitions.
-- `agent_conflicts`: preserve or resolve local edits; the router will not overwrite them silently.
-- `original_backup_conflicts`: restore the private activation backup before upgrade or deactivation; the router will not discard ownership without it.
-- `activation_update_required`: rerun `activate` after a plugin or bundled-agent update.
-- `bundled_agent_drift`: rerun `activate` after reviewing changed bundled definitions.
-- `hooks_enabled_by_local_config`: enable Codex lifecycle hooks if local policy allows.
-- `multi_agent_enabled_by_local_config`: enable multi-agent support if local policy allows.
-- `local_agent_depth_allows_children`: use an agent depth of at least one.
-- `hook_trust`: always `UNVERIFIED` from the filesystem helper; confirm in `/hooks`.
+```bash
+python3 scripts/check_hooks.py
+```
 
-These fields reflect local files only, not the final merged value after administrator profiles, project settings, or command-line overrides.
+- `READY` means this task's latest actual parent turn observed a GPT-6 Luna root and at least one model-keyed non-stale capability receipt proves a genuine successful GPT-6 Sol or Astra escalation for the same plugin candidate and versioned Codex runtime/build.
+- `DEGRADED` means Autorouter can still operate but the active root is not Luna, the runtime/build changed, or current escalation capability has not yet been proven. A non-Luna root substantially reduces credit-saving behaviour.
+- `UNAVAILABLE` means the supported hook or direct child-routing path cannot operate.
+
+`UserPromptSubmit.model` is the authoritative active root for every actual turn. App Server and config evidence may explain the report, but cannot override the hook's active-model evidence.
+
+If the root is not Luna, select GPT-6 Luna in Desktop before starting a new task, or set these personal top-level `config.toml` values:
+
+```toml
+model = "gpt-6-luna"
+model_reasoning_effort = "low"
+```
+
+Autorouter never makes this change itself and never claims to have configured Luna. Luna Low is the preferred starting point. Compare Luna Low with Luna Medium later only through a controlled acceptance test if Low is unreliable at routing instructions, bounded child contracts, or result synthesis.
+
+## A Codex update changed `READY` to `DEGRADED`
+
+This is expected when observable Codex runtime/build/host identity or plugin content identity no longer matches the capability receipt. A receipt is created only after an expected direct child is observed on the exact requested GPT-6 Sol or Astra model and the same `agent_id` returns a successful structured completion. The exact bounded child transcript may provide authoritative child model, effort, and turn evidence when Desktop omits the child prompt hook. It binds one exact model tier plus plugin content identity and version, Codex runtime/build where exposed, Desktop or CLI host type, platform, effort intent, capability/schema signature, and timestamp.
+
+If Codex exposes no authoritative versioned runtime/build field, the report says `DEGRADED — runtime identity unavailable; capability compatibility unproven`. Host type and platform alone are insufficient, and null never matches null. A valid identity-null receipt remains labelled `ESCALATION PREVIOUSLY OBSERVED`, but it cannot establish current-runtime capability. A receipt older than 30 days is likewise retained as history but cannot establish `READY`.
+
+Continue normal work. A genuine successful GPT-6 Sol or Astra escalation can create a fresh receipt for that exact tier in the current observable environment. If the host still exposes no versioned runtime/build identifier, health remains conservatively `DEGRADED` even after that historical evidence is refreshed. The status and health commands never launch an automatic paid probe.
+
+## Status says `UNAVAILABLE`
+
+Confirm that the plugin and its hooks are enabled and trusted, and that Codex's supported direct child-routing capability is available. Organization-managed policy can prevent a user-installed hook from becoming active.
+
+Legacy custom-agent TOMLs are optional and their absence is not a health failure. Normal installation and activation do not install them. Use explicit legacy mode only when intentionally testing or supporting an older host path.
 
 ## The wrong cost/quality profile is active
 
 Run `routerctl.py profile`. A missing setting safely reports Balanced; an invalid or linked file reports `invalid_default` and also falls back to Balanced. Re-save a valid value with `routerctl.py profile token-saver`, `balanced`, or `max-quality`. The change begins on the next new task, not an in-flight continuation, and does not change Fast/Standard.
 
-Run `python3 scripts/check_hooks.py` from the plugin root for an authoritative app-server trust probe.
+Run `python3 scripts/check_hooks.py` from the plugin root for the combined hook, active-root, and capability-receipt report.
 
 ## Status says `MANAGED_BLOCKED`
 
 An organization requirement allows only managed hooks. A user-installed plugin cannot override this. Use advisory mode or ask the administrator to distribute an approved managed hook.
 
-## Activation reports a conflict
+## Explicit legacy activation reports a conflict
 
-Do not delete the file reflexively. Compare it with the bundled definition. If it is foreign and you intentionally want the plugin to manage it, use `activate --replace-conflicts`; the original is retained for deactivation. If it is a locally edited managed file, preserve it and decide whether to deactivate with `--keep-modified`.
+This applies only to an intentionally requested legacy custom-agent mode. Do not delete the file reflexively. Compare it with the bundled definition. If it is foreign and you intentionally want the legacy controller to manage it, use the documented explicit legacy conflict option; the original must be retained for deactivation. If it is a locally edited managed file, preserve it.
 
 ## A lifecycle command was interrupted
 
@@ -44,9 +65,9 @@ Confirm that the plugin is installed and enabled, hooks are enabled, the project
 
 ## Completion feedback repeats after an update
 
-Tasks created by builds before the stale-cache launcher fix can retain a command resolved to that build's deleted cache directory. The entries under `[hooks.state]` in `config.toml` are trust records keyed by plugin and hook position; their presence is expected and does not identify the active task's resolved command.
+Tasks created by older builds can retain a hook command resolved to a deleted cache directory. The entries under `[hooks.state]` in `config.toml` are trust records keyed by plugin and hook position; their presence is expected and does not identify the active task's resolved command.
 
-Update the plugin, review and trust the changed hook definitions, and open a fresh task once. Do not delete trust state or disable completion gates globally. Tasks created by the fixed build use a self-contained launcher that discovers the newest installed router hook when a later cache replacement removes their original version. If no valid cache exists, the launcher reports the condition once and then fails open without recursively continuing the task.
+Update the plugin, review and trust the changed hook definitions, and open a fresh task once. Do not delete trust state or disable completion gates globally. Current hook definitions execute only the router under their own exact plugin root; they do not discover or execute a sibling cache. If that exact router is unavailable, the hook reports the condition and fails open without recursively continuing the task.
 
 Within the current router, Stop and SubagentStop never hard-block. Successful observable verification—including package scripts such as `pnpm verify:fast` and tests executed through nested Codex orchestration—settles the current mutation generation. If a nominally read-only turn later mutates files, its recorded gate is promoted from `answer check` to targeted tests or a build. When Codex's incomplete unified-exec interception omits the result, when verification fails, or when orchestration is incomplete, the ledger records `FAILED_OPEN` with root verification still required; it does not pretend the check passed or inject a replayable user message. XML-wrapped feedback from an older build is recognized and discarded rather than reclassified as a new user task, and duplicate Stop delivery against either terminal state is a no-op.
 

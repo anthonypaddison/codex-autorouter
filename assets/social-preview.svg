@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
   <title id="title">Autorouter for Codex</title>
-  <desc id="desc">The Autorouter logo beside three GPT-5.6 routes merging into one verified outcome.</desc>
+  <desc id="desc">The Autorouter logo beside Luna and Sol core routes plus a separately gated GPT-6 Astra frontier.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#080B10"/><stop offset="0.6" stop-color="#101622"/><stop offset="1" stop-color="#15120F"/>
@@ -20,18 +20,22 @@
     </g>
     <text x="78" y="272" fill="#F8FAFC" font-size="62" font-weight="780" letter-spacing="-2">The right model.</text>
     <text x="78" y="344" fill="#F8FAFC" font-size="62" font-weight="780" letter-spacing="-2">The right effort.</text>
-    <text x="80" y="400" fill="#98A5B8" font-size="22">Automatic GPT-5.6 routing for verified outcomes.</text>
+    <text x="80" y="400" fill="#98A5B8" font-size="22">Cost-aware Codex routing for verified outcomes.</text>
 
     <g transform="translate(746 126)">
       <path d="M70 62C190 62 180 194 316 194M70 194H316M70 326C190 326 180 194 316 194M316 194H438" fill="none" stroke="#344154" stroke-width="14" stroke-linecap="round"/>
       <path d="M70 62C190 62 180 194 316 194M70 194H316M70 326C190 326 180 194 316 194M316 194H438" fill="none" stroke="url(#route)" stroke-width="5" stroke-linecap="round"/>
       <circle cx="70" cy="62" r="16" fill="#A78BFA"/><circle cx="70" cy="194" r="16" fill="#48D7E8"/><circle cx="70" cy="326" r="16" fill="#FDBA4A"/>
       <text x="104" y="70" fill="#D9CEFF" font-size="22" font-weight="700">Luna</text>
-      <text x="104" y="202" fill="#C8F8FC" font-size="22" font-weight="700">Terra</text>
+      <text x="104" y="202" fill="#C8F8FC" font-size="22" font-weight="700">Sol</text>
       <text x="104" y="334" fill="#FFE0A5" font-size="22" font-weight="700">Sol</text>
       <path d="M418 174L438 194L418 214" fill="none" stroke="#F8FAFC" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
       <rect x="344" y="246" width="154" height="52" rx="18" fill="#14231D" stroke="#65D7A2" stroke-opacity="0.7"/>
       <text x="421" y="279" text-anchor="middle" fill="#92E9BB" font-size="16" font-weight="740">VERIFIED</text>
+      <rect x="88" y="374" width="350" height="54" rx="18" fill="#211427" stroke="#F472B6" stroke-opacity="0.72"/>
+      <circle cx="116" cy="401" r="8" fill="#F472B6"/>
+      <text x="136" y="399" fill="#FFF0FA" font-size="17" font-weight="720">GPT-6 Astra · gated frontier</text>
+      <text x="136" y="417" fill="#CFA8C5" font-size="12">explicit or attested Sol route-up</text>
     </g>
 
     <g transform="translate(78 486)" font-size="15" font-weight="700">

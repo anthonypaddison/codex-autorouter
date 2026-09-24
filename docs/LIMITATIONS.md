@@ -1,10 +1,10 @@
 # Known limitations
 
-## Custom agents require explicit activation
+## Legacy custom agents are optional
 
-Codex plugins do not currently document a native custom-agent component. The plugin bundles reviewed templates, but the user must explicitly install the six namespaced TOMLs into `CODEX_HOME/agents` with `routerctl`.
+Normal routing uses the direct model-spawn compatibility adapter and does not install or require custom-agent TOMLs. The six namespaced templates remain only for compatibility testing and an explicit legacy mode. Users who deliberately need that mode can run `routerctl activate --legacy-agents`; their absence never degrades normal readiness.
 
-Native custom-agent selection requires both the exact `agent_type` and `fork_turns: "none"` on each spawn. `task_name` is only an orchestration label; using the role there does not select the custom agent. The default full-history fork inherits the parent identity and is incompatible with a custom `agent_type`. The router injects this contract and lifecycle hooks still require the expected child model and role; do not weaken attestation to accept built-in `default` as a named model route.
+Current direct-spawn schema construction, capability detection, and fallback live in one tested adapter. If Codex changes that schema, normal routing degrades to the current root model until the adapter is updated and a genuine successful GPT-6 Sol or Astra escalation creates a fresh model-keyed capability receipt. Autorouter never runs an automatic paid probe.
 
 ## Hook trust is not filesystem-observable
 
@@ -12,11 +12,21 @@ Codex stores and evaluates hook trust separately. `routerctl status` can validat
 
 ## Pre-fix open tasks need one restart after upgrade
 
-Codex can retain the resolved, versioned hook command for an already-open task. Builds before the stale-cache launcher fix pointed directly at their own immutable cache and cannot rewrite that in-memory registration after the directory is replaced. Open a fresh task once after upgrading from such a build. Tasks created by the fixed build resolve the newest installed sibling cache from their self-contained command and do not recursively fail when their original cache is retired.
+Codex can retain the resolved, versioned hook command for an already-open task. Builds before the immutable launcher fix cannot rewrite that in-memory registration after the installed version changes. Open a fresh task once after upgrading from such a build. Tasks created by the fixed build launch only from the plugin root Codex supplied; they do not scan sibling cache directories.
 
-## Config diagnostics are local hints
+## The active root model is turn evidence
 
-`routerctl status` reads local `CODEX_HOME/config.toml` and `requirements.toml` only. It cannot calculate the final merged value after administrator profiles, policy, project configuration, or command-line overrides. Fields are named `*_by_local_config` or `*_in_local_requirements` for that reason. `scripts/check_hooks.py` performs the authoritative preflight by reading effective merged configuration and requirements from app-server alongside discovered hook trust.
+`UserPromptSubmit.model` is authoritative for the active root model on each actual turn. Local config and App Server evidence can support health reporting, but neither overrides that hook observation. A non-Luna root is therefore credit-efficiency `DEGRADED` for that turn even if configuration says Luna.
+
+`routerctl status` reads local `CODEX_HOME/config.toml` and `requirements.toml` only. It cannot calculate the final merged value after administrator profiles, policy, project configuration, or command-line overrides. Autorouter reports such evidence as diagnostic context and never writes the root model.
+
+## READY is runtime-bound
+
+`scripts/check_hooks.py` reports `READY` only after a current-task GPT-6 Luna root observation and at least one genuine successful GPT-6 Sol or Astra escalation receipt for the same plugin content identity/version, at least one matching versioned Codex runtime/build identifier, host type, platform, capability signature, and supported schema. Receipts are keyed by exact model tier and reported independently; one tier never proves another. Another task's observation, missing current-task context, null runtime identity, a candidate change, or a receipt older than 30 days returns health to `DEGRADED` when no other current tier receipt exists. Historical receipts remain auditable as `ESCALATION PREVIOUSLY OBSERVED`. This is intentional; health checks never spend credits on an automatic probe.
+
+## Astra is intentionally rare
+
+Normal classification, severity, keywords, and Max Quality cannot select Astra. Explicit requests support Medium, High, Extra High, and Max and default to Medium; Low and Ultra are rejected. The only automatic path is a fully attested same-task Sol `ROUTE_UP`, always to Astra Medium. Autorouter has no automatic Astra effort retry. An Astra root remains the final owner rather than delegating downward.
 
 ## Fast is reported, not UI-attested
 
@@ -24,15 +34,33 @@ The documented common hook input does not guarantee a live `service_tier` field.
 
 ## Reasoning effort is configuration intent
 
-Lifecycle input exposes the child model but not a guaranteed live reasoning-effort field. The router validates effort against its owned agent TOML and describes this as configured intent.
+Lifecycle input exposes the child model but not a guaranteed live reasoning-effort field. The compatibility adapter supplies a validated effort intent with each direct spawn, and receipts report that value as intent rather than unavailable runtime attestation.
 
 ## Hook coverage is not an OS sandbox
 
 `PostToolUse` covers matching Codex tool events, not every possible operating-system mutation. Final acceptance remains with the root agent and proportionate deterministic verification.
 
+## Observed spawn compliance is separate from child identity
+
+A real, correlated, completed child is not necessarily compliant routed execution. Required-role fulfilment and capability receipts require a validated observed spawn call: explicit supported model/effort, `fork_turns: "none"`, nonblank `task_name` and `message`, and no service-tier override. Construction and validation share the compatibility adapter. Lifecycle model/effort or the intended envelope cannot substitute for the actual arguments.
+
+Structured spawn calls use exact call/activity identities. Nested `functions.exec` recovery parses complete literal argument objects without executing JavaScript; variables, computed/spread properties, duplicate fields, incomplete syntax and bounded-parser exhaustion cannot prove compliance. It never searches message contents for missing argument fields. Multiple nested spawns in one wrapper without an authoritative inner call/result bridge remain unproven per child; response order, model and timing are not identity evidence. Call-specific reason codes are retained without raw messages. Malformed-call history remains visible, but a later compliant child can fulfil the role where existing orchestration policy permits.
+
+Pre-execution blocking for the exact nested spawn surface remains **HOST CAPABILITY UNPROVEN**. This validation refuses compliant execution/receipt credit; it does not claim to prevent the host from launching a malformed child. Lifecycle-only historical fixtures and receipts are not new proof of this contract.
+
+## Classification uses local action context
+
+Security-changing intent requires a local affirmative action on a security-sensitive subject. Reporting or preserving permissions, sandbox state, plugin/hook trust, or configuration is not itself a security change. A prohibition extends over its coordinated action list, but does not suppress a later affirmative instruction such as `Do not change permissions; actually chmod the directory 777`.
+
+Operational root/routing/audit ledgers and ledger identifiers are not financial actions. Actual financial ledger or account-balance changes remain critical; underspecified financial changes still require clarification. An exact-once command plus an explicit reporting requirement and safeguards can stay on the current root, including the inline form `Run exactly <command> once`. Independent security and consequential-action gates still apply.
+
+These are deterministic language rules, not a complete natural-language parser or a security sandbox. Other task-complexity signals still select the route; classification-only replay does not prove model quality, savings, or live child-contract compliance.
+
 ## Transcript compatibility is best effort
 
-Codex documents transcript format as unstable. Transcript reconciliation is bounded compatibility support, not correctness-authoritative attestation. Autorouter accepts only paired same-turn tool calls and machine-readable successful status after the final mutation, refuses linked or oversized transcript files, and otherwise fails open to root-owned verification.
+Exact-child discovery searches only the effective `CODEX_HOME/sessions/YYYY/MM/DD` hierarchy and flat `CODEX_HOME/archived_sessions`, irrespective of the parent's date directory. It accepts canonical UUIDv7 child IDs and the exact Codex rollout filename scheme. A filename is only a candidate: unique discovery, safe file validation, matching child/parent session metadata, and an unambiguous child turn/model/effort are still required. Discovery never chooses by timestamp, date proximity, model or filename order. It retains at most two candidates and searches at most 4,096 directories and 65,536 entries per child. Search exhaustion or duplicate candidates return `INCOMPLETE`; traversal errors return `IO_ERROR`; unsafe paths return `PATH_REJECTED`. Only a complete safe search without a candidate returns `NOT_FOUND`. No persistent index or transcript path/content is retained, and successful recovery does not bypass any runtime-bound capability-receipt gate.
+
+Codex documents transcript format as unstable. Transcript reconciliation is bounded compatibility support, not correctness-authoritative attestation. Autorouter descriptor-validates and incrementally scans regular, singly-linked, owner-matched JSONL files; it accepts complete JSON records up to 16 MiB and retains at most 256 KiB of relevant decoded text, 256 calls, and 64 agents per scan. Whole-transcript size is not a rejection condition. Linked paths, malformed JSONL, oversized individual lines, I/O failures, and bounded-summary exhaustion remain explicit conservative outcomes and cannot establish evidence. Autorouter accepts only paired exact-turn tool calls with bounded, schema-located machine status. A recovered success must follow every mutation and bind one-to-one to the recorded mutation generation through opaque call identities where available; incomplete historical provenance remains conservative. Otherwise Autorouter fails open to root-owned verification.
 
 ## Terminal hooks cannot safely hard-block on affected Codex builds
 
@@ -45,6 +73,8 @@ Some Codex builds replay a `Stop` or `SubagentStop` block reason as a persisted 
 `allow_managed_hooks_only`, feature requirements, marketplace restrictions, or disabled multi-agent support can force advisory or managed-blocked operation. The plugin never bypasses organizational policy.
 
 ## Supported surfaces and real-host coverage
+
+Automation hook delivery is host/version dependent. The currently observed Codex Desktop host dispatches Autorouter hook context and ledgers for automation-triggered turns, disproving the earlier blanket assumption that automation hooks never run. Autorouter has not yet validated automation routing semantics as a supported savings surface, so automation activity remains excluded from Autorouter-attributable routing and savings claims. Operators must not infer either hook absence or savings coverage without host-specific evidence.
 
 Full plugin mode targets Codex Desktop and CLI. Codex IDE extensions do not currently support plugins; IDE use is therefore limited to the standalone skill's explicit `ADVISORY` mode without hook enforcement. CI can exercise macOS, Linux, and Windows semantics, but public stable release still requires native acceptance on supported Desktop and CLI hosts, including hook trust and filesystem behavior.
 

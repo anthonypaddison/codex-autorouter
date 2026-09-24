@@ -8,8 +8,8 @@
       "name": "gpt-5-6-router",
       "source": {
         "source": "url",
-        "url": "https://github.com/vibeforge1111/Codex-Autorouter.git",
-        "ref": "main"
+        "url": "https://github.com/anthonypaddison/Codex-Autorouter.git",
+        "ref": "v0.2.0"
       },
       "policy": {
         "installation": "AVAILABLE",

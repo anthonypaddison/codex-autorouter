@@ -1,4 +1,4 @@
 interface:
-  display_name: "Route GPT-5.6 Work"
-  short_description: "Automatically choose GPT-5.6 model and effort"
-  default_prompt: "Apply this router skill to choose the right GPT-5.6 model, reasoning effort, bounded delegation plan, and verification gate."
+  display_name: "Route Codex Work"
+  short_description: "Choose model, effort, and bounded delegation"
+  default_prompt: "Apply this router skill to choose the cost-effective Codex model, reasoning effort, bounded delegation plan, and verification gate. Keep GPT-6 Astra behind its explicit or attested frontier gate."

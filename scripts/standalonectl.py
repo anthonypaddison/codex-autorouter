@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import time
@@ -81,8 +82,18 @@ def _is_linklike(path: Path) -> bool:
 
 
 def _canonical(path: Path) -> None:
-    if path.resolve(strict=False) != path:
-        raise StandaloneError(f"refusing a path with symlink, junction, or reparse ancestors: {path}")
+    for attempt in range(4):
+        try:
+            matches = path.resolve(strict=False) == path
+        except PermissionError:
+            if os.name != "nt" or attempt == 3:
+                raise
+        else:
+            if matches:
+                return
+            if os.name != "nt" or attempt == 3:
+                raise StandaloneError(f"refusing a path with symlink, junction, or reparse ancestors: {path}")
+        time.sleep(0.01 * (2**attempt))
 
 
 def _ensure_dir(path: Path, *, private: bool = False, tighten_existing: bool = False) -> None:
@@ -231,6 +242,32 @@ def _normalized_mode(info: os.stat_result) -> int:
     return 0 if os.name == "nt" else stat.S_IMODE(info.st_mode) & 0o777
 
 
+def _generated_relative(relative: str) -> bool:
+    path = Path(relative.rstrip("/"))
+    return path.name == ".DS_Store" or "__pycache__" in path.parts or path.suffix in {".pyc", ".pyo"}
+
+
+def _tracked_source_paths() -> set[str] | None:
+    """Return tracked paths relative to SOURCE, or None outside a Git checkout."""
+    try:
+        top = subprocess.run(
+            ["git", "-C", str(PLUGIN_ROOT), "rev-parse", "--show-toplevel"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        source_prefix = SOURCE.resolve().relative_to(Path(top).resolve()).as_posix().rstrip("/") + "/"
+        listed = subprocess.run(
+            ["git", "-C", top, "ls-files", "-z", "--", source_prefix],
+            check=True, capture_output=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError, ValueError):
+        return None
+    return {
+        item.decode("utf-8")[len(source_prefix):]
+        for item in listed.split(b"\0")
+        if item and item.decode("utf-8").startswith(source_prefix)
+    }
+
+
 def _tree_hashes(root: Path, *, reject_generated: bool = False, require_skill: bool = True) -> dict[str, dict[str, Any]]:
     if _is_linklike(root) or not root.is_dir():
         raise StandaloneError(f"invalid skill tree: {root}")
@@ -273,7 +310,17 @@ def _tree_hashes(root: Path, *, reject_generated: bool = False, require_skill: b
 
 
 def _source_inventory() -> dict[str, dict[str, Any]]:
-    return _tree_hashes(SOURCE, reject_generated=True)
+    tracked = _tracked_source_paths()
+    if tracked is None:
+        return _tree_hashes(SOURCE, reject_generated=True)
+    tracked_generated = sorted(path for path in tracked if _generated_relative(path))
+    if tracked_generated:
+        raise StandaloneError(f"skill source contains a generated artifact: {tracked_generated[0]}")
+    inventory = _tree_hashes(SOURCE)
+    return {
+        path: item for path, item in inventory.items()
+        if path == "./" or not _generated_relative(path)
+    }
 
 
 def _validate_files(value: Any) -> dict[str, dict[str, Any]]:
@@ -549,6 +596,66 @@ def _validate_roots() -> Path:
     return TARGET.parent
 
 
+def _inspect_roots() -> Path:
+    """Validate standalone roots without creating, locking, chmodding, or recovering."""
+    for path in (CODEX_HOME, TARGET.parent, DATA):
+        _canonical(path)
+        if _is_linklike(path):
+            raise StandaloneError(f"refusing linked lifecycle root: {path}")
+    _canonical(SOURCE)
+    durable_source = _running_from_controller()
+    if (
+        DATA in {CODEX_HOME, TARGET.parent, TARGET, SOURCE}
+        or TARGET.is_relative_to(DATA)
+        or DATA.is_relative_to(TARGET)
+        or DATA.is_relative_to(TARGET.parent)
+        or DATA.is_relative_to(SOURCE)
+        or (SOURCE.is_relative_to(DATA) and not durable_source)
+    ):
+        raise StandaloneError("standalone state root overlaps a protected lifecycle path")
+    _source_inventory()
+    for path in (CODEX_HOME, TARGET.parent, DATA):
+        if path.exists() and not path.is_dir():
+            raise StandaloneError(f"expected directory: {path}")
+    expected_marker = {
+        "schema_version": SCHEMA_VERSION,
+        "purpose": "gpt-5-6-router-standalone",
+        "target_id": _target_id(),
+    }
+    if DATA.exists():
+        marker_exists = STATE_MARKER.exists() or _is_linklike(STATE_MARKER)
+        if marker_exists:
+            _await_state_marker(expected_marker)
+        elif any(DATA.iterdir()):
+            raise StandaloneError("refusing a nonempty unowned standalone state root")
+    return TARGET.parent
+
+
+def _controller_transaction_pending() -> bool:
+    value = _read_json(CONTROLLER_PENDING)
+    if value is None:
+        return False
+    stage_name = value.get("stage")
+    identifier = value.get("controller_id")
+    version = value.get("version")
+    if (
+        value.get("schema_version") != SCHEMA_VERSION
+        or value.get("target_id") != _target_id()
+        or not isinstance(stage_name, str)
+        or not stage_name.startswith(".controller-stage-")
+        or Path(stage_name).name != stage_name
+        or not isinstance(identifier, str)
+        or SHA256.fullmatch(identifier) is None
+        or not isinstance(version, str)
+        or not version
+    ):
+        raise StandaloneError("durable-controller transaction is corrupt")
+    inventory = _validate_files(value.get("inventory"))
+    if _controller_id(version, inventory) != identifier:
+        raise StandaloneError("durable-controller transaction identity mismatch")
+    return True
+
+
 def _owned_state(version: str, files: dict[str, dict[str, Any]], controller_id: str) -> dict[str, Any]:
     return {"schema_version": SCHEMA_VERSION, "version": version, "target": TARGET.name, "target_id": _target_id(), "controller_id": controller_id, "files": files}
 
@@ -802,24 +909,30 @@ def uninstall() -> dict[str, Any]:
 
 
 def status() -> dict[str, Any]:
-    skills = _validate_roots()
-    with _lock():
-        recovered = _recover(skills)
-        active = _active_manifest(_read_json(ACTIVE))
-        conflicts = bool(active) and not _matches(TARGET, active["files"])
-        controller_ready = False
-        if active:
-            try:
-                _validate_controller(CONTROLLERS / active["controller_id"])
-                controller_ready = True
-            except StandaloneError:
-                controller_ready = False
-        update = bool(active) and (
-            active["version"] != _version()
-            or active["files"] != _installed_inventory(_source_inventory())
-            or not controller_ready
-        )
-        foreign = not active and (TARGET.exists() or _is_linklike(TARGET))
+    _inspect_roots()
+    pending = _pending_manifest(_read_json(PENDING))
+    recovery_required: list[str] = []
+    if _controller_transaction_pending():
+        recovery_required.append("controller")
+    if pending is not None:
+        recovery_required.append(str(pending["operation"]))
+    if _read_json(PURGE_STATE) is not None or (DATA / "controllers.purging").exists():
+        recovery_required.append("purge")
+    active = _active_manifest(_read_json(ACTIVE))
+    conflicts = bool(active) and not _matches(TARGET, active["files"])
+    controller_ready = False
+    if active:
+        try:
+            _validate_controller(CONTROLLERS / active["controller_id"])
+            controller_ready = True
+        except StandaloneError:
+            controller_ready = False
+    update = bool(active) and (
+        active["version"] != _version()
+        or active["files"] != _installed_inventory(_source_inventory())
+        or not controller_ready
+    )
+    foreign = not active and (TARGET.exists() or _is_linklike(TARGET))
     return {
         "mode": "ADVISORY",
         "surface": "STANDALONE_NO_PLUGIN_HOOKS",
@@ -828,7 +941,8 @@ def status() -> dict[str, Any]:
         "update_required": update,
         "controller_ready": controller_ready,
         "foreign_target": foreign,
-        "recovered": recovered,
+        "recovered": None,
+        "recovery_required": recovery_required,
         "version": _version(),
         "controller": str(CONTROLLERS / active["controller_id"] / "scripts" / "standalonectl.py") if active else None,
     }
@@ -883,7 +997,7 @@ def main() -> int:
     if sys.version_info < (3, 10):
         print(json.dumps({"status": "error", "error": "standalonectl requires Python 3.10 or newer"}))
         return 2
-    parser = argparse.ArgumentParser(description="Manage the advisory standalone GPT-5.6 Router skill")
+    parser = argparse.ArgumentParser(description="Manage the advisory standalone Codex Autorouter skill")
     parser.add_argument("command", choices=("install", "status", "uninstall", "purge"))
     args = parser.parse_args()
     try:
