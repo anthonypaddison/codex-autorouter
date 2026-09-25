@@ -4124,7 +4124,11 @@ class RouterTests(unittest.TestCase):
         })
         ledger = json.loads((Path(self.temp.name) / "visible-current--t1.json").read_text())
         self.assertEqual("Sol Medium Speed unknown", ledger["decision"]["visible_route"])
-        self.assertNotIn("Route: Sol Medium Speed unknown", output["hookSpecificOutput"]["additionalContext"])
+        context = output["hookSpecificOutput"]["additionalContext"]
+        self.assertNotIn('"visible_route"', context)
+        self.assertNotIn("VISIBLE ROUTE:", context)
+        self.assertNotIn("Route: Sol Medium Speed unknown", context)
+        self.assertIn("ROUTE ANNOUNCEMENT: none for this current/direct route", context)
 
     def test_current_route_does_not_invent_missing_model_or_effort(self) -> None:
         router_hook.handle({
