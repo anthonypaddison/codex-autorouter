@@ -4332,10 +4332,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         decision.update(_service_tier(data))
         decision["effort_evidence"] = _effort_evidence(data, decision)
         decision["visible_route"] = _visible_route(decision, data)
-        previous_label = previous.get("decision", {}).get("visible_route") if previous else None
-        decision["announce_route"] = decision["route"] != "current" or (
-            previous_label is not None and previous_label != decision["visible_route"]
-        )
+        decision["announce_route"] = decision["route"] != "current" or decision.get("delegate") is True
         state = {
             "version": STATE_VERSION,
             "plugin_version": PLUGIN_VERSION,

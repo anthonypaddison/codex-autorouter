@@ -4116,6 +4116,28 @@ class RouterTests(unittest.TestCase):
         self.assertEqual("Sol High Speed unknown", second["decision"]["visible_route"])
         self.assertTrue(second["decision"]["announce_route"])
 
+    def test_current_route_does_not_announce_service_tier_label_change(self) -> None:
+        router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "quiet-tier-change", "turn_id": "t1",
+            "model": "gpt-6-luna", "model_reasoning_effort": None, "service_tier": "priority",
+            "prompt": "What is 2 + 2?",
+        })
+
+        output = router_hook.handle({
+            "hook_event_name": "UserPromptSubmit", "session_id": "quiet-tier-change", "turn_id": "t2",
+            "model": "gpt-6-luna", "model_reasoning_effort": None, "service_tier": "default",
+            "prompt": "What is 3 + 3?",
+        })
+
+        ledger = json.loads((Path(self.temp.name) / "quiet-tier-change--t2.json").read_text())
+        self.assertEqual("Luna Effort unknown Standard", ledger["decision"]["visible_route"])
+        self.assertEqual("current", ledger["decision"]["route"])
+        self.assertFalse(ledger["decision"]["announce_route"])
+        context = output["hookSpecificOutput"]["additionalContext"]
+        self.assertNotIn("VISIBLE ROUTE:", context)
+        self.assertNotIn("Route: Luna Effort unknown Standard", context)
+        self.assertIn("ROUTE ANNOUNCEMENT: none for this current/direct route", context)
+
     def test_current_route_uses_active_model_effort_and_unknown_speed_without_tier_evidence(self) -> None:
         router_hook.CONFIG_PATH.write_text('model_reasoning_effort = "medium"\n', encoding="utf-8")
         output = router_hook.handle({
