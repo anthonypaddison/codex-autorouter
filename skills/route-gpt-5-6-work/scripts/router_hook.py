@@ -3809,6 +3809,11 @@ def _remember_spawn_contract(state: dict[str, Any], key: str, observation: dict[
         evidence = {**old, "spawn_contract_valid": False,
                     "reasons": sorted(set(old.get("reasons", [])) | {"conflicting_spawn_evidence"})}
     records[key] = {**(old or {}), **evidence}
+    records[key].update({
+        "parent_session_id": state.get("session_id"),
+        "parent_turn_id": state.get("turn_id"),
+        "profile": spawn_compat.current_role_spec(str(evidence.get("role") or "")).get("profile"),
+    })
     if not evidence["spawn_contract_valid"]:
         violation = f"spawn_contract_invalid:{key}:" + ",".join(evidence["reasons"])
         if violation not in state.setdefault("violations", []):
@@ -3862,10 +3867,63 @@ def _event_role(data: dict[str, Any], state: dict[str, Any]) -> str:
     """Resolve a direct-spawn child to the planned internal role."""
     agent_id = str(data.get("agent_id") or "")
     existing = state.get("agents", {}).get(agent_id, {}) if agent_id else {}
+    intent = _bound_spawn_intent(state, agent_id)
+    allowed = state.get("decision", {}).get("orchestration", {}).get("allowed_agents", [])
+    if intent is not None:
+        return spawn_compat.role_from_event(data, allowed, intent) or ""
     if existing.get("type"):
         return str(existing["type"])
-    allowed = state.get("decision", {}).get("orchestration", {}).get("allowed_agents", [])
     return spawn_compat.role_from_event(data, allowed) or ""
+
+
+def _bound_spawn_intent(state: dict[str, Any], agent_id: str) -> dict[str, Any] | None:
+    """Read intent only through an exact, nonconflicting parent/call/child link."""
+    agent = state.get("agents", {}).get(agent_id, {})
+    record = state.get("spawn_contracts", {}).get(agent.get("spawn_call_key"), {})
+    if (
+        not agent_id or agent.get("spawn_binding_conflict")
+        or agent.get("spawn_contract_valid") is not True
+        or record.get("spawn_contract_valid") is not True
+        or record.get("agent_id") != agent_id
+        or record.get("parent_session_id") != state.get("session_id")
+        or record.get("parent_turn_id") != state.get("turn_id")
+        or not spawn_compat.current_role_spec(str(record.get("role") or ""))
+    ):
+        return None
+    return record
+
+
+def _populate_bound_child_intent(state: dict[str, Any], agent_id: str) -> None:
+    agent = state["agents"][agent_id]
+    intent = _bound_spawn_intent(state, agent_id)
+    if intent is None:
+        agent["expected_by_parent"] = False
+        return
+    role = str(intent["role"])
+    plan = state["decision"]["orchestration"]
+    same_role = sum(
+        1 for other_id, other in state["agents"].items()
+        if other_id != agent_id and other.get("type") == role and other.get("expected_by_parent")
+    )
+    slots = int(plan.get("required_agents", {}).get(role, 0))
+    if plan.get("mode") == "routing_council" and plan.get("selected_execution_role") == role:
+        slots = max(slots, 1)
+    observed_matches = all(
+        not agent.get(field) or agent[field] == intent[expected]
+        for field, expected in (("start_observed_model", "model"), ("start_observed_effort", "effort"),
+                                ("stop_observed_model", "model"), ("stop_observed_effort", "effort"))
+    )
+    if not observed_matches:
+        agent["expected_by_parent"] = False
+        return  # Never replace contradictory observed/requested evidence.
+    agent.update({
+        "requested_model": intent["model"], "requested_effort": intent["effort"],
+        "requested_profile": intent["profile"],
+        "parent_session_id": intent["parent_session_id"], "parent_turn_id": intent["parent_turn_id"],
+        "expected_by_parent": bool(role in plan.get("allowed_agents", []) and same_role < slots and observed_matches),
+    })
+    if observed_matches and agent.get("start_observed_model") == intent["model"]:
+        agent["correlation_mode"] = "direct_agent_id"
 
 
 def _transcript_tool_call(payload: dict[str, Any]) -> tuple[str, str, str] | None:
@@ -4426,6 +4484,7 @@ def _apply_subagent_scan(state: dict[str, Any], path: Path, context: dict[str, A
         }
         state["agents"][agent_id].setdefault("spawn_contract_valid", False)
         state["agents"][agent_id].setdefault("spawn_contract_reasons", ["unproven_spawn_call"])
+        _populate_bound_child_intent(state, agent_id)
         if context["plan"]["mode"] == "routing_council" and existing.get("phase") == "execution":
             context["plan"]["execution_agent_id"] = agent_id
         if role in ROUTES:
@@ -4696,14 +4755,15 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         direct_effort = str(data.get("reasoning_effort") or data.get("model_reasoning_effort") or "")
         council = plan["mode"] == "routing_council"
         council_phase = str(plan.get("phase") or "")
-        existing_roles = [str(agent.get("type") or "") for agent in state.setdefault("agents", {}).values()]
+        prior_agent = state.setdefault("agents", {}).get(agent_id, {})
+        existing_roles = [str(agent.get("type") or "") for key, agent in state["agents"].items() if key != agent_id]
         mismatch = role not in allowed or (
             council and council_phase == "advisory" and role in existing_roles
         ) or (
             council and council_phase != "advisory" and role != plan.get("selected_execution_role")
         )
         over_cap = sum(
-            1 for agent in state.setdefault("agents", {}).values() if agent.get("status") != "completed"
+            1 for key, agent in state["agents"].items() if key != agent_id and agent.get("status") != "completed"
         ) >= int(plan["max_workers"])
         completed_by_role: dict[str, int] = {}
         for completed_id, agent in state["agents"].items():
@@ -4763,6 +4823,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
                 expected_spec.get("effort") if direct_lifecycle
                 else direct_effort or ROUTES.get(role, {}).get("effort")
             ),
+            "requested_profile": expected_spec.get("profile") if direct_lifecycle else None,
             "start_observed_effort": direct_effort or None,
             "observed_model": None,
             "observed_effort": None,
@@ -4787,6 +4848,16 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         }
         state["agents"][agent_id].setdefault("spawn_contract_valid", False)
         state["agents"][agent_id].setdefault("spawn_contract_reasons", ["unproven_spawn_call"])
+        # A late/duplicate start must not erase exact prompt/terminal evidence.
+        for key, value in prior_agent.items():
+            if key.startswith(("prompt_", "child_turn", "observed_", "stop_", "completion_")) or key in {
+                "model_evidence_consistent", "model_match", "receipt_recorded", "duplicate_prompt_events",
+                "duplicate_stops", "stopped_at",
+            }:
+                state["agents"][agent_id][key] = value
+        if prior_agent.get("status") == "completed":
+            state["agents"][agent_id]["status"] = "completed"
+        _populate_bound_child_intent(state, agent_id)
         state.setdefault("telemetry", {})["child_count"] = len(state["agents"])
         if role in ROUTES:
             state.setdefault("agent_attestations", {})[agent_id] = _agent_config_attestation(
@@ -4825,7 +4896,11 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         elif council and phase == "execution":
             message += " This is the selected execution slot; use distilled advisor evidence without repeating routing analysis."
         if mismatch:
-            message += " This agent does not match the selected route; avoid substantive work and return ROUTE_UP."
+            message += (
+                " This agent does not match the selected route or its exact lifecycle binding is unproven; "
+                "avoid substantive work and report the binding/contract failure. "
+                "Lifecycle metadata failure is not a capability limit and must not request a stronger profile."
+            )
         elif over_cap or ordering_violation:
             message += " This spawn violates the worker cap or staged ordering; do not mutate, report the contract failure, and do not return ROUTE_UP."
         return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": message}}
