@@ -89,3 +89,46 @@ Full plugin mode targets Codex Desktop and CLI. Codex IDE extensions do not curr
 ## Same-user lifecycle threat model
 
 Checksums and inventories prevent accidental overwrite, partial lifecycle recovery, and unnoticed ownership drift; they are not signatures against a malicious process already running as the same operating-system user. Post-crash edits, corrupt controller copies, and modified quarantine trees are preserved and require manual review.
+# Configured AI routing candidate (proposed v0.3)
+
+The configured path uses the existing Codex CLI and saved ChatGPT authentication.
+It cannot select models absent from the fresh selectable catalogue, authorize
+unsupported efforts, change the running root, bypass host permissions or prove
+access merely from a catalogue listing. The CLI must be on `PATH` and support
+`exec --ignore-user-config --ephemeral --output-schema --json` plus the disabled
+hook, multi-agent, shell, exec, app and code-mode features used by the classifier.
+An incompatible or missing CLI uses the permitted fallback; there is no gateway
+or alternate authentication implementation.
+
+Classification has a six-second deadline under the existing ten-second prompt
+hook timeout. Timeout, malformed/oversized output, attempted tool use and invalid
+model/effort selections cannot authorize the returned selection. A currently
+valid configured fallback is used once, without retry. If configuration or its
+catalogue is invalid/unavailable, even the fallback cannot be authorized and the
+existing root remains responsible without a selected-model execution claim.
+
+Hook disabling and an independent environment guard prevent classification
+recursion. No live inference is part of development tests. Actual CLI startup
+latency, host enforcement of disabled features and account/model access remain
+unverified until a separately approved live acceptance; exceeding the bound or
+observing hook recursion is a reason to stop the CLI path, not add a broker,
+proxy, retry agent or polling system.
+
+The classifier is prompted to minimize cost to reliable completion, but no live
+rate card or verified intelligence ranking is inferred from model names. Real
+selection quality, unnecessary escalation/under-routing, classifier cost and
+task quality are unmeasured. The existing benchmark fixtures test the transport
+using mocked selections only. Legacy route-audit/fuzz checks still test the v0.2
+compatibility path; they do not grade an AI classifier.
+
+No new model-family edit is needed for configured executors. Exact allowed
+model/effort pairs produce configuration-bound roles and receipt keys. All
+independent identity, lifecycle, ambiguity, verification and receipt gates remain
+in force; a valid classification cannot manufacture a receipt. Existing receipt
+documents with incompatible settings remain historical and may prevent a new
+current receipt rather than being rewritten automatically.
+
+The deterministic classifier, family policies and historical roles are retained
+for unconfigured installation compatibility and fixture comparisons. They do
+not select an executor after successful AI setup. This is a staged replacement,
+not removal of functioning lifecycle safeguards or historical evidence.

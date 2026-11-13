@@ -29,6 +29,9 @@ def _claim_first_diagnostic(data_root: Path) -> bool:
 
 
 def launch(plugin_root: Path, data_root: Path) -> int:
+    if os.environ.get("AUTOROUTER_CLASSIFIER_ACTIVE"):
+        print("{}")
+        return 0
     resolved_root = plugin_root.resolve()
     target = (resolved_root / HOOK_RELATIVE_PATH).resolve()
     if target.is_relative_to(resolved_root) and target.is_file():

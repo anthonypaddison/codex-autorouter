@@ -26,3 +26,29 @@ Standalone advisory mode has no plugin hooks and does not create routing ledgers
 Builds before the ownership-marker hardening used an unbound `router-state` directory. This release deliberately starts in `router-state-v2`; it never claims, migrates, or deletes the old directory automatically. After upgrading, confirm the new router is healthy, then archive or remove the old `router-state` directory manually if you no longer need its routing metadata. If you set `CODEX_ROUTER_STATE_DIR` yourself, update it to a new empty absolute directory before enabling this build.
 
 Checksums protect lifecycle consistency and ownership decisions; they are not cryptographic authentication against another process already running as the same operating-system user.
+# Configured AI routing candidate
+
+Setup stores only exact model identifiers, explicitly allowed efforts, fallback
+and the classifier timeout in `CODEX_HOME/autorouter/config.json`. It rejects
+unknown configuration fields and never stores credentials. Reconfiguration
+preserves an owner-only byte-exact backup. It does not edit global Codex settings.
+
+The classifier receives the bounded incoming prompt and the configured choices
+through stdin, not command arguments. Codex's own saved ChatGPT authentication
+is used internally by the CLI; Autorouter does not open authentication storage,
+copy tokens or introduce API credentials. The prompt is temporarily held in a
+private, automatically removed stdin file. The ephemeral CLI session does not
+persist its rollout. CLI stderr is discarded and stdout is bounded in memory.
+
+The classifier's short rationale is schema-validated but deliberately discarded:
+it can paraphrase private prompt content. Ledgers retain only selected model and
+effort, fixed reason/status codes, elapsed milliseconds, CLI invocation attempts
+and observed numeric token counts. Invocation attempts are not billed-request
+counts. Missing usage is unknown, not zero; cached input is already part of input.
+
+Configured roles/settings fingerprints derive only from model/effort choices and
+configuration, never prompts. Existing no-raw-prompt/no-transcript-path ledger
+rules and independent execution evidence requirements still apply. Model
+selection does not authorize additional filesystem/network access or permission
+changes. Authentication and remote retention are governed by the user's existing
+Codex/ChatGPT service, not a new router service.

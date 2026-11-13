@@ -1,5 +1,17 @@
 # Autorouter Arena
 
+## Proposed v0.3 configured-router comparison
+
+`test_ai_routing` replays all ten existing `ROUTE_PROBES` with mocked structured
+classifier responses. It validates model/effort allowlisting, response transport
+and per-attempt telemetry without model calls. The legacy route audit below is
+retained as the deterministic v0.2 reference, not an AI quality grader.
+
+The mocked responses do not measure unnecessary escalation, under-routing, real
+classification latency, classifier credit cost or task success. Compare those
+only in a separately approved live experiment. Do not run the billable arena or
+outsider review merely to validate this refactor.
+
 Autorouter Arena is a controlled benchmark for the part unit tests cannot
 prove: whether Autorouter changes execution in a useful way.
 

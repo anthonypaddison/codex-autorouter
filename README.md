@@ -2,6 +2,80 @@
   <img src="assets/readme/hero.svg" alt="Autorouter — the right model and effort, automatically" width="100%">
 </p>
 
+## Proposed v0.3: user-configured AI routing
+
+This branch adds an opt-in replacement for the deterministic classifier. It is
+not a released or automatically deployed version. Existing installations and
+historical evidence remain compatible; until setup is run, the legacy routing
+path remains available with a setup reminder.
+
+After a separately reviewed installation of this candidate, run the setup
+command from that plugin's root:
+
+```sh
+python3 scripts/autorouter.py models
+python3 scripts/autorouter.py setup
+python3 scripts/autorouter.py status
+```
+
+The wizard lists the fresh local Codex model catalogue and asks for a classifier
+model/effort, permitted executor models/efforts and fallback. A catalogue entry
+is not proof of account entitlement or successful execution. Models without
+observable supported reasoning efforts cannot safely be offered by this adapter.
+
+Without an interactive terminal, use the equivalent flags, replacing identifiers
+with exact values from `models`:
+
+```sh
+python3 scripts/autorouter.py setup \
+  --classifier CLASSIFIER_ID --classifier-effort CLASSIFIER_EFFORT \
+  --allow SMALL_ID=SMALL_EFFORT \
+  --allow LARGE_ID=MEDIUM_EFFORT,HIGH_EFFORT \
+  --fallback LARGE_ID=HIGH_EFFORT
+```
+
+Setup writes only `CODEX_HOME/autorouter/config.json` (normally under `~/.codex`),
+or the explicit `--config` path for offline preparation. Repeating setup makes a
+byte-exact backup before replacement. It does not install plugins, log in,
+modify Codex defaults, run inference or verify model entitlement.
+
+Configured routing makes at most one bounded `codex exec` classification attempt
+per root turn, not per tool call. Exact duplicate delivery and simple task
+continuations reuse the recorded decision. The CLI reuses saved ChatGPT login;
+Autorouter does not read/copy credentials, introduce API keys, proxies or another
+billing service. Classification uses an ephemeral session, a JSON output schema,
+disabled hooks/subagents/tools, a six-second deadline, 32 KiB prompt limit and
+64 KiB stdout limit. A prompt beyond the bound is not truncated; it uses the
+validated fallback. There is no classifier retry or hardcoded escalation ladder.
+
+For a directly enforced preference, start a prompt with:
+
+```text
+Use model EXACT_MODEL_ID at EXACT_EFFORT effort.
+```
+
+That model/effort must be permitted and advertised by the current catalogue;
+otherwise routing reports unavailable rather than silently choosing another
+model. An omitted effort uses the first effort explicitly selected during setup.
+This exact directive skips the classifier. Other natural-language preferences
+are supplied to the AI classifier, but their interpretation is not mechanically
+guaranteed.
+
+The selected executor receives a normal, supported direct child assignment.
+The existing root cannot be changed by this plugin. A selection is only a
+recommendation until the child actually starts, completes and passes the
+existing correlation, attestation and verification gates. If the selected model
+and effort exactly match the observed root, work stays current. Configuration
+changes during an in-flight task invalidate reuse of its old routing contract.
+
+Classifier elapsed time, invocation attempts and observed token usage are
+recorded separately from executor evidence. Missing token telemetry is unknown,
+not zero. Real latency, classifier quality, account access and financial savings
+require an explicitly approved live evaluation; mocked tests cannot establish
+them. See [limitations](docs/LIMITATIONS.md) and [privacy](docs/PRIVACY.md).
+
+The remaining sections describe the released v0.2 compatibility workflow.
+
 <p align="center">
   <a href="https://github.com/anthonypaddison/Codex-Autorouter/actions/workflows/ci.yml"><img alt="Release quality" src="https://img.shields.io/github/actions/workflow/status/anthonypaddison/Codex-Autorouter/ci.yml?branch=ap-cheap-root-routing&amp;style=flat-square&amp;label=release%20quality"></a>
   <img alt="Python 3.10 through 3.14" src="https://img.shields.io/badge/Python-3.10%E2%80%933.14-3776AB?style=flat-square">

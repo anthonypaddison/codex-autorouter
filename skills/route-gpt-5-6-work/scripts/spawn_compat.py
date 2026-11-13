@@ -8,6 +8,7 @@ import re
 from typing import Any
 
 import model_policy
+import routing_config
 
 
 SCHEMA_VERSION = 1
@@ -25,6 +26,21 @@ SUPPORTED_EFFORTS = {
     for model_id, policy in model_policy.ACTIVE_MODELS.items()
     if policy.child_target_allowed
 }
+_LEGACY_EFFORTS = dict(SUPPORTED_EFFORTS)
+_CONFIGURED_SPECS: dict[str, dict[str, Any]] | None = None
+
+
+def configure_models(config: dict[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Use the same explicit allowlist for selection, spawning and evidence."""
+    global _CONFIGURED_SPECS
+    _CONFIGURED_SPECS = routing_config.role_specs(config) if config is not None else None
+    SUPPORTED_EFFORTS.clear()
+    SUPPORTED_EFFORTS.update(
+        {entry["model"]: frozenset(entry["efforts"]) for entry in config["executors"]}
+        if config is not None else _LEGACY_EFFORTS
+    )
+    model_policy.configure_capabilities(_CONFIGURED_SPECS or {})
+    return _CONFIGURED_SPECS or {}
 LEGACY_ROLES = frozenset({
     "gpt56_luna_worker",
     "gpt56_terra_worker",
@@ -276,6 +292,9 @@ def fallback_contract(reason: str) -> dict[str, Any]:
 
 def role_for(model: str, effort: str) -> str | None:
     """Map an observed direct-spawn model/effort intent back to a router role."""
+    if _CONFIGURED_SPECS is not None:
+        return next((role for role, spec in _CONFIGURED_SPECS.items()
+                     if (model, effort) == (spec["model"], spec["effort"])), None)
     if model in {"gpt-6.1-sol", "gpt-6.1-terra"} and effort in {"medium", "high", "xhigh"}:
         family = model.rsplit("-", 1)[1]
         return f"gpt61_{family}_{'balanced' if effort == 'medium' else effort}"
@@ -304,6 +323,9 @@ def role_from_arguments(arguments: dict[str, Any]) -> str | None:
 
 def current_role_spec(role: str) -> dict[str, str]:
     """Resolve internal roles through the active model/profile registry only."""
+    if _CONFIGURED_SPECS is not None:
+        spec = _CONFIGURED_SPECS.get(role, {})
+        return {key: spec[key] for key in ("model", "effort", "profile")} if spec else {}
     for model in model_policy.ACTIVE_MODELS.values():
         if not model.child_target_allowed:
             continue
@@ -334,7 +356,7 @@ def role_from_event(data: dict[str, Any], allowed: list[str],
     )
     if direct:
         return direct
-    if model in model_policy.ACTIVE_MODELS:
+    if model in SUPPORTED_EFFORTS or model in model_policy.ACTIVE_MODELS:
         if effort:  # An unsupported explicit effort is not missing evidence.
             return None
         candidates = [role for role in allowed if current_role_spec(role).get("model") == model]
