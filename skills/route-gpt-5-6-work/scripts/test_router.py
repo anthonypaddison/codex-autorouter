@@ -18,6 +18,101 @@ from unittest import mock
 import router_hook
 
 
+class Gpt61RegressionTests(unittest.TestCase):
+    def test_supported_roots_keep_exact_identity_and_can_raise_effort(self):
+        for model in ("gpt-6.1-sol", "gpt-6.1-terra"):
+            with self.subTest(model=model):
+                direct = router_hook.classify_prompt("Explain a routine code issue.", model, "high", enforce_active_root=True)
+                self.assertEqual("approved", direct["route_policy_outcome"])
+                self.assertEqual("current", direct["route"])
+                raised = router_hook.classify_prompt("Debug a race condition across three modules.", model, "medium", enforce_active_root=True)
+                self.assertEqual(model, raised["model"])
+                self.assertEqual("high", raised["effort"])
+                self.assertEqual("profile_up", raised["route_transition"])
+                for role in raised["orchestration"]["required_agents"]:
+                    self.assertEqual(model, router_hook.ROUTES[role]["model"])
+
+    def test_read_only_investigation_does_not_execute_example_tasks(self):
+        prompt = (
+            "Investigate the existing router. This is a read-only investigation. "
+            "Do not modify code, configuration or running services. Do not install, restart or deploy anything.\n"
+            "Use representative tasks: simple factual question; straightforward coding change; "
+            "complex multi-file debugging; architecture and security review.\n"
+            "Determine whether it routes actual model execution or only recommends a model. "
+            "Inspect production operations logs and recommend improvements. Do not make changes."
+            "\nFinal recommendation: Keep, fix, simplify or replace."
+        )
+        decision = router_hook.classify_prompt(prompt, "gpt-6-luna", "low", enforce_active_root=True)
+        profile = decision["task_profile"]
+        self.assertFalse(profile["mutation"])
+        self.assertNotIn("destructive_external", profile["signals"])
+        self.assertNotIn("deployment", profile["signals"])
+        self.assertNotEqual("critical", profile["risk"])
+        for action in ("delete the production logs", "deploy the production service", "chmod 777 /workspace/protected"):
+            changed = router_hook.classify_prompt(prompt + " Actually " + action + ".", "gpt-6-luna", "low")
+            self.assertTrue(changed["task_profile"]["mutation"])
+            self.assertIn(changed["task_profile"]["risk"], {"high", "critical"})
+
+    def test_documentation_mentions_do_not_make_a_router_audit_trivial(self):
+        decision = router_hook.classify_prompt(
+            "Investigate the existing model router architecture, source code, configuration, documentation and logs. "
+            "Review routing quality and analyse execution history. This is a read-only investigation. "
+            "Do not install, restart or deploy anything. Final recommendation: Keep, fix, simplify or replace.",
+            "gpt-6-luna", "low", enforce_active_root=True,
+        )
+        self.assertFalse(decision["task_profile"]["mutation"])
+        self.assertNotEqual("current", decision["route"])
+
+    def test_distributed_correctness_proof_requires_high_reasoning(self):
+        decision = router_hook.classify_prompt(
+            "Prove whether the distributed retry protocol guarantees exactly-once execution under network "
+            "partitions and process crashes. Analyze counterexamples and derive the necessary invariants.",
+            "gpt-6-luna", "low", enforce_active_root=True,
+        )
+        self.assertEqual("gpt6_sol_high", decision["route"])
+        self.assertEqual("current", router_hook.classify_prompt(
+            "What is a mathematical proof?", "gpt-6-luna", "low", enforce_active_root=True,
+        )["route"])
+
+    def test_runtime_identity_uses_only_matching_bounded_session_header(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory).resolve() / "session.jsonl"
+            header = {"type": "session_meta", "payload": {
+                "id": "current-session", "cli_version": "0.167.0-alpha.4.1", "originator": "codex_work_desktop",
+            }}
+            path.write_text(json.dumps(header) + "\n", encoding="utf-8")
+            data = {"session_id": "current-session", "transcript_path": str(path)}
+            identity = router_hook._runtime_identity(data)
+            self.assertEqual("0.167.0-alpha.4.1", identity["runtime_version"])
+            self.assertEqual("Desktop", identity["host_type"])
+            self.assertEqual("exact_session_metadata", identity["runtime_identity_source"])
+            self.assertIsNone(router_hook._runtime_identity({**data, "session_id": "other-session"})["runtime_version"])
+            linked = Path(directory).resolve() / "linked.jsonl"
+            linked.symlink_to(path)
+            self.assertIsNone(router_hook._runtime_identity({**data, "transcript_path": str(linked)})["runtime_version"])
+            path.write_text(json.dumps(header)[:-1] + "x" * 70000, encoding="utf-8")
+            self.assertIsNone(router_hook._runtime_identity(data)["runtime_version"])
+            self.assertEqual("9.9.9", router_hook._runtime_identity({**data, "runtime_version": "9.9.9"})["runtime_version"])
+            header["payload"]["originator"] = "unrecognised-host"
+            path.write_text(json.dumps(header) + "\n", encoding="utf-8")
+            self.assertIsNone(router_hook._runtime_identity(data)["runtime_version"])
+
+    def test_gpt61_parallel_workers_do_not_downgrade_model_or_effort(self):
+        for model in ("gpt-6.1-sol", "gpt-6.1-terra"):
+            for effort in ("medium", "high", "xhigh"):
+                with self.subTest(model=model, effort=effort):
+                    decision = router_hook.classify_prompt(
+                        "Research three independent APIs in parallel and recommend an architecture.",
+                        model, effort, enforce_active_root=True,
+                    )
+                    for role in decision["orchestration"]["required_agents"]:
+                        spec = router_hook.ROUTES[role]
+                        self.assertEqual(model, spec["model"])
+                        self.assertNotEqual("downward", router_hook.model_policy.classify_transition(
+                            model, effort, spec["model"], spec["effort"],
+                        ).value)
+
+
 class Gpt6PolicyIntegrationTests(unittest.TestCase):
     def test_luna_low_trivial_root_stays_local(self):
         decision = router_hook.classify_prompt("Return only 42.", "gpt-6-luna", "low", enforce_active_root=True)
@@ -3498,10 +3593,37 @@ class RouterTests(unittest.TestCase):
         self.assertEqual("high", receipt["effort_intent"])
         self.assertEqual("codex-1.2.3", receipt["runtime_version"])
         self.assertEqual("desktop-456", receipt["runtime_build"])
+        self.assertTrue(receipt["profile_policy_valid"])
         self.assertNotIn("authorization", json.dumps(receipt).lower())
         document = json.loads(router_hook.CAPABILITY_PATH.read_text(encoding="utf-8"))
         self.assertEqual(3, document["schema_version"])
         self.assertEqual({router_hook.model_policy.capability_key("gpt-6-sol", "high", "high")}, set(document["capabilities"]))
+
+    def test_gpt61_lifecycle_receipt_is_accepted_by_the_actual_checker(self) -> None:
+        import check_hooks
+
+        for model in ("gpt-6.1-sol", "gpt-6.1-terra"):
+            with self.subTest(model=model):
+                base = {"session_id": "receipt-" + model.replace(".", "-"), "turn_id": "parent",
+                        "runtime_version": "1.2.3", "runtime_build": "desktop-456", "host_type": "Desktop"}
+                router_hook.handle({**base, "hook_event_name": "UserPromptSubmit", "model": model,
+                                    "model_reasoning_effort": "medium", "prompt": "Debug a race condition across three modules."})
+                role = router_hook.spawn_compat.role_for(model, "high")
+                router_hook.handle({**base, "hook_event_name": "SubagentStart", "agent_id": model,
+                                    "model": model, "reasoning_effort": "high"})
+                self._observe_valid_spawn(base["session_id"], "parent", model, role)
+                router_hook.handle({**base, "hook_event_name": "UserPromptSubmit", "turn_id": "child",
+                                    "model": model, "model_reasoning_effort": "high", "prompt": "Review the bounded race."})
+                router_hook.handle({**base, "hook_event_name": "SubagentStop", "turn_id": "child", "agent_id": model,
+                                    "model": model, "reasoning_effort": "high",
+                                    "last_assistant_message": "Evidence: reviewed\nVerification: checked\nUncertainty: none"})
+                health = check_hooks._routing_health(
+                    {"available": True}, router_hook.PLUGIN_VERSION, router_hook.CAPABILITY_PATH.parent,
+                    plugin_identity=router_hook.PLUGIN_IDENTITY, current_session_id=base["session_id"],
+                )
+                key = router_hook.model_policy.capability_key(model, "high", "high")
+                self.assertEqual("CURRENT", health["capability_status"][key], health)
+                self.assertEqual("DEGRADED", health["status"])  # non-Luna savings remain unproven
 
     def test_astra_receipt_requires_an_exact_astra_observation(self) -> None:
         preserved = {

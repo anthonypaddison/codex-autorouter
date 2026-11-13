@@ -14,10 +14,10 @@ from model_policy import (
 
 
 class ModelPolicyTests(unittest.TestCase):
-    def test_active_registry_contains_only_the_three_gpt6_models(self):
+    def test_active_registry_contains_only_approved_models(self):
         self.assertEqual(
             set(ACTIVE_MODELS),
-            {"gpt-6-luna", "gpt-6-sol", "gpt-6-astra"},
+            {"gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-astra"},
         )
 
     def test_luna_efforts_preserve_cheap_root_but_not_other_profiles(self):

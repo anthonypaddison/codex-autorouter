@@ -72,8 +72,12 @@ class TargetSelection:
 ACTIVE_MODELS: Mapping[str, ModelPolicy] = MappingProxyType({
     "gpt-6-luna": ModelPolicy("gpt-6-luna", "GPT-6 Luna", True, False, True, (), "preserve"),
     "gpt-6-sol": ModelPolicy("gpt-6-sol", "GPT-6 Sol", True, True, True, ("medium", "high", "xhigh"), "preserve"),
+    "gpt-6.1-sol": ModelPolicy("gpt-6.1-sol", "GPT-6.1 Sol", True, True, True, ("medium", "high", "xhigh"), "preserve"),
+    "gpt-6.1-terra": ModelPolicy("gpt-6.1-terra", "GPT-6.1 Terra", True, True, True, ("medium", "high", "xhigh"), "preserve"),
     "gpt-6-astra": ModelPolicy("gpt-6-astra", "GPT-6 Astra", True, True, True, ("medium", "high", "xhigh", "max"), "preserve"),
 })
+
+WORKHORSE_MODELS = frozenset({"gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-terra"})
 
 ROUTE_PROFILES: Mapping[str, RouteProfile] = MappingProxyType({
     "cheap": RouteProfile("cheap", "gpt-6-luna", "low", (), 0),
@@ -96,7 +100,7 @@ def root_profile_satisfaction(root_model: str | None, root_effort: str | None, p
         return RootSatisfaction.UNPROVEN
     if root_model == "gpt-6-luna":
         return RootSatisfaction.SATISFIED if profile_id == "cheap" else RootSatisfaction.UNSATISFIED
-    if root_model == "gpt-6-sol":
+    if root_model in WORKHORSE_MODELS:
         if profile_id == "cheap":
             return RootSatisfaction.SATISFIED
         required = {"balanced": "medium", "high": "high"}.get(profile_id)
@@ -120,6 +124,8 @@ def classify_transition(source_model: str | None, source_effort: str | None, tar
         if new < old:
             return TransitionKind.DOWNWARD
         return TransitionKind.NONE
+    if source_model in WORKHORSE_MODELS and target_model == "gpt-6-astra":
+        return TransitionKind.MODEL_ROUTE_UP
     if (source_model, target_model) in {
         ("gpt-6-luna", "gpt-6-sol"),
         ("gpt-6-sol", "gpt-6-astra"),
@@ -140,7 +146,7 @@ def select_target(profile_id: str, *, root_model: str | None = None, root_effort
     if profile is None:
         return TargetSelection(profile_id, root_model or "", root_effort or "", False, PolicyOutcome.PROFILE_UNAPPROVED, TransitionKind.NONE, RootSatisfaction.UNPROVEN)
     satisfaction = root_profile_satisfaction(root_model, root_effort, profile_id)
-    target_model = profile.target_model_id
+    target_model = root_model if root_model in WORKHORSE_MODELS and profile_id in {"balanced", "high"} else profile.target_model_id
     target_effort = profile.automatic_effort
     if profile_id == "high" and deep_high:
         target_effort = "xhigh"
@@ -170,8 +176,16 @@ def capability_key(model_id: str, profile_id: str, effort: str) -> str:
     return f"{model_id}|{profile_id}|{effort.lower()}|{POLICY_REVISION}"
 
 
+def capability_specs() -> dict[str, tuple[str, str, str]]:
+    """Share exact receipt identities between the writer and readiness checker."""
+    specs = [(model, profile, effort) for model in sorted(WORKHORSE_MODELS)
+             for profile, effort in (("balanced", "medium"), ("high", "high"), ("high", "xhigh"))]
+    specs.append(("gpt-6-astra", "frontier", "medium"))
+    return {capability_key(*spec): spec for spec in specs}
+
+
 def validate_registry() -> None:
-    if set(ACTIVE_MODELS) != {"gpt-6-luna", "gpt-6-sol", "gpt-6-astra"}:
+    if set(ACTIVE_MODELS) != {"gpt-6-luna", "gpt-6-sol", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6-astra"}:
         raise ValueError("active model registry must contain only approved GPT-6 models")
     for key, profile in ROUTE_PROFILES.items():
         if key != profile.profile_id or profile.target_model_id not in ACTIVE_MODELS:

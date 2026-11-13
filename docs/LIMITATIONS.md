@@ -22,6 +22,10 @@ Codex can retain the resolved, versioned hook command for an already-open task. 
 
 ## READY is runtime-bound
 
+GPT-6.1 Sol and Terra are supported exact roots, including same-model effort upgrades and independent workers. They remain non-Luna for credit-efficiency reporting. GPT-6.1 receipts attest only their exact model/profile/effort; they cannot prove GPT-6 Sol capability or another GPT-6.1 model's capability.
+
+Runtime version/host recovery uses only a bounded, matching session metadata header from the hook-supplied transcript. Absent, oversized, unsafe or unrecognised metadata remains unproven. This recovery does not infer reasoning effort, change the root, or refresh historical receipts.
+
 `scripts/check_hooks.py` reports `READY` only after a current-task GPT-6 Luna root observation and at least one genuine successful GPT-6 Sol or Astra escalation receipt for the same plugin content identity/version, at least one matching versioned Codex runtime/build identifier, host type, platform, capability signature, and supported schema. Receipts are keyed by exact model tier and reported independently; one tier never proves another. Another task's observation, missing current-task context, null runtime identity, a candidate change, or a receipt older than 30 days returns health to `DEGRADED` when no other current tier receipt exists. Historical receipts remain auditable as `ESCALATION PREVIOUSLY OBSERVED`. This is intentional; health checks never spend credits on an automatic probe.
 
 ## Astra is intentionally rare

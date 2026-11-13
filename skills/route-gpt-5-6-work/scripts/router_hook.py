@@ -146,6 +146,12 @@ ROUTE_UP = {
     "gpt6_sol_high": "gpt6_astra_medium",
     "gpt6_sol_xhigh": "gpt6_astra_medium",
 }
+for _model in ("gpt-6.1-sol", "gpt-6.1-terra"):
+    for _effort in ("medium", "high", "xhigh"):
+        _role = spawn_compat.role_for(_model, _effort)
+        ROUTES[_role] = {"model": _model, "effort": _effort, "delegate": True,
+                         "profile": "balanced" if _effort == "medium" else "high"}
+        ROUTE_UP[_role] = spawn_compat.role_for(_model, "high") if _effort == "medium" else "gpt6_astra_medium"
 
 ASTRA_ROLES = frozenset({
     "gpt6_astra_medium", "gpt6_astra_high", "gpt6_astra_xhigh", "gpt6_astra_max",
@@ -376,6 +382,7 @@ INTENT_ACTION = re.compile(
     r"(?P<change>add|build|chang(?:e|ing)|convert|create|delete|edit|fix|format|generate|"
     r"implement|install|migrate|modify|modifying|monkey-patch|patch|refactor|remove|removing|"
     r"rename|replace|repair|transform|update|write|writing|alter|altering|disable|enable|"
+    r"deploy|restart|publish|provision|purge|truncate|destroy|wipe|purchase|charge|merge|push|"
     r"weaken|broaden|expose|exposing|rotate|revoke|secure|chmod|chown|setfacl|debit|credit)|"
     r"(?P<review>review|audit|assess|threat[ -]model|analy[sz]e|investigate|diagnose)|"
     r"(?P<observe>report|inspect|check|preserve|keep|maintain|read|return|print|show|"
@@ -500,8 +507,10 @@ def _intent_units(text: str) -> list[tuple[str, str]]:
         actions = list(INTENT_ACTION.finditer(clause))
         start = 0
         prohibited = False
+        recommendation = False
         for index, action in enumerate(actions):
             prefix = clause[start:action.start()]
+            recommendation |= bool(re.search(r"\b(?:final recommendation|recommended improvements)\b", prefix, re.I))
             if INTENT_NEGATION.search(prefix):
                 prohibited = True
             elif not re.search(r"[,]|\b(?:and|or|to)\b", prefix, re.I):
@@ -510,11 +519,17 @@ def _intent_units(text: str) -> list[tuple[str, str]]:
                 units.append((prefix, "mention"))
             end = actions[index + 1].start() if index + 1 < len(actions) else len(clause)
             kind = "prohibited" if prohibited else str(action.lastgroup)
+            if recommendation and kind == "change":
+                kind = "mention"
             if index and re.fullmatch(r"(?:explain|describe|report|inspect|check)", actions[index - 1].group(), re.I):
                 if re.fullmatch(r"\s*(?:how\s+to|(?:the\s+)?command)\s+", prefix, re.I):
                     kind = "observe"  # the action is the object being described
             if re.search(r"\b(?:final|last|no)\s+$", prefix, re.I):
                 kind = "mention"  # e.g. "after the final edit", not an imperative
+            if action.group().lower() == "change" and re.search(
+                r"\b(?:coding|code|configuration|model|schema|behaviou?r)\s+$", prefix, re.I,
+            ):
+                kind = "mention"  # e.g. a representative "coding change", not a request to change
             units.append((clause[action.start():end], kind))
             start = action.end()
         if not actions:
@@ -694,13 +709,41 @@ def _runtime_identity(data: dict[str, Any]) -> dict[str, str | None]:
         host_type = "Desktop" if host_type.lower() == "desktop" else "CLI"
     runtime_version = str(data.get("runtime_version") or data.get("codex_version") or "") or None
     runtime_build = str(data.get("runtime_build") or data.get("build_version") or data.get("app_build") or "") or None
+    recovered: dict[str, str] = {}
+    if not runtime_version and not runtime_build:
+        path_value = data.get("transcript_path")
+        if isinstance(path_value, str) and data.get("session_id"):
+            def visit(record: dict[str, Any]) -> bool:
+                payload = record.get("payload")
+                if record.get("type") != "session_meta" or not isinstance(payload, dict):
+                    return False
+                version = payload.get("cli_version")
+                originator = payload.get("originator")
+                hosts = {"codex_work_desktop": "Desktop", "Codex Desktop": "Desktop", "codex_cli_rs": "CLI"}
+                if (payload.get("id") == data["session_id"] and isinstance(version, str) and len(version) <= 128
+                        and re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+.][A-Za-z0-9.-]+)?", version)
+                        and isinstance(originator, str) and originator in hosts
+                        and (not host_type or host_type == hosts[originator])):
+                    recovered.update(runtime_version=version, host_type=hosts[originator])
+                    return True
+                return False
+
+            try:
+                path = Path(path_value)
+                with _transcript_directory(path.parent) as descriptor:
+                    outcome = _scan_jsonl_transcript(path, visit, directory_fd=descriptor, header_only=True)
+            except (OSError, _ChildDiscoveryError):
+                outcome = {"status": "PATH_REJECTED"}
+            if outcome["status"] == "FOUND":
+                runtime_version = recovered["runtime_version"]
+                host_type = recovered["host_type"]
     return {
         "runtime_version": runtime_version,
         "runtime_build": runtime_build,
         "host_type": host_type,
         "platform": platform.system() or sys.platform,
         "runtime_identity_source": (
-            "hook_payload"
+            "exact_session_metadata" if recovered and runtime_version else "hook_payload"
             if any((runtime_version, runtime_build, host_type))
             else "unavailable_from_current_codex_hook_surface"
         ),
@@ -1089,12 +1132,9 @@ def _record_capability(state: dict[str, Any], agent_id: str) -> bool:
         capability_key = model_policy.capability_key(observed_model, route_profile, effort_intent)
     except ValueError:
         return False
-    if capability_key not in {
-        model_policy.capability_key("gpt-6-sol", "balanced", "medium"),
-        model_policy.capability_key("gpt-6-sol", "high", "high"),
-        model_policy.capability_key("gpt-6-sol", "high", "xhigh"),
-        model_policy.capability_key("gpt-6-astra", "frontier", "medium"),
-    }:
+    if (capability_key not in model_policy.capability_specs()
+            or requested_model != ROUTES[role]["model"]
+            or effort_intent != ROUTES[role]["effort"]):
         return False
     receipt = {
         "schema_version": 3,
@@ -1117,6 +1157,7 @@ def _record_capability(state: dict[str, Any], agent_id: str) -> bool:
         "ambiguity_clear": True,
         "model_evidence_consistent": True,
         "attestation_matched": True,
+        "profile_policy_valid": True,
         "parent_session_id": state.get("session_id"),
         "parent_turn_id": state.get("turn_id"),
         "child_turn_id": agent.get("child_turn_id"),
@@ -1150,12 +1191,7 @@ def _record_capability(state: dict[str, Any], agent_id: str) -> bool:
             return False
         document = existing
     capabilities = document["capabilities"]
-    allowed_capability_keys = {
-        model_policy.capability_key("gpt-6-sol", "balanced", "medium"),
-        model_policy.capability_key("gpt-6-sol", "high", "high"),
-        model_policy.capability_key("gpt-6-sol", "high", "xhigh"),
-        model_policy.capability_key("gpt-6-astra", "frontier", "medium"),
-    }
+    allowed_capability_keys = model_policy.capability_specs()
     if any(key not in allowed_capability_keys for key in capabilities):
         return False
     capabilities[capability_key] = receipt
@@ -1341,6 +1377,7 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
     text = " ".join(raw_text.split())
     words = len(text.split())
     subject_text, security_change, security_review, payment_critical = _subject_intent(raw_text)
+    actionable_text = " ".join(unit for unit, kind in _intent_units(raw_text) if kind != "prohibited")
     semantic_text = re.sub(
         r"\b(?:no|without)\s+(?:any\s+)?(?:security|auth(?:entication|orization)?|privacy)\s+changes?\b",
         "",
@@ -1369,9 +1406,9 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
     review = bool(REVIEW.search(text))
     critical_review = bool(CRITICAL_REVIEW.search(text))
     low_stakes_surface = bool(LOW_STAKES_SURFACE.search(text))
-    destructive_external = bool(DESTRUCTIVE_OR_EXTERNAL.search(text)) or consequential_action
+    destructive_external = bool(DESTRUCTIVE_OR_EXTERNAL.search(actionable_text)) or consequential_action
     regulatory = bool(PRIVACY_REGULATORY.search(text))
-    deployment = bool(DEPLOYMENT.search(text))
+    deployment = bool(DEPLOYMENT.search(actionable_text))
     dependency_change = bool(DEPENDENCY_CHANGE.search(text))
     performance = bool(PERFORMANCE.search(text))
     debugging = bool(DEBUGGING.search(text))
@@ -1379,6 +1416,10 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
     # Bare fixture values such as `billing-reliability` must not turn an
     # otherwise mechanical corpus job into a critical financial operation.
     nonpayment_consequence_text = re.sub(r"\b(?:payments?|billing)\b", "", semantic_text, flags=re.I)
+    if not _mutation_intent_text(raw_text).strip():
+        nonpayment_consequence_text = re.sub(
+            r"\bproduction\s+(?:operations?\s+)?logs?\b", "logs", nonpayment_consequence_text, flags=re.I,
+        )
     consequence = consequential_action or (bool(HIGH_CONSEQUENCE.search(nonpayment_consequence_text)) and not low_stakes_surface) or (
         destructive_external and bool(DANGEROUS_TARGET.search(text))
     ) or regulatory
@@ -1577,6 +1618,13 @@ def _classify_balanced(prompt: str, active_model: str = "", active_effort: str =
         result["capability_target"] = route
         return result
 
+    demanding_proof = bool(
+        re.search(r"\b(?:prove|derive)\b", text, re.I)
+        and re.search(r"\b(?:guarantees?|exactly-once|counterexamples?|invariants?)\b", text, re.I)
+        and re.search(r"\b(?:distributed|protocol|partitions?|concurren\w*|crashes)\b", text, re.I)
+    )
+    if demanding_proof:
+        return choose("gpt56_sol_deep", 0.9, "distributed correctness proof requires deeper reasoning", "invariants and counterexample cross-check")
     if safe_bounded_command:
         return _attach_plan(
             _route("current", 0.96, "safe bounded command with explicit safeguards", "reported result check"),
@@ -1840,7 +1888,26 @@ def _normalize_active_routes(decision: dict[str, Any]) -> None:
     decision["orchestration"] = plan
 
 
-def _preserve_non_downward_parallel_plan(decision: dict[str, Any], root_effort: str) -> None:
+def _retarget_workhorse_routes(decision: dict[str, Any], model: str) -> None:
+    """Keep GPT-6.1 effort upgrades and independent work on the exact root model."""
+    if model not in {"gpt-6.1-sol", "gpt-6.1-terra"}:
+        return
+    aliases = {spawn_compat.role_for("gpt-6-sol", effort): spawn_compat.role_for(model, effort)
+               for effort in ("medium", "high", "xhigh")}
+
+    def mapped(value: Any) -> Any:
+        if isinstance(value, str):
+            return aliases.get(value, value)
+        if isinstance(value, list):
+            return [mapped(item) for item in value]
+        if isinstance(value, dict):
+            return {aliases.get(key, key): mapped(item) for key, item in value.items()}
+        return value
+
+    decision.update(mapped(decision))
+
+
+def _preserve_non_downward_parallel_plan(decision: dict[str, Any], root_effort: str, root_model: str = "gpt-6-sol") -> None:
     """Keep justified evidence workers only when their capability is not below a Sol root."""
     if root_effort == "high":
         plan = decision.get("orchestration")
@@ -1849,18 +1916,20 @@ def _preserve_non_downward_parallel_plan(decision: dict[str, Any], root_effort: 
         required = plan.get("required_agents")
         if not isinstance(required, dict):
             return
-        balanced_count = int(required.get("gpt6_sol_balanced", 0))
-        high_count = int(required.get("gpt6_sol_high", 0))
+        balanced_role = spawn_compat.role_for(root_model, "medium")
+        high_role = spawn_compat.role_for(root_model, "high")
+        balanced_count = int(required.get(balanced_role, 0))
+        high_count = int(required.get(high_role, 0))
         synthesis_role = str(plan.get("synthesis_role") or plan.get("synthesis_owner") or "")
-        if synthesis_role in {"gpt6_sol_high", "gpt6_sol_xhigh"} and high_count:
+        if synthesis_role in {high_role, spawn_compat.role_for(root_model, "xhigh")} and high_count:
             high_count -= 1
         worker_count = balanced_count + high_count
         if not worker_count:
             _force_single_plan(decision)
             return
-        plan["required_agents"] = {"gpt6_sol_high": worker_count}
-        plan["allowed_agents"] = ["gpt6_sol_high"]
-        plan["candidate_routes"] = ["gpt6_sol_high"]
+        plan["required_agents"] = {high_role: worker_count}
+        plan["allowed_agents"] = [high_role]
+        plan["candidate_routes"] = [high_role]
         plan["synthesis_role"] = "root"
         plan["synthesis_owner"] = "root"
         plan["max_workers"] = min(int(plan.get("max_workers", worker_count)), worker_count)
@@ -1885,6 +1954,7 @@ def _apply_actual_root_policy(
     """Apply authoritative model ownership and independent profile/discovery gates."""
     source_route_before_normalization = str(decision.get("route") or "current")
     _normalize_active_routes(decision)
+    _retarget_workhorse_routes(decision, active_model)
     if "root_policy_route" not in decision:
         decision["root_policy_route"] = str(decision["route"])
         decision["root_policy_orchestration"] = json.loads(json.dumps(decision["orchestration"]))
@@ -1902,6 +1972,7 @@ def _apply_actual_root_policy(
         _set_route_fields(decision, target)
         decision["orchestration"] = json.loads(json.dumps(decision["root_policy_orchestration"]))
         _normalize_active_routes(decision)
+        _retarget_workhorse_routes(decision, active_model)
         decision["reason"] = str(decision["root_policy_reason"])
         decision["parallel"] = bool(decision["root_policy_parallel"])
         decision["max_workers"] = int(decision["root_policy_max_workers"])
@@ -1971,7 +2042,10 @@ def _apply_actual_root_policy(
         and decision["task_profile"].get("risk") == "normal"
         and (
             bool(decision["task_profile"].get("trivial"))
-            or bool(decision["task_profile"].get("low_stakes_surface"))
+            or (bool(decision["task_profile"].get("low_stakes_surface")) and not any(
+                signal in decision["task_profile"].get("signals", [])
+                for signal in ("review", "read_heavy", "debugging", "open_ended")
+            ))
             or (
                 bool(decision["task_profile"].get("clear_spec"))
                 and decision["task_profile"].get("ambiguity") == "low"
@@ -2025,8 +2099,8 @@ def _apply_actual_root_policy(
                     _set_route_fields(decision, "current")
                 elif plan_mode == "evidence_then_owner":
                     _set_route_fields(decision, "current")
-                    if active_model == "gpt-6-sol":
-                        _preserve_non_downward_parallel_plan(decision, effort)
+                    if active_model in model_policy.WORKHORSE_MODELS:
+                        _preserve_non_downward_parallel_plan(decision, effort, active_model)
                 else:
                     _set_route_fields(decision, "current")
                     _force_single_plan(decision)
@@ -3101,7 +3175,7 @@ def _authoritative_route_up(state: dict[str, Any], agent_id: str, role: str) -> 
 
 def _route_recommendation(message: str, candidates: list[str]) -> str | None:
     match = re.search(
-        r"Route recommendation:[ \t]*(current|gpt6_(?:sol_balanced|sol_high|sol_xhigh))\b",
+        r"Route recommendation:[ \t]*(current|gpt(?:6_sol|61_(?:sol|terra))_(?:balanced|high|xhigh))\b",
         message,
         re.I,
     )
@@ -3134,7 +3208,7 @@ def _transcript_outcome(status: str, records_scanned: int = 0, bytes_scanned: in
     }
 
 
-def _scan_jsonl_transcript(path: Path, visitor: Any, *, directory_fd: int | None = None) -> dict[str, Any]:
+def _scan_jsonl_transcript(path: Path, visitor: Any, *, directory_fd: int | None = None, header_only: bool = False) -> dict[str, Any]:
     """Scan one JSONL transcript with bounded I/O and descriptor validation."""
     records_scanned = 0
     bytes_scanned = 0
@@ -3174,11 +3248,12 @@ def _scan_jsonl_transcript(path: Path, visitor: Any, *, directory_fd: int | None
         with os.fdopen(descriptor, "rb", closefd=True) as stream:
             descriptor = None
             while True:
-                line = stream.readline(TRANSCRIPT_MAX_LINE_BYTES + 1)
+                line_limit = 64 * 1024 if header_only else TRANSCRIPT_MAX_LINE_BYTES
+                line = stream.readline(line_limit + 1)
                 if not line:
                     break
                 bytes_scanned += len(line)
-                if len(line) > TRANSCRIPT_MAX_LINE_BYTES:
+                if len(line) > line_limit:
                     return _transcript_outcome("LINE_TOO_LARGE", records_scanned, bytes_scanned)
                 try:
                     record = json.loads(line)
@@ -3189,6 +3264,8 @@ def _scan_jsonl_transcript(path: Path, visitor: Any, *, directory_fd: int | None
                 records_scanned += 1
                 try:
                     found = bool(visitor(record)) or found
+                    if header_only:
+                        return _transcript_outcome("FOUND" if found else "NOT_FOUND", records_scanned, bytes_scanned)
                 except _TranscriptIncomplete:
                     return _transcript_outcome("INCOMPLETE", records_scanned, bytes_scanned)
     except OSError:
