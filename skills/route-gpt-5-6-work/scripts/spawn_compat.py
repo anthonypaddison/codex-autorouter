@@ -304,14 +304,13 @@ def role_from_arguments(arguments: dict[str, Any]) -> str | None:
 
 def current_role_spec(role: str) -> dict[str, str]:
     """Resolve internal roles through the active model/profile registry only."""
-    for profile in model_policy.ROUTE_PROFILES.values():
-        model = model_policy.ACTIVE_MODELS[profile.target_model_id]
+    for model in model_policy.ACTIVE_MODELS.values():
         if not model.child_target_allowed:
             continue
-        efforts = model.explicit_child_efforts if profile.profile_id == "frontier" else profile.allowed_automatic_efforts
-        for effort in efforts:
+        for effort in model.explicit_child_efforts:
             if role_for(model.canonical_id, effort) == role:
-                return {"model": model.canonical_id, "effort": effort, "profile": profile.profile_id}
+                profile = "frontier" if model.canonical_id == "gpt-6-astra" else "balanced" if effort == "medium" else "high"
+                return {"model": model.canonical_id, "effort": effort, "profile": profile}
     return {}
 
 

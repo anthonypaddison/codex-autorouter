@@ -18,6 +18,8 @@ class Gpt61SpawnTests(unittest.TestCase):
             self.assertEqual("none", args["fork_turns"])
             self.assertNotIn("service_tier", args)
             self.assertIsNotNone(spawn_compat.role_for(model, "high"))
+            self.assertEqual({"model": model, "effort": "high", "profile": "high"},
+                             spawn_compat.current_role_spec(spawn_compat.role_for(model, "high")))
             with self.assertRaises(ValueError):
                 spawn_compat.build_policy_arguments(
                     profile_id="high", model="gpt-6-sol", effort="high", discovery_state="available",

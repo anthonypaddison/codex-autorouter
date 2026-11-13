@@ -139,6 +139,7 @@ class RootEffortAcquisitionTests(unittest.TestCase):
         self.base = {
             "hook_event_name": "UserPromptSubmit", "session_id": self.SESSION, "turn_id": self.TURN,
             "model": "gpt-6-luna", "transcript_path": str(self.path), "prompt": "Return only 2.",
+            "runtime_version": "1.2.3", "host_type": "Desktop",
         }
 
     def _context(self, effort="low", **changes):
@@ -176,6 +177,24 @@ class RootEffortAcquisitionTests(unittest.TestCase):
         self.assertEqual("high", decision["task_profile"]["active_effort"])
         self.assertEqual("hook_observed", decision["effort_evidence"])
         self.assertEqual([], transcript_opens)
+
+    def test_gpt61_recovers_effort_and_runtime_from_the_same_session(self):
+        model = "gpt-6.1-sol"
+        records = [
+            {"type": "session_meta", "payload": {
+                "id": self.SESSION, "cli_version": "0.167.0-alpha.4.1", "originator": "codex_work_desktop",
+            }},
+            self._context("medium", model=model),
+        ]
+        self.path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+        decision = self._run(model=model, runtime_version=None, host_type=None,
+                             prompt="Debug a race condition across three modules.")
+        self.assertEqual("exact_turn_context", decision["root_effort_evidence"])
+        self.assertEqual(model, decision["model"])
+        self.assertEqual("high", decision["effort"])
+        ledger = json.loads((router_hook.STATE_ROOT / f"{self.SESSION}--{self.TURN}.json").read_text())
+        self.assertEqual("0.167.0-alpha.4.1", ledger["runtime_identity"]["runtime_version"])
+        self.assertEqual("exact_session_metadata", ledger["runtime_identity"]["runtime_identity_source"])
 
     def test_exact_low_medium_high_recovery_and_provenance(self):
         for effort in ("low", "medium", "high"):
