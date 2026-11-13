@@ -39,6 +39,8 @@ model_reasoning_effort = "low"
 
 This is a one-time user selection. Autorouter does not configure Luna, does not silently modify the root model, and none of its install, update, activate, deactivate, or remove operations changes global/root Codex configuration.
 
+Existing GPT-6.1 Sol and GPT-6.1 Terra roots are also supported. Autorouter retains the exact root model and uses that same model for approved effort increases and independent workers; it never silently switches a GPT-6.1 root to GPT-6 Sol. Luna's default escalation target remains GPT-6 Sol. A supported non-Luna root still reports reduced credit efficiency, separately from execution capability.
+
 ### 2. Install the reviewed release
 
 Version `v0.2.0` is the planned immutable release reference. The tag does not exist merely because it appears in this candidate's metadata; use the commands below only after the reviewed tag has been created by the release procedure:
@@ -84,6 +86,8 @@ The hook's `UserPromptSubmit.model` is authoritative for every actual turn. Desk
 Readiness receipts are earned only after an expected child is observed on the exact requested GPT-6 Sol or Astra model and the same `agent_id` completes successfully. Receipts are stored by model tier, so one tier's proof cannot silently attest another. The exact bounded child transcript may supply authoritative model, effort, and turn evidence when Desktop omits a child prompt hook; missing, contradictory, malformed, or oversized evidence creates no receipt. Receipts bind the plugin content identity, plugin version, Codex runtime/build where exposed, Desktop or CLI host type, platform, observed child model, effort intent, capability/schema signature, and timestamp. At least one matching versioned runtime/build identifier is mandatory for `READY`; null never matches null. Identity-null receipts remain visible as `ESCALATION PREVIOUSLY OBSERVED` but cannot establish current-runtime capability. Receipts expire for readiness after 30 days but remain available as history. A runtime/build or plugin-candidate change invalidates `READY` until normal work produces a fresh successful receipt; the health check never launches an automatic paid probe.
 
 ## Your first task
+
+When hook inputs omit runtime identity, Autorouter can recover the Codex version and host type from the first metadata record of the hook-supplied transcript. The read is limited to 64 KiB, rejects linked paths, and requires an exact session match and a recognised host. Explicit hook runtime identity takes precedence. New capability receipts include validated model/profile/effort policy evidence; old receipts missing that evidence remain unproven and are never silently upgraded.
 
 Automation hook delivery is host/version dependent. The currently observed Codex Desktop host dispatches Autorouter hook context and ledgers for automation-triggered turns, but Autorouter has not validated automation routing semantics as a supported savings surface. Continue excluding automation activity from Autorouter-attributable savings until that support is explicitly validated. See [supported surfaces and real-host coverage](docs/LIMITATIONS.md#supported-surfaces-and-real-host-coverage).
 

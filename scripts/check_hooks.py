@@ -29,12 +29,7 @@ CAPABILITY_FILE = "capability-v1.json"
 CAPABILITY_FILE_V2 = "capability-v2.json"
 CAPABILITY_FILE_V3 = "capability-v3.json"
 CAPABILITY_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
-CAPABILITY_SPECS = {
-    model_policy.capability_key("gpt-6-sol", "balanced", "medium"): ("gpt-6-sol", "balanced", "medium"),
-    model_policy.capability_key("gpt-6-sol", "high", "high"): ("gpt-6-sol", "high", "high"),
-    model_policy.capability_key("gpt-6-sol", "high", "xhigh"): ("gpt-6-sol", "high", "xhigh"),
-    model_policy.capability_key("gpt-6-astra", "frontier", "medium"): ("gpt-6-astra", "frontier", "medium"),
-}
+CAPABILITY_SPECS = model_policy.capability_specs()
 CAPABILITY_MODELS = tuple(CAPABILITY_SPECS)
 CAPABILITY_EFFORTS = {key: frozenset({spec[2]}) for key, spec in CAPABILITY_SPECS.items()}
 PLUGIN_IDENTITY_FILES = (

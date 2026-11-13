@@ -276,6 +276,9 @@ def fallback_contract(reason: str) -> dict[str, Any]:
 
 def role_for(model: str, effort: str) -> str | None:
     """Map an observed direct-spawn model/effort intent back to a router role."""
+    if model in {"gpt-6.1-sol", "gpt-6.1-terra"} and effort in {"medium", "high", "xhigh"}:
+        family = model.rsplit("-", 1)[1]
+        return f"gpt61_{family}_{'balanced' if effort == 'medium' else effort}"
     return {
         ("gpt-6-sol", "medium"): "gpt6_sol_balanced",
         ("gpt-6-sol", "high"): "gpt6_sol_high",

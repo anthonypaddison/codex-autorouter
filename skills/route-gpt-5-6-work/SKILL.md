@@ -168,6 +168,9 @@ Hook enforcement covers only lifecycle and tool events that Codex actually emits
 
 ## Boundaries
 
+- GPT-6.1 Sol and GPT-6.1 Terra are supported exact root identities. Retain the user's selected model; use the same exact model for approved effort increases and independent workers. Use only the adapter-rendered calls and preserve the existing Astra gate. Their non-Luna credit-efficiency state remains `DEGRADED`; supported execution is not proof of savings.
+- A read-only investigation's prohibited actions and final recommendation choices are not mutation requests. References to documentation do not make a substantive routing audit trivial. Distributed protocol proofs requiring invariants and counterexamples warrant High reasoning.
+
 - A skill cannot change the already-running root model in place. `UserPromptSubmit.model` is authoritative for every actual turn. Configuration/App Server evidence may support health but cannot override it.
 - GPT-6 Luna Low root: routine work stays Luna, normal work may use GPT-6 Sol Medium, and hard work may use GPT-6 Sol High. GPT-6 Sol roots remain Sol; same-capability independent parallel work is allowed only with its own bounded justification, while lower-capability children are prohibited. Astra is available only by explicit request or an authoritative Sol route-up. GPT-6 Astra roots stay Astra. Never delegate downward merely to satisfy the classifier.
 - Any non-Luna actual root is credit-efficiency `DEGRADED` for that turn and substantially reduces expected savings.

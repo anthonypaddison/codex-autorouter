@@ -244,6 +244,21 @@ class RoutingHealthTests(unittest.TestCase):
         self.assertEqual("UNPROVEN", health["capability_status"][SOL_HIGH_HIGH])
         self.assertEqual("UNPROVEN", health["capability_status"][ASTRA_FRONTIER_MEDIUM])
 
+    def test_gpt61_receipt_proves_only_its_exact_model_and_profile(self) -> None:
+        for model in ("gpt-6.1-sol", "gpt-6.1-terra"):
+            key = check_hooks.model_policy.capability_key(model, "high", "high")
+            with self.subTest(model=model), tempfile.TemporaryDirectory() as raw:
+                data = Path(raw)
+                _write_capability_evidence(data, (key,))
+                health = _health(data)
+                self.assertEqual("CURRENT", health["capability_status"][key])
+                self.assertEqual("UNPROVEN", health["capability_status"][SOL_HIGH_HIGH])
+                receipt_path = data / "capability-v3.json"
+                document = json.loads(receipt_path.read_text())
+                del document["capabilities"][key]["profile_policy_valid"]
+                receipt_path.write_text(json.dumps(document))
+                self.assertNotEqual("CURRENT", _health(data)["capability_status"][key])
+
     def test_profile_keyed_receipts_prove_only_their_exact_capability_tier(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             data = Path(raw)

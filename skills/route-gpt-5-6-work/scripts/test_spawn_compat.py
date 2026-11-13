@@ -7,6 +7,24 @@ import unittest
 import spawn_compat
 
 
+class Gpt61SpawnTests(unittest.TestCase):
+    def test_profile_up_uses_exact_model_and_supported_spawn_shape(self):
+        for model in ("gpt-6.1-sol", "gpt-6.1-terra"):
+            args = spawn_compat.build_policy_arguments(
+                profile_id="high", model=model, effort="high", discovery_state="available",
+                root_model=model, root_effort="medium", task_name="bounded_review", message="Review the queue race.",
+            )
+            self.assertEqual(model, args["model"])
+            self.assertEqual("none", args["fork_turns"])
+            self.assertNotIn("service_tier", args)
+            self.assertIsNotNone(spawn_compat.role_for(model, "high"))
+            with self.assertRaises(ValueError):
+                spawn_compat.build_policy_arguments(
+                    profile_id="high", model="gpt-6-sol", effort="high", discovery_state="available",
+                    root_model=model, root_effort="medium", task_name="wrong_model", message="Review.",
+                )
+
+
 class SpawnCompatibilityTests(unittest.TestCase):
     def test_observed_contract_requires_every_adapter_field(self) -> None:
         valid = spawn_compat.build_arguments(
