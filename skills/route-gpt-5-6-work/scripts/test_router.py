@@ -1366,6 +1366,185 @@ class Gpt6ChildLifecycleBindingTests(unittest.TestCase):
         self.assertFalse(child["spawn_contract_valid"])
 
 
+class TaskNameReceiptTests(unittest.TestCase):
+    def setUp(self):
+        RouterTests.setUp(self)
+
+    def tearDown(self):
+        RouterTests.tearDown(self)
+
+    def _fixture(self, model="gpt-6-sol", effort="medium"):
+        self.session, self.turn = "task-name-parent", "parent"
+        self.child_id = "00000000-0000-7000-8000-000000000654"
+        self.base = {"session_id": self.session, "turn_id": self.turn, "runtime_version": "1.2.3", "host_type": "Desktop"}
+        router_hook.handle({**self.base, "hook_event_name": "UserPromptSubmit",
+                            "model": "gpt-6-luna" if model == "gpt-6-sol" else model,
+                            "model_reasoning_effort": "low" if model == "gpt-6-sol" else "medium",
+                            "prompt": "Implement a bounded endpoint with targeted unit tests." if effort == "medium" else "Debug a race condition across three modules."})
+        args = router_hook.spawn_compat.build_arguments(model=model, effort=effort,
+                                                       task_name="bounded", message="Inspect only.")
+        def activity(kind, call):
+            return {"type": "event_msg", "payload": {"type": "item_completed", "thread_id": self.session,
+                "turn_id": self.turn, "item": {"type": "SubAgentActivity", "id": call, "kind": kind,
+                "agent_thread_id": self.child_id, "agent_path": "/root/bounded",
+                "model": model if kind == "started" else None,
+                "reasoning_effort": effort if kind == "started" else None}}}
+        self.records = [
+            {"type": "response_item", "payload": {"type": "function_call", "namespace": "collaboration",
+                "name": "spawn_agent", "call_id": "exact-spawn", "arguments": json.dumps(args),
+                "internal_chat_message_metadata_passthrough": {"turn_id": self.turn}}},
+            activity("started", "exact-spawn"),
+            {"type": "response_item", "payload": {"type": "function_call_output", "call_id": "exact-spawn",
+                "output": json.dumps({"task_name": "/root/bounded"}),
+                "internal_chat_message_metadata_passthrough": {"turn_id": self.turn}}},
+            activity("completed", "completed-event"),
+            {"type": "response_item", "payload": {"type": "agent_message", "author": "/root/bounded",
+                "content": "Evidence: inspected\nVerification: checked\nUncertainty: none",
+                "internal_chat_message_metadata_passthrough": {"turn_id": self.turn}}},
+        ]
+        self.child = RouterTests._write_child_transcript(self, self.session, self.child_id, model, effort)
+        child_records = [json.loads(line) for line in self.child.read_text().splitlines()]
+        child_records[0]["payload"]["source"]["subagent"]["thread_spawn"].update(agent_path="/root/bounded", depth=1)
+        child_records.append({"type": "event_msg", "payload": {"type": "task_complete", "turn_id": "child-turn",
+            "root_turn_id": self.turn, "last_agent_message": "Evidence: inspected\nVerification: checked\nUncertainty: none"}})
+        self.child.write_text("".join(json.dumps(record) + "\n" for record in child_records))
+
+    def _scan(self, *, stale_candidate=False):
+        path = Path(self.temp.name) / "parent.jsonl"
+        path.write_text("".join(json.dumps(record) + "\n" for record in self.records))
+        state = RouterTests._ledger(self, self.session, self.turn)
+        if stale_candidate:
+            state["plugin_identity"] = "sha256:previous-candidate"
+        router_hook._reconcile_subagent_transcript({"transcript_path": str(path)}, state)
+        return state
+
+    def test_task_name_result_earns_receipt_only_with_exact_host_bridge(self):
+        import check_hooks
+
+        self._fixture()
+        state = self._scan()
+        child = state["agents"][self.child_id]
+        self.assertTrue(child.get("receipt_recorded"))
+        receipt = json.loads(router_hook.CAPABILITY_PATH.read_text())["capabilities"]
+        key = router_hook.model_policy.capability_key("gpt-6-sol", "balanced", "medium")
+        self.assertEqual(self.child_id, receipt[key]["agent_id"])
+        self.assertEqual("direct:exact-spawn", receipt[key]["spawn_call_key"])
+        self.assertEqual(self.turn, receipt[key]["parent_turn_id"])
+        self.assertTrue(receipt[key]["profile_policy_valid"])
+        self.assertNotIn("/root/bounded", json.dumps(state))
+        health = check_hooks._routing_health({"available": True}, router_hook.PLUGIN_VERSION,
+            router_hook.CAPABILITY_PATH.parent, plugin_identity=router_hook.PLUGIN_IDENTITY,
+            current_session_id=self.session)
+        self.assertEqual("CURRENT", health["capability_status"][key])
+        self.assertEqual("READY", health["status"])
+
+    def test_supported_structured_task_result_wrappers_keep_exact_binding(self):
+        for output in ({"task_name": "/root/bounded"},
+                       {"structuredContent": {"task_name": "/root/bounded"}},
+                       [{"type": "text", "text": '{"task_name":"/root/bounded"}'}]):
+            with self.subTest(output=output):
+                self._fixture()
+                self.records[2]["payload"]["output"] = output
+                self.assertTrue(self._scan()["agents"][self.child_id].get("receipt_recorded"))
+
+    def test_gpt61_task_name_receipts_attest_only_their_exact_model_effort(self):
+        import check_hooks
+
+        for model in ("gpt-6.1-sol", "gpt-6.1-terra"):
+            with self.subTest(model=model):
+                self._fixture(model, "high")
+                self.assertTrue(self._scan()["agents"][self.child_id].get("receipt_recorded"))
+                health = check_hooks._routing_health({"available": True}, router_hook.PLUGIN_VERSION,
+                    router_hook.CAPABILITY_PATH.parent, plugin_identity=router_hook.PLUGIN_IDENTITY,
+                    current_session_id=self.session)
+                key = router_hook.model_policy.capability_key(model, "high", "high")
+                self.assertEqual("CURRENT", health["capability_status"][key])
+                self.assertEqual("UNPROVEN", health["capability_status"][router_hook.model_policy.capability_key(model, "balanced", "medium")])
+
+    def test_malformed_ambiguous_and_unbounded_results_grant_no_credit(self):
+        for output in ('task_name: /root/bounded', {"task_name": 1}, {"task_name": []},
+                       [{"task_name": "/root/bounded"}, {"task_name": "/root/other"}],
+                       {"task_name": "/root/bounded", "agent_id": "00000000-0000-7000-8000-000000000655"},
+                       {"task_name": "/root/../bounded"}, {"task_name": "bounded"},
+                       [{"text": "irrelevant"}] * 260):
+            with self.subTest(output=str(output)[:80]):
+                self._fixture()
+                if router_hook.CAPABILITY_PATH.exists(): router_hook.CAPABILITY_PATH.unlink()
+                self.records[2]["payload"]["output"] = output
+                self.assertFalse(any(a.get("receipt_recorded") for a in self._scan().get("agents", {}).values()))
+                self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+
+    def test_search_exhaustion_cannot_write_receipt(self):
+        self._fixture()
+        with mock.patch.object(router_hook, "TRANSCRIPT_MAX_SEARCH_ENTRIES", 0):
+            self._scan()
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+
+    def test_previous_plugin_candidate_cannot_be_promoted_by_replay(self):
+        self._fixture()
+        self.assertFalse(any(a.get("receipt_recorded") for a in self._scan(stale_candidate=True).get("agents", {}).values()))
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+
+    def test_late_malformed_parent_cannot_write_receipt(self):
+        self._fixture()
+        path = Path(self.temp.name) / "parent.jsonl"
+        path.write_text("".join(json.dumps(record) + "\n" for record in self.records) + '{broken\n')
+        state = RouterTests._ledger(self, self.session, self.turn)
+        router_hook._reconcile_subagent_transcript({"transcript_path": str(path)}, state)
+        self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+
+    def test_task_name_alone_or_conflicting_bridge_never_earns_receipt(self):
+        for case in ("no_start", "wrong_call", "wrong_parent", "wrong_turn", "wrong_result_turn",
+                     "wrong_path", "duplicate_path", "wrong_model", "wrong_effort", "missing_complete",
+                     "wrong_complete_path", "unstructured_return", "unsafe_child", "malformed_child",
+                     "wrong_child_parent", "wrong_child_path", "wrong_child_turn", "no_child_completion",
+                     "recursive_child", "wrong_completion_model", "no_start_model", "invalid_spawn",
+                     "bad_child_completion_shape", "completion_before_context"):
+            with self.subTest(case=case):
+                self._fixture()
+                if router_hook.CAPABILITY_PATH.exists(): router_hook.CAPABILITY_PATH.unlink()
+                start = self.records[1]["payload"]
+                if case == "no_start": self.records.pop(1)
+                elif case == "wrong_call": start["item"]["id"] = "another-call"
+                elif case == "wrong_parent": start["thread_id"] = "another-parent"
+                elif case == "wrong_turn": start["turn_id"] = "another-turn"
+                elif case == "wrong_result_turn": self.records[2]["payload"]["internal_chat_message_metadata_passthrough"]["turn_id"] = "another-turn"
+                elif case == "wrong_path": self.records[2]["payload"]["output"] = '{"task_name":"/root/other"}'
+                elif case == "duplicate_path":
+                    other = json.loads(json.dumps(self.records[1])); other["payload"]["item"]["agent_thread_id"] = "00000000-0000-7000-8000-000000000655"
+                    self.records.insert(2, other)
+                elif case == "wrong_model": start["item"]["model"] = "gpt-6-astra"
+                elif case == "wrong_effort": start["item"]["reasoning_effort"] = "high"
+                elif case == "wrong_completion_model": self.records[3]["payload"]["item"]["model"] = "gpt-6-astra"
+                elif case == "no_start_model": start["item"]["model"] = None
+                elif case == "invalid_spawn":
+                    args = json.loads(self.records[0]["payload"]["arguments"]); args["fork_turns"] = "all"
+                    self.records[0]["payload"]["arguments"] = json.dumps(args)
+                elif case == "missing_complete": self.records.pop(3)
+                elif case == "wrong_complete_path": self.records[3]["payload"]["item"]["agent_path"] = "/root/other"
+                elif case == "unstructured_return": self.records[4]["payload"]["content"] = "Done."
+                elif case == "unsafe_child":
+                    saved = self.child.with_suffix('.saved'); self.child.rename(saved); self.child.symlink_to(saved)
+                elif case == "malformed_child":
+                    with self.child.open('a') as stream: stream.write('{broken\n')
+                else:
+                    records = [json.loads(line) for line in self.child.read_text().splitlines()]
+                    spawn = records[0]["payload"]["source"]["subagent"]["thread_spawn"]
+                    if case == "wrong_child_parent": spawn["parent_thread_id"] = "another-parent"
+                    elif case == "wrong_child_path": spawn["agent_path"] = "/root/other"
+                    elif case == "wrong_child_turn": records[-1]["payload"]["root_turn_id"] = "another-turn"
+                    elif case == "no_child_completion": records.pop()
+                    elif case == "recursive_child": records.insert(2, {"type": "response_item", "payload": {
+                        "type": "function_call", "name": "spawn_agent", "arguments": "{}"}})
+                    elif case == "bad_child_completion_shape": records[-1]["payload"]["last_agent_message"] = {"text": "Evidence: yes\nVerification: checked\nUncertainty: none"}
+                    elif case == "completion_before_context": records[1], records[-1] = records[-1], records[1]
+                    self.child.write_text("".join(json.dumps(record) + "\n" for record in records))
+                state = self._scan()
+                self.assertFalse(router_hook.CAPABILITY_PATH.exists())
+                self.assertFalse(any(a.get('receipt_recorded') for a in state.get('agents', {}).values()))
+                if self.child.is_symlink(): self.child.unlink()
+
+
 class ObservedSpawnContractTests(unittest.TestCase):
     def setUp(self) -> None:
         RouterTests.setUp(self)
