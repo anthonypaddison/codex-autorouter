@@ -152,6 +152,11 @@ def validate_arguments(arguments: Any) -> dict[str, Any]:
             reasons.append("invalid_fork_turns")
     if "service_tier" in arguments:
         reasons.append("service_tier_override")
+    if _CONFIGURED_SPECS is not None:
+        # The configured allowlist and model catalogue are not the current
+        # session's spawn schema. Prompt hooks do not expose that capability
+        # evidence through a supported interface; do not self-attest it.
+        reasons.append("child_capabilities_unverified")
     role = role_for(model, effort) if isinstance(model, str) and isinstance(effort, str) else None
     return {
         "spawn_contract_valid": not reasons,

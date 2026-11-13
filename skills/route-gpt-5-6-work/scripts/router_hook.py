@@ -197,28 +197,32 @@ def _ai_decision(data: dict[str, Any], root_effort: dict[str, str], reused: dict
     model, effort = result.get("model"), result.get("effort")
     role = spawn_compat.role_for(model, effort) if isinstance(model, str) and isinstance(effort, str) else None
     direct = (model, effort) == (active, root_effort["root_effort"])
-    valid = role is not None and result.get("status") in {"selected", "fallback"} and bool(active)
-    route = role if valid and not direct else "current"
-    delegated = route != "current"
+    permitted = role is not None and result.get("status") in {"selected", "fallback"} and bool(active)
+    compatibility = "not_required" if permitted and direct else "unverified"
+    # No supported prompt-hook field supplies the exact current spawn schema.
+    # Catalogue membership cannot authorize a selected or fallback executor.
+    valid = permitted and direct
     return {
-        "route": route, "model": model if delegated else "current", "effort": effort if delegated else "current",
-        "delegate": delegated, "parallel": False, "max_workers": 1, "max_depth": 1, "max_escalations": 0,
+        "route": "current", "model": "current", "effort": "current",
+        "delegate": False, "parallel": False, "max_workers": 1, "max_depth": 1, "max_escalations": 0,
         "actual_root_model": active, "root_model_evidence": "UserPromptSubmit.model" if active else "unavailable",
         "classification": result, "capability_eligible": valid, "capability_target": role if valid else "current",
+        "executor_compatibility": compatibility,
         "configuration_id": _AI_CONFIG_ID,
-        "profile_satisfaction": "satisfied" if valid and direct else "unsatisfied" if valid else "unproven",
-        "route_policy_outcome": "approved" if valid else "unavailable", "catalogue_availability": "available" if valid else "unavailable",
+        "profile_satisfaction": "satisfied" if valid else "unproven",
+        "route_policy_outcome": "approved" if valid else "unavailable",
+        "catalogue_availability": result.get("catalogue_availability", "available" if permitted else "unavailable"),
         "routing_profile": "configured", "routing_profile_label": "User configured", "routing_profile_source": "autorouter_config",
-        "route_transition": "none" if not delegated else "effort_change" if model == active else "model_change",
-        "reason": "configured AI selection" if valid else "configured routing unavailable; continue in current root without claiming selected-model execution",
+        "route_transition": "none",
+        "reason": "configured AI selection" if valid else "configured routing unavailable: classifier isolation or executor compatibility is unverified",
         "verification": "targeted tests or task-appropriate evidence after the final mutation",
         "requires_clarification": False,
         "task_profile": {"active_model": active, "active_effort": root_effort["root_effort"],
                          "task_type": "ai_classified", "risk": "unassessed", "mutation": None,
                          "clear_spec": None, "signals": []},
-        "orchestration": {"mode": "single_delegate" if delegated else "direct", "max_workers": 1,
-                          "max_depth": 1, "required_agents": {route: 1} if delegated else {},
-                          "allowed_agents": [route] if delegated else [], "synthesis_owner": "root",
+        "orchestration": {"mode": "direct", "max_workers": 1,
+                          "max_depth": 1, "required_agents": {},
+                          "allowed_agents": [], "synthesis_owner": "root",
                           "final_acceptance_owner": "root"},
     }
 ASTRA_EXPLICIT_REQUEST = re.compile(
@@ -2818,6 +2822,11 @@ def _context(decision: dict[str, Any]) -> str:
     decision.setdefault("announce_route", False)
     decision.setdefault("visible_route", _visible_route(decision, {}))
     if decision.get("capability_eligible") is not True:
+        if "classification" in decision:
+            return (
+                "Configured AI routing is unavailable: classifier tool isolation or current-session child model compatibility is unverified. "
+                "Continue as the current root, do not spawn a selected or fallback child, and do not claim configured execution is verified."
+            )
         if decision.get("requires_clarification"):
             return setup_notice + (
                 "User intent is insufficiently specified; do not mutate files or state, do not run a mutating shell "

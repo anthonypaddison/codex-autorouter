@@ -36,7 +36,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "status":
             config = routing_config.load_config(path)
             print(json.dumps({"status": "configured" if config else "setup_required", "config": config,
-                              "execution_verified": False}))
+                              "execution_verified": False, "runtime_routing": "blocked" if config else "legacy_compatibility",
+                              "classifier_isolation": "unverified", "executor_compatibility": "unverified"}))
             return 0
         models = available_models()
         if not models:
@@ -64,7 +65,9 @@ def main(argv: list[str] | None = None) -> int:
         }, models)
         backup = routing_config.save_config(path, config)
         print(json.dumps({"status": "configured", "path": str(path), "backup": str(backup) if backup else None,
-                          "model_access": "catalogue_only_not_inference_verified", "live_classifier_calls": 0}))
+                          "model_access": "catalogue_only_not_inference_verified", "live_classifier_calls": 0,
+                          "runtime_routing": "blocked", "classifier_isolation": "unverified",
+                          "executor_compatibility": "unverified"}))
         return 0
     except (routing_config.ConfigError, ValueError, OSError, EOFError) as exc:
         print("Autorouter setup failed: " + (str(exc) if isinstance(exc, routing_config.ConfigError) else type(exc).__name__), file=sys.stderr)

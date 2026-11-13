@@ -33,12 +33,12 @@ and the classifier timeout in `CODEX_HOME/autorouter/config.json`. It rejects
 unknown configuration fields and never stores credentials. Reconfiguration
 preserves an owner-only byte-exact backup. It does not edit global Codex settings.
 
-The classifier receives the bounded incoming prompt and the configured choices
-through stdin, not command arguments. Codex's own saved ChatGPT authentication
-is used internally by the CLI; Autorouter does not open authentication storage,
-copy tokens or introduce API credentials. The prompt is temporarily held in a
-private, automatically removed stdin file. The ephemeral CLI session does not
-persist its rollout. CLI stderr is discarded and stdout is bounded in memory.
+The production classifier runner is disabled before creating a subprocess;
+prompts are not sent to Codex CLI or a remote classifier by this candidate.
+Injected mock runners receive bounded prompt/configuration data and a temporary
+JSON schema during tests. Autorouter does not open authentication storage, copy
+tokens or introduce API credentials. Restoring live classification requires a
+supported isolation boundary and a separate acceptance review.
 
 The classifier's short rationale is schema-validated but deliberately discarded:
 it can paraphrase private prompt content. Ledgers retain only selected model and

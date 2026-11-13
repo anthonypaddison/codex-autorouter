@@ -91,28 +91,35 @@ Full plugin mode targets Codex Desktop and CLI. Codex IDE extensions do not curr
 Checksums and inventories prevent accidental overwrite, partial lifecycle recovery, and unnoticed ownership drift; they are not signatures against a malicious process already running as the same operating-system user. Post-crash edits, corrupt controller copies, and modified quarantine trees are preserved and require manual review.
 # Configured AI routing candidate (proposed v0.3)
 
-The configured path uses the existing Codex CLI and saved ChatGPT authentication.
-It cannot select models absent from the fresh selectable catalogue, authorize
-unsupported efforts, change the running root, bypass host permissions or prove
-access merely from a catalogue listing. The CLI must be on `PATH` and support
-`exec --ignore-user-config --ephemeral --output-schema --json` plus the disabled
-hook, multi-agent, shell, exec, app and code-mode features used by the classifier.
-An incompatible or missing CLI uses the permitted fallback; there is no gateway
-or alternate authentication implementation.
+The production classifier is disabled before subprocess creation. An offline,
+loopback-only request capture from CLI 0.153.4 showed `functions.exec`, `wait` and
+`request_user_input` despite the proposed disable flags; nested guidance included
+`apply_patch` and `view_image`. `debug prompt-input` alone omitted the separate
+tool declarations and was not sufficient evidence. The fixture returned no model
+generation and used no credentials or external inference.
 
-Classification has a six-second deadline under the existing ten-second prompt
-hook timeout. Timeout, malformed/oversized output, attempted tool use and invalid
-model/effort selections cannot authorize the returned selection. A currently
-valid configured fallback is used once, without retry. If configuration or its
-catalogue is invalid/unavailable, even the fallback cannot be authorized and the
-existing root remains responsible without a selected-model execution claim.
+[Upstream issue 60069](https://github.com/openai/codex/issues/60069) reports the
+same distinction on a newer CLI. Disabling Code Mode can fail closed for that
+path, but it is not a universal tool-execution policy. Official hook coverage
+excludes hosted and some specialized paths; a deny-all hook is not complete
+isolation. No unsupported flag, hook-trust bypass, sandbox-only claim, proxy or
+post-execution validator is used to bypass this blocker. A supported complete
+denial boundary must be established before restoring a real classifier runner.
 
-Hook disabling and an independent environment guard prevent classification
-recursion. No live inference is part of development tests. Actual CLI startup
-latency, host enforcement of disabled features and account/model access remain
-unverified until a separately approved live acceptance; exceeding the bound or
-observing hook recursion is a reason to stop the CLI path, not add a broker,
-proxy, retry agent or polling system.
+Prompt hooks also do not expose the exact current-session spawn model/effort
+capabilities through a supported interface. The catalogue is not that schema,
+and another CLI process's models are not proof for a Desktop session. All
+configured child contracts, including fallback selections, are therefore
+rejected as compatibility-unverified. No model list from one audit is hardcoded
+or persisted as capability authority. Exact already-running model/effort pairs
+can stay current without a child; this is not delegation proof.
+
+Setup remains useful for preparing configuration, not authorizing execution.
+Setup/status expose the blockers and health cannot report configured routing
+READY from receipts alone. The schema/allowlist, timeout fallback, recursion and
+duplicate-delivery logic is exercised with injected mock runners. The disabled
+production path reports zero attempts and does not choose a fallback on an
+isolation failure. No live inference is part of development tests.
 
 The classifier is prompted to minimize cost to reliable completion, but no live
 rate card or verified intelligence ranking is inferred from model names. Real
@@ -121,7 +128,7 @@ task quality are unmeasured. The existing benchmark fixtures test the transport
 using mocked selections only. Legacy route-audit/fuzz checks still test the v0.2
 compatibility path; they do not grade an AI classifier.
 
-No new model-family edit is needed for configured executors. Exact allowed
+No new model-family edit is needed to prepare configured executors. Exact allowed
 model/effort pairs produce configuration-bound roles and receipt keys. All
 independent identity, lifecycle, ambiguity, verification and receipt gates remain
 in force; a valid classification cannot manufacture a receipt. Existing receipt

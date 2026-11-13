@@ -1,15 +1,12 @@
-"""One bounded, ephemeral classification through Codex's saved CLI sign-in."""
+"""Schema-validated classification interface; live CLI use awaits verified isolation."""
 
 from __future__ import annotations
 
 import json
 import os
-import queue
 import re
 import shutil
-import subprocess
 import tempfile
-import threading
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -18,7 +15,6 @@ import routing_config
 
 
 MAX_PROMPT_BYTES = 32768
-MAX_OUTPUT_BYTES = 65536
 GUARD = "AUTOROUTER_CLASSIFIER_ACTIVE"
 INSTRUCTION = (
     "Classify the supplied task; do not execute it, use tools, inspect files, or delegate. "
@@ -47,75 +43,13 @@ def _usage(events: list[dict[str, Any]]) -> dict[str, int]:
 
 
 def run_cli(argv: list[str], payload: str, timeout: float) -> list[dict[str, Any]]:
-    """Bound pipe reads during I/O; never retain raw CLI stderr or write rollouts."""
-    chunks: queue.Queue[bytes | None] = queue.Queue(maxsize=2)
-    stopping = threading.Event()
-    with tempfile.TemporaryFile() as source:
-        source.write(payload.encode())
-        source.seek(0)
-        process = subprocess.Popen(
-            argv, stdin=source, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            env={**os.environ, GUARD: "1"},
-        )
+    """Do not launch until Codex supplies a verified tool-execution denial boundary.
 
-        def read_output():
-            try:
-                while not stopping.is_set():
-                    block = process.stdout.read(2048)
-                    if not block:
-                        break
-                    while not stopping.is_set():
-                        try:
-                            chunks.put(block, timeout=0.05)
-                            break
-                        except queue.Full:
-                            continue
-            finally:
-                while not stopping.is_set():
-                    try:
-                        chunks.put(None, timeout=0.05)
-                        break
-                    except queue.Full:
-                        continue
-
-        reader = threading.Thread(target=read_output, daemon=True)
-        reader.start()
-        output = bytearray()
-        deadline = time.monotonic() + timeout
-        try:
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise ClassifierError("classifier_timeout")
-                try:
-                    block = chunks.get(timeout=remaining)
-                except queue.Empty as exc:
-                    raise ClassifierError("classifier_timeout") from exc
-                if block is None:
-                    break
-                if len(output) + len(block) > MAX_OUTPUT_BYTES:
-                    raise ClassifierError("classifier_output_limit")
-                output.extend(block)
-            try:
-                code = process.wait(timeout=max(0.001, deadline - time.monotonic()))
-            except subprocess.TimeoutExpired as exc:
-                raise ClassifierError("classifier_timeout") from exc
-            if code:
-                raise ClassifierError("classifier_process_failed")
-            try:
-                events = [json.loads(line) for line in output.splitlines() if line.strip()]
-            except (ValueError, UnicodeError, RecursionError) as exc:
-                raise ClassifierError("classifier_malformed_output") from exc
-            if len(events) > 128 or any(not isinstance(e, dict) for e in events):
-                raise ClassifierError("classifier_malformed_output")
-            return events
-        finally:
-            stopping.set()
-            if process.poll() is None:
-                process.kill()
-            process.wait()
-            reader.join(timeout=0.5)
-            process.stdout.close()
+    CLI 0.153.4 still declares tools with the proposed disable flags. Neither
+    read-only permissions nor rejecting a result after tool execution proves
+    isolation. Keep the mock-runner boundary, but no executable bypass option.
+    """
+    raise ClassifierError("classifier_tool_isolation_unverified")
 
 
 def _selection(events: list[dict[str, Any]], config: dict[str, Any], preferred: str | None) -> tuple[dict, dict]:
@@ -156,12 +90,13 @@ def classify(
 ) -> dict[str, Any]:
     started = time.monotonic()
     result = {"model": None, "effort": None, "status": "unavailable", "reason_code": "invalid_configuration",
-              "duration_ms": 0, "calls": 0, "usage": {}}
+              "duration_ms": 0, "calls": 0, "usage": {}, "catalogue_availability": "unavailable"}
     try:
         if os.environ.get(GUARD):
             result.update(status="skipped", reason_code="recursive_classification_prevented")
             return result
         config = routing_config.validate_config(config, catalogue)
+        result["catalogue_availability"] = "available"
         models = {e["model"]: e["efforts"] for e in config["executors"]}
         directive = re.fullmatch(
             r"Use model ([A-Za-z0-9][A-Za-z0-9_.-]{0,127})(?: at ([A-Za-z0-9_.-]+) effort)?\.?",
@@ -177,6 +112,9 @@ def classify(
             return result
         if preferred_model is not None and preferred_model not in models:
             result["reason_code"] = "explicit_model_not_permitted"
+            return result
+        if runner is run_cli:
+            result["reason_code"] = "classifier_tool_isolation_unverified"
             return result
         fallback = config["fallback"]
         # An explicit preference cannot silently become a different fallback model.

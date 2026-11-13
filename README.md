@@ -9,6 +9,14 @@ not a released or automatically deployed version. Existing installations and
 historical evidence remain compatible; until setup is run, the legacy routing
 path remains available with a setup reminder.
 
+**Runtime status: BLOCKED.** CLI 0.153.4 still exposes tools with the proposed
+disable flags, and prompt hooks do not expose the current session's child-model
+capabilities through a supported interface. This candidate refuses real CLI
+classification before process creation and rejects configured child/fallback
+contracts as compatibility-unverified. Setup and mocked development remain
+available; do not activate this candidate for an AI-routing installation trial.
+Unconfigured legacy routing is unchanged.
+
 After a separately reviewed installation of this candidate, run the setup
 command from that plugin's root:
 
@@ -39,14 +47,13 @@ or the explicit `--config` path for offline preparation. Repeating setup makes a
 byte-exact backup before replacement. It does not install plugins, log in,
 modify Codex defaults, run inference or verify model entitlement.
 
-Configured routing makes at most one bounded `codex exec` classification attempt
-per root turn, not per tool call. Exact duplicate delivery and simple task
-continuations reuse the recorded decision. The CLI reuses saved ChatGPT login;
-Autorouter does not read/copy credentials, introduce API keys, proxies or another
-billing service. Classification uses an ephemeral session, a JSON output schema,
-disabled hooks/subagents/tools, a six-second deadline, 32 KiB prompt limit and
-64 KiB stdout limit. A prompt beyond the bound is not truncated; it uses the
-validated fallback. There is no classifier retry or hardcoded escalation ladder.
+The classification interface validates schema-constrained model/effort choices,
+a 32 KiB prompt limit and a configured fallback without retries. An injected mock
+runner exercises that interface; the production runner always refuses to launch
+until tool-execution isolation is established. It reports zero CLI attempts and
+does not turn that safety failure into an executor or fallback authorization.
+Exact duplicate delivery and simple continuations reuse the recorded decision.
+No credentials, API keys, proxy or separate billing service are introduced.
 
 For a directly enforced preference, start a prompt with:
 
@@ -57,22 +64,24 @@ Use model EXACT_MODEL_ID at EXACT_EFFORT effort.
 That model/effort must be permitted and advertised by the current catalogue;
 otherwise routing reports unavailable rather than silently choosing another
 model. An omitted effort uses the first effort explicitly selected during setup.
-This exact directive skips the classifier. Other natural-language preferences
-are supplied to the AI classifier, but their interpretation is not mechanically
-guaranteed.
+This exact directive skips the classifier. It can stay current only when the
+requested pair exactly matches the observed root; it cannot bypass the child
+compatibility guard. Other natural-language preferences are tested only through
+the mock classifier; live interpretation remains blocked.
 
-The selected executor receives a normal, supported direct child assignment.
-The existing root cannot be changed by this plugin. A selection is only a
-recommendation until the child actually starts, completes and passes the
-existing correlation, attestation and verification gates. If the selected model
-and effort exactly match the observed root, work stays current. Configuration
-changes during an in-flight task invalidate reuse of its old routing contract.
+The existing root cannot be changed by this plugin. A catalogue listing or
+configuration entry is not proof that the host's child tool accepts that model.
+Configured child assignments currently fail closed, including fallback choices;
+status reports compatibility as unverified. Existing correlation, attestation
+and verification gates remain intact. Configuration changes during an in-flight
+task invalidate reuse of its old routing contract.
 
 Classifier elapsed time, invocation attempts and observed token usage are
 recorded separately from executor evidence. Missing token telemetry is unknown,
 not zero. Real latency, classifier quality, account access and financial savings
-require an explicitly approved live evaluation; mocked tests cannot establish
-them. See [limitations](docs/LIMITATIONS.md) and [privacy](docs/PRIVACY.md).
+require supported isolation/capability evidence followed by an explicitly approved
+live evaluation; mocked tests cannot establish them. See
+[limitations](docs/LIMITATIONS.md) and [privacy](docs/PRIVACY.md).
 
 The remaining sections describe the released v0.2 compatibility workflow.
 

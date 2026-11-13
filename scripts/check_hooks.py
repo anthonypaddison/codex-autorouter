@@ -394,6 +394,9 @@ def _routing_health(
     if _CONFIGURED_CONFIG_ERROR:
         status = "UNAVAILABLE"
         reasons.append("Autorouter configuration is invalid; rerun setup before configured routing.")
+    elif _CONFIGURED_ROUTING:
+        status = "UNAVAILABLE"
+        reasons.append("Configured AI routing is blocked: classifier tool isolation and current-session child capabilities are unverified.")
     elif not effective.get("available"):
         status = "UNAVAILABLE"
         reasons.append("The supported plugin hook and direct-child routing path is not available in effective configuration.")

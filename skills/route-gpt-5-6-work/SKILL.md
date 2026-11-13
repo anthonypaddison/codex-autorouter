@@ -25,6 +25,12 @@ Choose the least expensive route likely to produce a correct result. Optimize to
 
 ### Configured AI mode (proposed v0.3)
 
+This candidate blocks real classifier launches and configured child execution:
+tool isolation and exact current-session child capabilities remain unverified.
+Do not bypass those guards through another CLI command, a different model,
+fallback, tool flags, hook trust changes or legacy routing. An exact selected
+pair already observed in the root may remain current without delegation.
+
 When the trusted envelope includes `classification`, its model and effort were
 validated against the user's explicit executor configuration. Follow that exact
 direct/current or single-child contract. Do not reclassify it using the legacy

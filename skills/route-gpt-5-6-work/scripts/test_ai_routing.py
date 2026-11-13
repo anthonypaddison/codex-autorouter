@@ -235,19 +235,22 @@ class ClassifierTests(unittest.TestCase):
         timeout = hooks[0]['hooks'][0]['timeout']
         self.assertLess(configuration()['timeout_seconds'], timeout)
 
-    def test_local_fake_process_exercises_bounded_output_and_timeout(self):
+    def test_cli_runner_refuses_even_local_commands_before_process_creation(self):
         cases = [('import time; time.sleep(3)', 0.1, 'classifier_timeout'),
                  ('import sys; sys.stdout.write("x" * 200000)', 1, 'classifier_output_limit')]
         for code, timeout, expected in cases:
             with self.subTest(code=code):
-                with self.assertRaises(self.ai.ClassifierError) as raised:
-                    self.ai.run_cli([sys.executable, '-c', code], '{}', timeout)
-                self.assertEqual(raised.exception.code, expected)
+                with mock.patch('subprocess.Popen', side_effect=OSError('no process may start')):
+                    with self.assertRaises(self.ai.ClassifierError) as raised:
+                        self.ai.run_cli([sys.executable, '-c', code], '{}', timeout)
+                self.assertEqual(raised.exception.code, 'classifier_tool_isolation_unverified')
 
-    def test_local_fake_process_parses_jsonl_not_arbitrary_status_text(self):
+    def test_valid_jsonl_does_not_substitute_for_cli_isolation(self):
         code = 'import sys; sys.stdin.read(); print(' + repr(json.dumps(answer()[0])) + '); print(' + repr(json.dumps(answer()[1])) + ')'
-        events = self.ai.run_cli([sys.executable, '-c', code], '{}', 2)
-        self.assertEqual(events, answer())
+        with mock.patch('subprocess.Popen', side_effect=OSError('no process may start')):
+            with self.assertRaises(self.ai.ClassifierError) as raised:
+                self.ai.run_cli([sys.executable, '-c', code], '{}', 2)
+        self.assertEqual(raised.exception.code, 'classifier_tool_isolation_unverified')
 
 
 class SetupCommandTests(unittest.TestCase):
@@ -271,6 +274,8 @@ class SetupCommandTests(unittest.TestCase):
                 data = json.loads(result.stdout)
                 self.assertEqual(data['status'], 'configured')
                 self.assertEqual(data['model_access'], 'catalogue_only_not_inference_verified')
+                self.assertEqual(data.get('runtime_routing'), 'blocked')
+                self.assertEqual(data.get('executor_compatibility'), 'unverified')
                 self.assertEqual(bool(data['backup']), bool(iteration))
             path = home / 'autorouter/config.json'
             self.assertEqual(json.loads(path.read_text()), configuration())
@@ -279,6 +284,24 @@ class SetupCommandTests(unittest.TestCase):
             self.assertNotEqual(subprocess.run(invalid, capture_output=True, env=env).returncode, 0)
             self.assertEqual(path.read_bytes(), before)
             self.assertFalse((home / 'config.toml').exists())
+
+    def test_status_separates_blocked_configured_routing_from_legacy_compatibility(self):
+        root = Path(__file__).resolve().parents[3]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'routing.json'
+            base = [sys.executable, '-B', str(root / 'scripts/autorouter.py'), 'status', '--config', str(path)]
+            missing = subprocess.run(base, capture_output=True, text=True)
+            self.assertEqual(missing.returncode, 0)
+            self.assertEqual(json.loads(missing.stdout).get('runtime_routing'), 'legacy_compatibility')
+            import routing_config
+            routing_config.save_config(path, configuration())
+            configured = subprocess.run(base, capture_output=True, text=True)
+            self.assertEqual(configured.returncode, 0)
+            status = json.loads(configured.stdout)
+            self.assertEqual(status['runtime_routing'], 'blocked')
+            self.assertEqual(status['classifier_isolation'], 'unverified')
+            self.assertEqual(status['executor_compatibility'], 'unverified')
+            self.assertFalse(status['execution_verified'])
 
 
 class ConfiguredHookTests(unittest.TestCase):
@@ -314,18 +337,19 @@ class ConfiguredHookTests(unittest.TestCase):
     def state(self):
         return json.loads((self.home / 'state/configured-session--configured-turn.json').read_text())
 
-    def test_configured_selection_uses_existing_adapter_without_keyword_classification(self):
+    def test_configured_selection_cannot_authorise_execution_without_host_capabilities(self):
         with mock.patch.object(self.hook, 'classify_prompt', side_effect=AssertionError('legacy path')):
             result = self.hook.handle(self.data)
         state = self.state(); decision = state['decision']
-        self.assertEqual(decision['model'], 'future-large')
-        self.assertEqual(decision['effort'], 'high')
-        self.assertTrue(decision['delegate'])
+        self.assertEqual(decision['classification']['model'], 'future-large')
+        self.assertEqual(decision['route'], 'current')
+        self.assertFalse(decision['delegate'])
+        self.assertEqual(decision['executor_compatibility'], 'unverified')
         self.assertEqual(state['agents'], {})
         self.assertEqual(state['status'], 'ROUTED')
         self.assertFalse(decision['announce_route'])
-        self.assertIn('execution is pending', result['hookSpecificOutput']['additionalContext'])
-        self.assertIn('"model":"future-large"', result['hookSpecificOutput']['additionalContext'])
+        self.assertIn('unverified', result['hookSpecificOutput']['additionalContext'])
+        self.assertEqual(decision['orchestration']['required_agents'], {})
         self.assertEqual(decision['classification']['duration_ms'], 12)
         self.assertNotIn(self.data['prompt'], json.dumps(state))
 
@@ -363,11 +387,13 @@ class ConfiguredHookTests(unittest.TestCase):
         self.assertFalse((self.home / 'state').exists())
         self.assertEqual(self.classifier.call_count, 0)
 
-    def test_configured_spawn_contract_accepts_new_model_and_rejects_outside_allowlist(self):
+    def test_configured_spawn_contract_does_not_confuse_allowlist_with_host_support(self):
         import spawn_compat
         self.hook.handle(self.data)
-        args = spawn_compat.build_arguments(model='future-large', effort='high', task_name='bounded', message='Read only.')
-        self.assertTrue(spawn_compat.validate_arguments(args)['spawn_contract_valid'])
+        args = {'model': 'future-large', 'reasoning_effort': 'high', 'fork_turns': 'none',
+                'task_name': 'bounded', 'message': 'Read only.'}
+        self.assertFalse(spawn_compat.validate_arguments(args)['spawn_contract_valid'])
+        self.assertIn('child_capabilities_unverified', spawn_compat.validate_arguments(args)['reasons'])
         self.assertFalse(spawn_compat.validate_arguments({**args, 'model': 'gpt-6-sol'})['spawn_contract_valid'])
 
     def test_tool_events_never_reclassify(self):
@@ -380,20 +406,31 @@ class ConfiguredHookTests(unittest.TestCase):
         self.hook.handle(self.data)
         self.assertFalse(self.state()['decision']['delegate'])
 
+    def test_fallback_cannot_authorise_a_child_from_catalogue_membership(self):
+        self.classifier.return_value['status'] = 'fallback'
+        self.hook.handle(self.data)
+        decision = self.state()['decision']
+        self.assertFalse(decision['delegate'])
+        self.assertEqual(decision['executor_compatibility'], 'unverified')
+        self.assertEqual(decision['orchestration']['required_agents'], {})
+        self.assertEqual(decision['catalogue_availability'], 'available')
+
     def test_short_continuation_reuses_decision_without_another_classifier_call(self):
         self.hook.handle(self.data)
         self.hook.handle({**self.data, 'turn_id': 'continued-turn', 'prompt': 'Continue.'})
         state = json.loads((self.home / 'state/configured-session--continued-turn.json').read_text())
         self.assertEqual(self.classifier.call_count, 1)
         self.assertEqual(state['decision']['classification']['calls'], 0)
-        self.assertEqual(state['decision']['model'], 'future-large')
+        self.assertEqual(state['decision']['classification']['model'], 'future-large')
+        self.assertFalse(state['decision']['delegate'])
 
     def test_hook_completion_continuation_does_not_reenter_legacy_model_policy(self):
         self.hook.handle(self.data)
         with mock.patch.object(self.hook, '_apply_actual_root_policy', side_effect=AssertionError('legacy policy')):
             self.hook.handle({**self.data, 'turn_id': 'gate-turn', 'prompt': 'Router completion gate: finish verification.'})
         state = json.loads((self.home / 'state/configured-session--gate-turn.json').read_text())
-        self.assertEqual(state['decision']['model'], 'future-large')
+        self.assertEqual(state['decision']['classification']['model'], 'future-large')
+        self.assertFalse(state['decision']['delegate'])
         self.assertEqual(self.classifier.call_count, 1)
 
     def test_missing_authoritative_root_does_not_spend_on_classification(self):
@@ -417,16 +454,16 @@ class ConfiguredHookTests(unittest.TestCase):
         self.assertNotIn('"model":"future-large"', json.dumps(result))
         self.assertEqual(self.state()['status'], 'FAILED_OPEN')
 
-    def test_new_model_child_completes_only_with_exact_existing_lifecycle_evidence(self):
+    def test_lifecycle_evidence_cannot_authorise_an_unverified_spawn_contract(self):
         import spawn_compat
         self.hook.handle(self.data)
         base = {**self.data, 'model': 'future-large', 'model_reasoning_effort': 'high',
                 'agent_id': 'future-child'}
         self.hook.handle({**base, 'hook_event_name': 'SubagentStart'})
-        self.hook.handle({**base, 'turn_id': 'child-turn', 'hook_event_name': 'UserPromptSubmit'})
         self.assertEqual(self.classifier.call_count, 1)
         state = self.state()
-        args = spawn_compat.build_arguments(model='future-large', effort='high', task_name='bounded', message='Read only.')
+        args = {'model': 'future-large', 'reasoning_effort': 'high', 'fork_turns': 'none',
+                'task_name': 'bounded', 'message': 'Read only.'}
         transcript = self.home / 'synthetic-parent.jsonl'
         metadata = {'turn_id': self.data['turn_id']}
         records = [
@@ -443,16 +480,9 @@ class ConfiguredHookTests(unittest.TestCase):
                           'last_assistant_message': 'Evidence: checked\nVerification: checked\nUncertainty: none'})
         self.hook.handle({**self.data, 'hook_event_name': 'Stop'})
         state = self.state()
-        self.assertEqual(state['agents']['future-child']['status'], 'completed')
-        self.assertTrue(state['agent_attestations']['future-child']['matched'])
-        self.assertEqual(state['status'], 'COMPLETE')
+        self.assertEqual(state['status'], 'FAILED_OPEN')
         self.assertEqual(self.classifier.call_count, 1)
-        receipts = json.loads((self.home / 'health/capability-v3.json').read_text())['capabilities']
-        self.assertEqual(len(receipts), 1)
-        receipt = next(iter(receipts.values()))
-        self.assertEqual(receipt['observed_child_model'], 'future-large')
-        self.assertTrue(receipt['spawn_contract_valid'])
-        self.assertTrue(receipt['attestation_matched'])
+        self.assertFalse((self.home / 'health/capability-v3.json').exists())
 
     def test_removed_configuration_does_not_repeat_classification_or_authorise_stale_model(self):
         self.hook.handle(self.data)
@@ -492,6 +522,7 @@ class ConfiguredHookTests(unittest.TestCase):
             current_session_id=self.data['session_id'])
         self.assertFalse(any('not Luna' in reason for reason in health['reasons']))
         self.assertFalse(health['ready'])  # A configured selection is not runtime capability proof.
+        self.assertEqual(health['status'], 'UNAVAILABLE')
 
     def test_invalid_configuration_cannot_leave_health_ready(self):
         import check_hooks
@@ -519,6 +550,40 @@ class ConfiguredHookTests(unittest.TestCase):
         self.assertIn('autorouter.py setup', result['hookSpecificOutput']['additionalContext'])
         self.assertEqual(self.classifier.call_count, 0)
 
+
+
+class RuntimeSafetyTests(unittest.TestCase):
+    def test_default_classifier_stops_before_process_creation_or_fallback(self):
+        import ai_classifier
+        with mock.patch('subprocess.Popen', side_effect=OSError('no process may start')):
+            result = ai_classifier.classify('Classify a harmless calculation.', configuration(), catalogue(), executable='codex')
+        self.assertEqual(result['status'], 'unavailable')
+        self.assertEqual(result['reason_code'], 'classifier_tool_isolation_unverified')
+        self.assertEqual(result['calls'], 0)
+        self.assertIsNone(result['model'])
+        self.assertEqual(result.get('catalogue_availability'), 'available')
+
+    def test_direct_cli_runner_also_refuses_unverified_isolation(self):
+        import ai_classifier
+        failure = None
+        with mock.patch('subprocess.Popen', side_effect=OSError('no process may start')):
+            try:
+                ai_classifier.run_cli(['codex'], '{}', 6)
+            except Exception as exc:
+                failure = exc
+        self.assertIsInstance(failure, ai_classifier.ClassifierError)
+        self.assertEqual(failure.code, 'classifier_tool_isolation_unverified')
+
+    def test_configured_allowlist_does_not_self_attest_child_capability(self):
+        import spawn_compat
+        spawn_compat.configure_models(configuration())
+        self.addCleanup(lambda: spawn_compat.configure_models(None))
+        result = spawn_compat.validate_arguments({'model': 'future-large', 'reasoning_effort': 'high',
+            'fork_turns': 'none', 'task_name': 'bounded', 'message': 'Read only.'})
+        self.assertFalse(result['spawn_contract_valid'])
+        self.assertIn('child_capabilities_unverified', result['reasons'])
+        with self.assertRaises(ValueError):
+            spawn_compat.build_arguments(model='future-large', effort='high', task_name='bounded', message='Read only.')
 
 
 if __name__ == '__main__':
