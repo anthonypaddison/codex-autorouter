@@ -3625,9 +3625,11 @@ def _attest_child(parent_transcript: Path, agent_id: str, expected: dict[str, An
     mutation_seen = False
     recursive_spawn_seen = False
     identity_seen = False
+    completions: set[tuple[str, str]] = set()
+    structured_completion = True
 
     def visit(record: dict[str, Any]) -> bool:
-        nonlocal mutation_seen, recursive_spawn_seen, identity_seen
+        nonlocal mutation_seen, recursive_spawn_seen, identity_seen, structured_completion
         payload = record.get("payload", {})
         if not isinstance(payload, dict):
             raise _TranscriptIncomplete
@@ -3639,6 +3641,21 @@ def _attest_child(parent_transcript: Path, agent_id: str, expected: dict[str, An
             spawn = subagent.get("thread_spawn") if isinstance(subagent, dict) else None
             parent_id = spawn.get("parent_thread_id") if isinstance(spawn, dict) else None
             if payload.get("id") != agent_id or parent_id != parent_session_id:
+                attestation["contradictory"] = True
+            if expected.get("task_path") and (
+                not isinstance(spawn, dict) or spawn.get("agent_path") != expected["task_path"]
+                or spawn.get("depth") != 1
+            ):
+                attestation["contradictory"] = True
+            relevant = True
+        if expected.get("task_path") and record.get("type") == "event_msg" and payload.get("type") == "task_complete":
+            pair = (_bounded_transcript_key(payload.get("root_turn_id")), _bounded_transcript_key(payload.get("turn_id")))
+            if len(completions) == 2 and pair not in completions:
+                raise _TranscriptIncomplete
+            completions.add(pair)
+            message = payload.get("last_agent_message")
+            structured_completion &= isinstance(message, str) and _structured_return(message)
+            if not contexts:
                 attestation["contradictory"] = True
             relevant = True
         if record.get("type") == "turn_context" or payload.get("type") == "turn_context":
@@ -3652,7 +3669,7 @@ def _attest_child(parent_transcript: Path, agent_id: str, expected: dict[str, An
             if context not in contexts or len(contexts) > 1:
                 attestation["contradictory"] = True
             relevant = True
-        record_type = str(record.get("type") or payload.get("type") or "")
+        record_type = str(payload.get("type") if record.get("type") == "response_item" else record.get("type") or payload.get("type") or "")
         if record_type in {"custom_tool_call", "function_call"}:
             joined = _bounded_text(record)
             if re.search(r"\b(apply_patch|Edit|Write|mcp__[^\s]*(?:create|update|write|delete|apply))\b", joined, re.I):
@@ -3685,6 +3702,11 @@ def _attest_child(parent_transcript: Path, agent_id: str, expected: dict[str, An
         attestation["effort"] = effort or None
         attestation["turn_id"] = turn_id or None
         attestation["matched"] = model == expected["model"] and effort == expected["effort"]
+        if expected.get("task_path"):
+            attestation["completion_matched"] = bool(
+                completions == {(str(expected.get("parent_turn_id") or ""), turn_id)} and structured_completion
+            )
+            attestation["matched"] &= attestation["completion_matched"] and not recursive_spawn_seen
         attestation["reconciliation_status"] = "FOUND"
     elif contexts:
         attestation["contradictory"] = True
@@ -3767,7 +3789,8 @@ def _collaboration_spawn(payload: dict[str, Any]) -> tuple[str, str, bool, dict[
     call_id = str(payload.get("call_id") or "")
     if not call_id:
         return None
-    return role, call_id, "service_tier" in arguments, spawn_compat.validate_arguments(arguments)
+    observation = {**spawn_compat.validate_arguments(arguments), "task_name": arguments.get("task_name")}
+    return role, call_id, "service_tier" in arguments, observation
 
 
 def _subagent_activity(
@@ -3796,6 +3819,9 @@ def _subagent_activity(
         "agent_thread_id": item.get("agent_thread_id"),
         "agent_path": item.get("agent_path"),
         "kind": item.get("kind"),
+        "model": item.get("model"),
+        "reasoning_effort": item.get("reasoning_effort"),
+        "parent_bound": True,
     }
 
 
@@ -4230,6 +4256,11 @@ def _subagent_scan_context(state: dict[str, Any]) -> dict[str, Any] | None:
         "agent_paths": {},
         "completed_ids": set(),
         "structured_ids": set(),
+        "task_names": {},
+        "task_outputs": {},
+        "exact_turn_calls": set(),
+        "lifecycle_starts": {},
+        "lifecycle_completions": {},
     }
 
 
@@ -4309,6 +4340,11 @@ def _consume_subagent_record(
         key = "direct:" + call_id
         _remember_spawn_contract(state, key, observation)
         context["contract_calls"][call_id] = [key]
+        name = observation.get("task_name")
+        context["task_names"][call_id] = _bounded_transcript_key(name) if isinstance(name, str) else None
+        metadata = payload.get("internal_chat_message_metadata_passthrough")
+        if isinstance(metadata, dict) and metadata.get("turn_id") == state.get("turn_id"):
+            context["exact_turn_calls"].add(call_id)
         if key not in context["seen_spawn_keys"]:
             context["seen_spawn_keys"].add(key)
             _record_scanned_spawn(state, context, role, tier_overridden)
@@ -4318,6 +4354,17 @@ def _consume_subagent_record(
         call_id = _bounded_transcript_key(activity.get("event_id"))
         agent_id = _bounded_transcript_key(activity.get("agent_thread_id"))
         kind = _bounded_transcript_key(activity.get("kind")).lower()
+        if activity.get("parent_bound") and agent_id and kind in {"started", "completed"}:
+            channel = "lifecycle_starts" if kind == "started" else "lifecycle_completions"
+            if agent_id not in context[channel] and len(context[channel]) >= TRANSCRIPT_MAX_AGENTS:
+                raise _TranscriptIncomplete
+            observations = context[channel].setdefault(agent_id, [])
+            observation = {name: _bounded_transcript_key(activity.get(name))
+                           for name in ("event_id", "agent_path", "model", "reasoning_effort")}
+            if observation not in observations:
+                if len(observations) == 2:
+                    raise _TranscriptIncomplete
+                observations.append(observation)
         keys = context["contract_calls"].get(call_id)
         role = context["spawn_calls"].get(call_id)
         if role is None and isinstance(keys, list) and len(keys) == 1:
@@ -4378,6 +4425,15 @@ def _consume_subagent_record(
         keys = context["contract_calls"].get(call_id)
         if keys:
             agent_ids = _spawn_result_agent_ids(payload.get("output"))
+            task_names = _spawn_result_strings(payload.get("output"), "task_name")
+            metadata = payload.get("internal_chat_message_metadata_passthrough")
+            if task_names:
+                if not isinstance(metadata, dict) or metadata.get("turn_id") != state.get("turn_id"):
+                    raise _TranscriptIncomplete
+                existing = context["task_outputs"].setdefault(call_id, [])
+                existing.extend(name for name in task_names if name not in existing)
+                if len(existing) > 2:
+                    raise _TranscriptIncomplete
             for agent_id in agent_ids:
                 if agent_id not in context["agent_roles"] and len(context["agent_roles"]) >= TRANSCRIPT_MAX_AGENTS:
                     raise _TranscriptIncomplete
@@ -4427,6 +4483,11 @@ def _consume_subagent_record(
 
 def _spawn_result_agent_ids(value: Any) -> list[str]:
     """Read bounded structured host result containers, not arbitrary prose IDs."""
+    return _spawn_result_strings(value, "agent_id")
+
+
+def _spawn_result_strings(value: Any, field: str) -> list[str]:
+    """Extract one allowlisted structured result field with the same I/O limits."""
     found: set[str] = set()
     remaining = [256]
 
@@ -4447,7 +4508,9 @@ def _spawn_result_agent_ids(value: Any) -> list[str]:
             for child in item:
                 visit(child, depth + 1)
         elif isinstance(item, dict):
-            agent_id = item.get("agent_id")
+            agent_id = item.get(field)
+            if field in item and not isinstance(agent_id, str):
+                raise _TranscriptIncomplete
             if isinstance(agent_id, str) and agent_id:
                 found.add(_bounded_transcript_key(agent_id))
             for name in ("content", "text", "structuredContent"):
@@ -4455,6 +4518,43 @@ def _spawn_result_agent_ids(value: Any) -> list[str]:
                     visit(item[name], depth + 1)
     visit(value, 0)
     return sorted(found)
+
+
+def _task_name_bridges(state: dict[str, Any], context: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """A task path is a claim; only an exact call/turn/UUID lifecycle bridge proves it."""
+    bindings = {}
+    for call_id, paths in context["task_outputs"].items():
+        keys = context["contract_calls"].get(call_id, [])
+        starts = [(agent_id, observations[0]) for agent_id, observations in context["lifecycle_starts"].items()
+                  if len(observations) == 1 and observations[0]["event_id"] == call_id]
+        name = context["task_names"].get(call_id)
+        valid = (state.get("plugin_identity") == PLUGIN_IDENTITY
+                 and len(keys) == len(paths) == len(starts) == 1 and call_id in context["exact_turn_calls"]
+                 and isinstance(name, str) and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,159}", name))
+        if valid:
+            agent_id, start = starts[0]
+            completions = context["lifecycle_completions"].get(agent_id, [])
+            contract = state["spawn_contracts"][keys[0]]
+            valid = bool(
+                re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", agent_id)
+                and paths[0] == start["agent_path"] == "/root/" + name
+                and len(completions) == 1 and completions[0]["agent_path"] == paths[0]
+                and start["model"] == contract.get("model")
+                and start["reasoning_effort"] in {"", contract.get("effort")}
+                and completions[0]["model"] in {"", contract.get("model")}
+                and completions[0]["reasoning_effort"] in {"", contract.get("effort")}
+                and sum(obs["agent_path"] == paths[0] for values in context["lifecycle_starts"].values() for obs in values) == 1
+                and sum(paths[0] in values for values in context["task_outputs"].values()) == 1
+                and contract.get("spawn_contract_valid") is True
+            )
+        if valid:
+            bindings[agent_id] = {"path": paths[0], "start": start, "stop": completions[0]}
+        else:
+            for key in keys:
+                contract = state["spawn_contracts"][key]
+                contract["spawn_contract_valid"] = False
+                contract["reasons"] = sorted(set(contract.get("reasons", [])) | {"unproven_task_name_bridge"})
+    return bindings
 
 
 def _apply_subagent_scan(state: dict[str, Any], path: Path, context: dict[str, Any]) -> str:
@@ -4467,6 +4567,7 @@ def _apply_subagent_scan(state: dict[str, Any], path: Path, context: dict[str, A
     state.setdefault("agents", {})
     state.setdefault("agent_attestations", {})
     children = state.setdefault("transcript_reconciliation", {}).setdefault("children", {})
+    task_bridges = _task_name_bridges(state, context)
     # Resolve all bindings/conflicts before any child can write a receipt.
     for agent_id, keys in context["agent_contracts"].items():
         _bind_spawn_contract(state, agent_id, keys)
@@ -4484,12 +4585,19 @@ def _apply_subagent_scan(state: dict[str, Any], path: Path, context: dict[str, A
         }
         state["agents"][agent_id].setdefault("spawn_contract_valid", False)
         state["agents"][agent_id].setdefault("spawn_contract_reasons", ["unproven_spawn_call"])
+        bridge = task_bridges.get(agent_id)
+        if bridge:
+            agent = state["agents"][agent_id]
+            agent.setdefault("start_observed_model", bridge["start"]["model"])
+            agent.setdefault("start_observed_effort", bridge["start"]["reasoning_effort"])
+            agent.setdefault("prompt_observations", [])
         _populate_bound_child_intent(state, agent_id)
         if context["plan"]["mode"] == "routing_council" and existing.get("phase") == "execution":
             context["plan"]["execution_agent_id"] = agent_id
         if role in ROUTES:
             attestation = _attest_child(path, agent_id, {
                 **ROUTES[role], "parent_session_id": state.get("session_id"),
+                **({"task_path": bridge["path"], "parent_turn_id": state.get("turn_id")} if bridge else {}),
             })
             children[agent_id] = {
                 "status": attestation["reconciliation_status"],
@@ -4499,6 +4607,9 @@ def _apply_subagent_scan(state: dict[str, Any], path: Path, context: dict[str, A
             if int(attestation.get("candidate_count") or 0) > 0:
                 state["agent_attestations"][agent_id] = attestation
             if attestation.get("model") is not None:
+                if bridge and attestation.get("matched") and attestation.get("completion_matched"):
+                    state["agents"][agent_id].setdefault("stop_observed_model", attestation["model"])
+                    state["agents"][agent_id].setdefault("stop_model_evidence", "exact_child_completion")
                 _bind_child_transcript_evidence(state, agent_id, attestation)
         if _spawn_contract_compliant(state, agent_id) and agent_id in context["completed_ids"] and agent_id in context["structured_ids"] and role not in state["subagents_completed"]:
             state["subagents_completed"].append(role)
@@ -4667,6 +4778,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         state = {
             "version": STATE_VERSION,
             "plugin_version": PLUGIN_VERSION,
+            "plugin_identity": PLUGIN_IDENTITY,
             "runtime_identity": _runtime_identity(data),
             "root_observation_error": root_observation_error,
             "status": "ROUTED",
