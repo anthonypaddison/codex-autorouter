@@ -18,6 +18,8 @@ class Gpt61SpawnTests(unittest.TestCase):
             self.assertEqual("none", args["fork_turns"])
             self.assertNotIn("service_tier", args)
             self.assertIsNotNone(spawn_compat.role_for(model, "high"))
+            self.assertEqual({"model": model, "effort": "high", "profile": "high"},
+                             spawn_compat.current_role_spec(spawn_compat.role_for(model, "high")))
             with self.assertRaises(ValueError):
                 spawn_compat.build_policy_arguments(
                     profile_id="high", model="gpt-6-sol", effort="high", discovery_state="available",
@@ -26,6 +28,27 @@ class Gpt61SpawnTests(unittest.TestCase):
 
 
 class SpawnCompatibilityTests(unittest.TestCase):
+    def test_current_model_only_lifecycle_resolves_one_approved_profile(self) -> None:
+        for role in ("gpt6_sol_balanced", "gpt6_sol_high", "gpt6_sol_xhigh"):
+            with self.subTest(role=role):
+                self.assertEqual(role, spawn_compat.role_from_event({"model": "gpt-6-sol"}, [role]))
+
+    def test_model_only_lifecycle_cannot_choose_between_current_profiles(self) -> None:
+        self.assertIsNone(spawn_compat.role_from_event(
+            {"model": "gpt-6-sol", "agent_type": "default"},
+            ["gpt6_sol_balanced", "gpt6_sol_high"],
+        ))
+
+    def test_historical_model_observation_cannot_become_active_spawn_support(self) -> None:
+        event = {"model": "gpt-5.6-sol", "reasoning_effort": "high", "agent_type": "gpt56_sol_deep"}
+        self.assertEqual("gpt56_sol_deep", spawn_compat.role_from_event(event, ["gpt56_sol_deep"]))
+        contract = spawn_compat.validate_arguments({
+            "model": "gpt-5.6-sol", "reasoning_effort": "high", "fork_turns": "none",
+            "task_name": "historical", "message": "Inspect only.",
+        })
+        self.assertFalse(contract["spawn_contract_valid"])
+        self.assertEqual({}, spawn_compat.current_role_spec("gpt56_sol_deep"))
+
     def test_observed_contract_requires_every_adapter_field(self) -> None:
         valid = spawn_compat.build_arguments(
             model="gpt-6-sol", effort="medium", task_name="bounded", message="Inspect only.",

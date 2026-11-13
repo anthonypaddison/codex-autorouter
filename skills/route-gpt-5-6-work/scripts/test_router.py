@@ -113,6 +113,311 @@ class Gpt61RegressionTests(unittest.TestCase):
                         ).value)
 
 
+class RootEffortAcquisitionTests(unittest.TestCase):
+    SESSION = "019ff128-c8a7-7880-8ebd-7a739814258f"
+    TURN = "01a0f1e6-ea3a-7851-aa9f-81fde79a98af"
+    OTHER = "01a0f1e7-148c-7bc0-b10a-5312e8e2e8b9"
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.home = Path(self.temp.name).resolve()
+        for name, value in {
+            "CODEX_HOME": self.home, "CONFIG_PATH": self.home / "config.toml",
+            "PROFILE_PATH": self.home / "routing-profile.json", "STATE_ROOT": self.home / "state",
+            "HEALTH_ROOT": self.home / "health", "ROOT_OBSERVATION_PATH": self.home / "health/root-observation-v1.json",
+            "CAPABILITY_PATH": self.home / "health/capability-v3.json",
+        }.items():
+            patch = mock.patch.object(router_hook, name, value)
+            patch.start()
+            self.addCleanup(patch.stop)
+        availability = mock.patch.object(router_hook, "_availability_for", return_value="available")
+        availability.start()
+        self.addCleanup(availability.stop)
+        self.path = self.home / "sessions/2026/09/30" / f"rollout-2026-09-30T11-40-29-{self.SESSION}.jsonl"
+        self.path.parent.mkdir(parents=True)
+        self.base = {
+            "hook_event_name": "UserPromptSubmit", "session_id": self.SESSION, "turn_id": self.TURN,
+            "model": "gpt-6-luna", "transcript_path": str(self.path), "prompt": "Return only 2.",
+            "runtime_version": "1.2.3", "host_type": "Desktop",
+        }
+
+    def _context(self, effort="low", **changes):
+        return {"type": "turn_context", "payload": {
+            "turn_id": self.TURN, "root_turn_id": self.TURN, "model": "gpt-6-luna", "effort": effort, **changes,
+        }}
+
+    def _write(self, records=None, *, session=None):
+        records = [self._context()] if records is None else records
+        metadata = {"type": "session_meta", "payload": {"id": session or self.SESSION}}
+        self.path.write_text("".join(json.dumps(r) + "\n" for r in [metadata, *records]), encoding="utf-8")
+
+    def _run(self, **changes):
+        data = {**self.base, **changes}
+        router_hook.handle(data)
+        ledger = router_hook.STATE_ROOT / f"{data['session_id']}--{data['turn_id']}.json"
+        return json.loads(ledger.read_text())["decision"]
+
+    def _unknown(self, status, **changes):
+        decision = self._run(**changes)
+        self.assertEqual("unknown", decision["task_profile"]["active_effort"])
+        self.assertEqual("unavailable", decision["effort_evidence"])
+        self.assertEqual(status, decision.get("root_effort_lookup_status"))
+
+    def test_direct_authoritative_hook_effort_wins_without_transcript_open(self):
+        self._write([self._context("low")])
+        original = os.open
+        transcript_opens = []
+        def opening(path, *args, **kwargs):
+            if str(path) in {str(self.path), self.path.name}:
+                transcript_opens.append(path)
+            return original(path, *args, **kwargs)
+        with mock.patch.object(router_hook.os, "open", side_effect=opening):
+            decision = self._run(model_reasoning_effort="high")
+        self.assertEqual("high", decision["task_profile"]["active_effort"])
+        self.assertEqual("hook_observed", decision["effort_evidence"])
+        self.assertEqual([], transcript_opens)
+
+    def test_gpt61_recovers_effort_and_runtime_from_the_same_session(self):
+        model = "gpt-6.1-sol"
+        records = [
+            {"type": "session_meta", "payload": {
+                "id": self.SESSION, "cli_version": "0.167.0-alpha.4.1", "originator": "codex_work_desktop",
+            }},
+            self._context("medium", model=model),
+        ]
+        self.path.write_text("".join(json.dumps(record) + "\n" for record in records), encoding="utf-8")
+        decision = self._run(model=model, runtime_version=None, host_type=None,
+                             prompt="Debug a race condition across three modules.")
+        self.assertEqual("exact_turn_context", decision["root_effort_evidence"])
+        self.assertEqual(model, decision["model"])
+        self.assertEqual("high", decision["effort"])
+        ledger = json.loads((router_hook.STATE_ROOT / f"{self.SESSION}--{self.TURN}.json").read_text())
+        self.assertEqual("0.167.0-alpha.4.1", ledger["runtime_identity"]["runtime_version"])
+        self.assertEqual("exact_session_metadata", ledger["runtime_identity"]["runtime_identity_source"])
+
+    def test_exact_low_medium_high_recovery_and_provenance(self):
+        for effort in ("low", "medium", "high"):
+            with self.subTest(effort=effort):
+                self._write([self._context(effort)])
+                decision = self._run()
+                self.assertEqual(effort, decision["task_profile"]["active_effort"])
+                self.assertEqual("exact_turn_context", decision["effort_evidence"])
+                self.assertEqual("FOUND_EXACT", decision.get("root_effort_lookup_status"))
+                observation = json.loads(router_hook.ROOT_OBSERVATION_PATH.read_text())
+                self.assertEqual(effort, observation.get("root_effort"))
+                self.assertEqual("exact_turn_context", observation.get("root_effort_evidence"))
+                self.assertEqual("UserPromptSubmit.model", observation.get("root_model_evidence"))
+
+    def test_exact_session_identity_mismatch_is_unproven(self):
+        self._write(session=self.OTHER)
+        self._unknown("IDENTITY_UNPROVEN")
+
+    def test_exact_turn_only_not_nearest_or_prompt_matching(self):
+        self._write([self._context(turn_id=self.OTHER, root_turn_id=self.OTHER),
+                     {"type": "response_item", "payload": {"text": "Return only 2. effort low"}}])
+        self._unknown("NOT_FOUND")
+
+    def test_missing_context_is_complete_absence(self):
+        self._write([])
+        self._unknown("NOT_FOUND")
+
+    def test_duplicate_identical_contexts_are_nonconflicting(self):
+        self._write([self._context(), self._context()])
+        decision = self._run()
+        self.assertEqual("low", decision["task_profile"]["active_effort"])
+        self.assertEqual("FOUND_EXACT", decision.get("root_effort_lookup_status"))
+
+    def test_conflicting_effort_or_model_is_unproven(self):
+        for second in (self._context("high"), self._context(model="gpt-6-sol")):
+            with self.subTest(second=second):
+                self._write([self._context(), second])
+                self._unknown("CONFLICT")
+
+    def test_hook_model_conflict_is_unproven(self):
+        self._write([self._context(model="gpt-6-sol")])
+        self._unknown("CONFLICT")
+
+    def test_wrong_root_turn_or_explicit_session_is_unproven(self):
+        for context in (self._context(root_turn_id=self.OTHER), self._context(session_id=self.OTHER)):
+            with self.subTest(context=context):
+                self._write([context])
+                self._unknown("IDENTITY_UNPROVEN")
+
+    def test_malformed_evidence_after_match_cannot_partially_establish_proof(self):
+        self._write()
+        with self.path.open("ab") as stream:
+            stream.write(b"not JSON\n")
+        self._unknown("MALFORMED")
+
+    def test_incomplete_final_record_is_not_absence(self):
+        self._write([])
+        with self.path.open("ab") as stream:
+            stream.write(b'{"type":"turn_context"')
+        self._unknown("MALFORMED")
+
+    def test_oversized_line_and_scan_limit_fail_closed(self):
+        self._write([])
+        with self.path.open("ab") as stream:
+            stream.write(b'{"text":"')
+            for _ in range(17):
+                stream.write(b"x" * (1024 * 1024))
+            stream.write(b'"}\n')
+        self._unknown("BOUND_EXCEEDED")
+
+    def test_large_transcript_uses_bounded_complete_tail_records(self):
+        self._write([])
+        filler = json.dumps({"type": "response_item", "payload": {"text": "x" * 60000}}).encode() + b"\n"
+        with self.path.open("ab") as stream:
+            for _ in range(145):
+                stream.write(filler)
+            stream.write(json.dumps(self._context()).encode() + b"\n")
+        self.assertGreater(self.path.stat().st_size, 8 * 1024 * 1024)
+        decision = self._run()
+        self.assertEqual("low", decision["task_profile"]["active_effort"])
+        self.assertEqual("FOUND_EXACT", decision.get("root_effort_lookup_status"))
+
+    def test_omitted_context_is_incomplete_not_not_found(self):
+        self._write()
+        filler = json.dumps({"type": "response_item", "payload": {"text": "x" * 60000}}).encode() + b"\n"
+        with self.path.open("ab") as stream:
+            for _ in range(145):
+                stream.write(filler)
+        self._unknown("BOUND_EXCEEDED")
+
+    def test_traversal_wrong_filename_and_missing_supplied_path_are_rejected(self):
+        self._write()
+        for path in (str(self.path.parent / ".." / "30" / self.path.name),
+                     str(self.path).replace(self.SESSION, self.OTHER), None):
+            with self.subTest(path=path):
+                self._unknown("PATH_REJECTED", transcript_path=path)
+
+    def test_symlink_file_or_directory_escape_rejected(self):
+        self._write()
+        target = self.home / "elsewhere.jsonl"
+        self.path.rename(target)
+        try:
+            self.path.symlink_to(target)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlink creation unavailable on this host")
+        self._unknown("PATH_REJECTED")
+        self.path.unlink()
+        target.rename(self.path)
+        actual = self.home / "real-day"
+        self.path.parent.rename(actual)
+        self.path.parent.symlink_to(actual, target_is_directory=True)
+        self._unknown("PATH_REJECTED")
+
+    def test_hardlink_is_rejected(self):
+        self._write()
+        os.link(self.path, self.home / "hardlink.jsonl")
+        self._unknown("PATH_REJECTED")
+
+    def test_config_effort_cannot_establish_proof(self):
+        router_hook.CONFIG_PATH.write_text('model_reasoning_effort = "high"\n')
+        self._write([])
+        self._unknown("NOT_FOUND")
+
+    def test_descriptor_replacement_between_check_and_open_is_rejected(self):
+        self._write()
+        replacement = self.home / "replacement.jsonl"
+        replacement.write_bytes(self.path.read_bytes())
+        opening = os.open
+        def replace_then_open(path, *args, **kwargs):
+            if str(path) in {str(self.path), self.path.name}:
+                os.replace(replacement, self.path)
+            return opening(path, *args, **kwargs)
+        with mock.patch.object(router_hook.os, "open", side_effect=replace_then_open):
+            self._unknown("PATH_REJECTED")
+
+    def test_descriptor_becoming_hardlinked_during_scan_is_rejected(self):
+        self._write()
+        fstat = os.fstat
+        regular_checks = 0
+        class LinkedInfo:
+            st_nlink = 2
+            def __init__(self, info):
+                self.info = info
+            def __getattr__(self, name):
+                return getattr(self.info, name)
+        def changed(fd):
+            nonlocal regular_checks
+            info = fstat(fd)
+            if router_hook.stat.S_ISREG(info.st_mode):
+                regular_checks += 1
+                if regular_checks > 1:
+                    return LinkedInfo(info)
+            return info
+        with mock.patch.object(router_hook.os, "fstat", side_effect=changed):
+            self._unknown("PATH_REJECTED")
+
+    def test_one_open_actual_io_bounded_for_16_32_64_mib_transcripts(self):
+        original_reader, opening = router_hook._BoundedTranscriptReader, os.open
+        filler = json.dumps({"type": "response_item", "payload": {"text": "x" * 60000}}).encode() + b"\n"
+        for mib in (16, 32, 64):
+            with self.subTest(mib=mib):
+                self._write([])
+                with self.path.open("ab") as stream:
+                    for _ in range(mib * 1024 * 1024 // len(filler) + 1):
+                        stream.write(filler)
+                    stream.write(json.dumps(self._context()).encode() + b"\n")
+                readers, opens = [], []
+                def reader(*args):
+                    instance = original_reader(*args)
+                    readers.append(instance)
+                    return instance
+                def opened(path, *args, **kwargs):
+                    if str(path) in {str(self.path), self.path.name}:
+                        opens.append(path)
+                    return opening(path, *args, **kwargs)
+                tracemalloc.start()
+                try:
+                    with mock.patch.object(router_hook, "_BoundedTranscriptReader", side_effect=reader), mock.patch.object(router_hook.os, "open", side_effect=opened):
+                        decision = self._run()
+                    peak = tracemalloc.get_traced_memory()[1]
+                finally:
+                    tracemalloc.stop()
+                self.assertEqual("FOUND_EXACT", decision.get("root_effort_lookup_status"))
+                self.assertEqual(1, len(opens))
+                self.assertEqual(1, len(readers))
+                self.assertLessEqual(readers[0].bytes_scanned, 8 * 1024 * 1024)
+                self.assertLess(peak, 2 * 1024 * 1024)
+
+    def test_recovered_root_effort_reaches_unchanged_balanced_and_high_policy(self):
+        prompts = (
+            ("Add pagination to this endpoint and include targeted tests for the changed behavior.", "gpt6_sol_balanced", "medium"),
+            ("Review OAuth token handling for auth bypasses and leaked credentials.", "gpt6_sol_high", "high"),
+        )
+        for prompt, route, effort in prompts:
+            with self.subTest(route=route):
+                self._write()
+                decision = self._run(prompt=prompt)
+                self.assertEqual(route, decision["route"])
+                self.assertEqual(effort, decision["effort"])
+                self.assertEqual("approved", decision["route_policy_outcome"])
+                self.assertEqual("exact_turn_context", decision.get("root_effort_evidence"))
+                self.assertEqual("owned_agent_config_intent", decision["effort_evidence"])
+                self.assertNotEqual("gpt-6-astra", decision["model"])
+
+    def test_observations_and_ledgers_do_not_persist_prompt_or_path(self):
+        self._write()
+        self._run(prompt="Return only 2. PRIVATE_PROBE_SENTINEL")
+        for root in (router_hook.STATE_ROOT, router_hook.HEALTH_ROOT):
+            for file in root.rglob("*.json"):
+                text = file.read_text()
+                self.assertNotIn("PRIVATE_PROBE_SENTINEL", text)
+                self.assertNotIn(str(self.path), text)
+
+    def test_five_diagnostic_equivalents_agree_without_live_transcripts(self):
+        for requested in (2, 4, 6, 8, 10):
+            with self.subTest(requested=requested):
+                self._write()
+                decision = self._run(prompt=f"Return only {requested}. Do not use tools or create child agents.")
+                self.assertEqual("low", decision["task_profile"]["active_effort"])
+                self.assertEqual("exact_turn_context", decision["effort_evidence"])
+                self.assertEqual("current", decision["route"])
+
+
 class Gpt6PolicyIntegrationTests(unittest.TestCase):
     def test_luna_low_trivial_root_stays_local(self):
         decision = router_hook.classify_prompt("Return only 42.", "gpt-6-luna", "low", enforce_active_root=True)
@@ -913,6 +1218,152 @@ class ChildDiscoveryTests(unittest.TestCase):
 
         with mock.patch.object(router_hook.os, "fstat", side_effect=changed):
             self.assertEqual("PATH_REJECTED", self._attest()["reconciliation_status"])
+
+
+class Gpt6ChildLifecycleBindingTests(unittest.TestCase):
+    def setUp(self) -> None:
+        RouterTests.setUp(self)
+
+    def tearDown(self) -> None:
+        RouterTests.tearDown(self)
+
+    def _planned_child(self, effort: str = "medium", *, args_changes: dict | None = None,
+                       allowed: list[str] | None = None) -> tuple[dict, Path, str]:
+        role = {"medium": "gpt6_sol_balanced", "high": "gpt6_sol_high", "xhigh": "gpt6_sol_xhigh"}[effort]
+        base = {"session_id": "gpt6-binding", "turn_id": "parent"}
+        router_hook.handle({**base, "hook_event_name": "UserPromptSubmit", "model": "gpt-6-luna",
+                            "prompt": "Implement a bounded endpoint with targeted unit tests."})
+        state = RouterTests._ledger(self, "gpt6-binding", "parent")
+        state["decision"]["orchestration"] = {
+            "mode": "single_delegate", "allowed_agents": allowed if allowed is not None else [role],
+            "required_agents": {role: 1}, "max_workers": 1, "max_depth": 1,
+        }
+        router_hook._write_existing_state(base, state)
+        arguments = {"model": "gpt-6-sol", "reasoning_effort": effort, "fork_turns": "none",
+                     "task_name": "bounded-inspector", "message": "Inspect the fixture and report the result."}
+        arguments.update(args_changes or {})
+        child_id = "00000000-0000-7000-8000-000000000321"
+        records = [{"type": "response_item", "payload": {
+            "type": "function_call", "name": "spawn_agent", "namespace": "collaboration",
+            "call_id": "exact-spawn", "arguments": json.dumps(arguments),
+            "internal_chat_message_metadata_passthrough": {"turn_id": "parent"},
+        }}, {"type": "event_msg", "payload": {
+            "type": "item_completed", "thread_id": "gpt6-binding", "turn_id": "parent",
+            "item": {"type": "SubAgentActivity", "id": "exact-spawn", "kind": "started",
+                     "agent_thread_id": child_id, "agent_path": "/root/bounded-inspector"},
+        }}]
+        path = Path(self.temp.name) / "parent.jsonl"
+        path.write_text("".join(json.dumps(item) + "\n" for item in records), encoding="utf-8")
+        return base, path, child_id
+
+    def test_model_only_start_retains_exact_requested_profile_without_false_route_up(self) -> None:
+        for effort, role, profile in (("medium", "gpt6_sol_balanced", "balanced"),
+                                     ("high", "gpt6_sol_high", "high"),
+                                     ("xhigh", "gpt6_sol_xhigh", "high")):
+            with self.subTest(effort=effort):
+                base, path, child_id = self._planned_child(effort)
+                result = router_hook.handle({**base, "hook_event_name": "SubagentStart",
+                    "agent_id": child_id, "agent_type": "default", "model": "gpt-6-sol",
+                    "transcript_path": str(path)})
+                child = RouterTests._ledger(self, "gpt6-binding", "parent")["agents"][child_id]
+                self.assertEqual(role, child["type"])
+                self.assertTrue(child["expected_by_parent"])
+                self.assertEqual(effort, child["requested_effort"])
+                self.assertEqual(profile, child.get("requested_profile"))
+                self.assertEqual("direct:exact-spawn", child["spawn_call_key"])
+                self.assertNotIn("return ROUTE_UP", result["hookSpecificOutput"]["additionalContext"])
+                self.assertNotIn("worker cap", result["hookSpecificOutput"]["additionalContext"].split("Terminal hooks")[1])
+
+    def test_reconciliation_populates_bound_parent_intent_and_exact_child_turn(self) -> None:
+        base, path, child_id = self._planned_child()
+        router_hook.handle({**base, "hook_event_name": "SubagentStart", "agent_id": child_id,
+                            "agent_type": "default", "model": "gpt-6-sol"})
+        RouterTests._write_child_transcript(self, base["session_id"], child_id, "gpt-6-sol", "medium")
+        router_hook.handle({**base, "hook_event_name": "SubagentStop", "agent_id": child_id,
+            "model": "gpt-6-sol", "turn_id": "child-turn",
+            "last_assistant_message": "Evidence: fixture inspected\nVerification: checked\nUncertainty: none"})
+        state = RouterTests._ledger(self, "gpt6-binding", "parent")
+        router_hook._reconcile_subagent_transcript({"transcript_path": str(path)}, state)
+        child = state["agents"][child_id]
+        self.assertTrue(child["expected_by_parent"])
+        self.assertEqual("medium", child["requested_effort"])
+        self.assertEqual("balanced", child.get("requested_profile"))
+        self.assertEqual("child-turn", child["child_turn_id"])
+        self.assertEqual("parent", child["parent_turn_id"])
+        self.assertNotIn("Inspect the fixture", json.dumps(state))
+        self.assertNotIn(str(path), json.dumps(state))
+
+    def test_exact_spawn_intent_disambiguates_same_model_profiles(self) -> None:
+        base, path, child_id = self._planned_child("high", allowed=["gpt6_sol_balanced", "gpt6_sol_high"])
+        state = RouterTests._ledger(self, "gpt6-binding", "parent")
+        state["agents"][child_id] = {"type": "", "expected_by_parent": False,
+                                    "requested_effort": None, "requested_model": "gpt-6-sol"}
+        router_hook._reconcile_subagent_transcript({"transcript_path": str(path)}, state)
+        child = state["agents"][child_id]
+        self.assertEqual("gpt6_sol_high", child["type"])
+        self.assertTrue(child["expected_by_parent"])
+        self.assertEqual("high", child["requested_effort"])
+        self.assertEqual("parent", child.get("parent_turn_id"))
+
+    def test_unplanned_or_malformed_child_does_not_gain_parent_expectation(self) -> None:
+        for changes, allowed in (({}, []), ({"fork_turns": "all"}, ["gpt6_sol_balanced"]),
+                                 ({"model": "gpt-6.1-sol"}, ["gpt6_sol_balanced"]),
+                                 ({"reasoning_effort": "ultra"}, ["gpt6_sol_balanced"])):
+            with self.subTest(changes=changes, allowed=allowed):
+                base, path, child_id = self._planned_child(args_changes=changes, allowed=allowed)
+                state = RouterTests._ledger(self, "gpt6-binding", "parent")
+                router_hook._reconcile_subagent_transcript({"transcript_path": str(path)}, state)
+                self.assertFalse(state.get("agents", {}).get(child_id, {}).get("expected_by_parent", False))
+                self.assertFalse(router_hook._record_capability(state, child_id))
+
+    def test_conflicting_hook_model_or_effort_cannot_borrow_bound_role(self) -> None:
+        for model, effort in (("gpt-6-astra", None), ("gpt-6-sol", "high")):
+            with self.subTest(model=model, effort=effort):
+                base, path, child_id = self._planned_child()
+                event = {**base, "hook_event_name": "SubagentStart", "agent_id": child_id,
+                         "model": model, "transcript_path": str(path)}
+                if effort:
+                    event["reasoning_effort"] = effort
+                result = router_hook.handle(event)
+                child = RouterTests._ledger(self, "gpt6-binding", "parent")["agents"][child_id]
+                self.assertFalse(child["expected_by_parent"])
+                self.assertIn("does not match", result["hookSpecificOutput"]["additionalContext"])
+
+    def test_duplicate_start_preserves_exact_prompt_turn_observation(self) -> None:
+        base, path, child_id = self._planned_child()
+        event = {**base, "hook_event_name": "SubagentStart", "agent_id": child_id,
+                 "model": "gpt-6-sol", "transcript_path": str(path)}
+        router_hook.handle(event)
+        router_hook.handle({**base, "hook_event_name": "UserPromptSubmit", "turn_id": "child-turn",
+            "agent_id": child_id, "model": "gpt-6-sol", "model_reasoning_effort": "medium",
+            "prompt": "Inspect only."})
+        router_hook.handle(event)
+        child = RouterTests._ledger(self, "gpt6-binding", "parent")["agents"][child_id]
+        self.assertEqual("child-turn", child["child_turn_id"])
+        self.assertEqual(1, len(child["prompt_observations"]))
+
+    def test_missing_or_wrong_call_identity_cannot_credit_intent(self) -> None:
+        for field, value in (("id", "other-call"), ("agent_thread_id", "different-child")):
+            with self.subTest(field=field):
+                base, path, child_id = self._planned_child()
+                records = [json.loads(line) for line in path.read_text().splitlines()]
+                records[1]["payload"]["item"][field] = value
+                path.write_text("".join(json.dumps(item) + "\n" for item in records), encoding="utf-8")
+                state = RouterTests._ledger(self, "gpt6-binding", "parent")
+                router_hook._reconcile_subagent_transcript({"transcript_path": str(path)}, state)
+                self.assertFalse(router_hook._spawn_contract_compliant(state, child_id))
+                self.assertFalse(state.get("agents", {}).get(child_id, {}).get("expected_by_parent", False))
+
+    def test_unbound_model_only_multi_profile_start_reports_binding_failure_not_route_up(self) -> None:
+        base, _, child_id = self._planned_child("high", allowed=["gpt6_sol_balanced", "gpt6_sol_high"])
+        result = router_hook.handle({**base, "hook_event_name": "SubagentStart", "agent_id": child_id,
+                                    "model": "gpt-6-sol", "agent_type": "default"})
+        context = result["hookSpecificOutput"]["additionalContext"]
+        self.assertNotIn("return ROUTE_UP", context)
+        self.assertIn("binding", context)
+        child = RouterTests._ledger(self, "gpt6-binding", "parent")["agents"][child_id]
+        self.assertFalse(child["expected_by_parent"])
+        self.assertFalse(child["spawn_contract_valid"])
 
 
 class ObservedSpawnContractTests(unittest.TestCase):
@@ -5840,7 +6291,7 @@ class RouterTests(unittest.TestCase):
             })
         ledger = json.loads((Path(self.temp.name) / "cap--t1.json").read_text())
         self.assertIn("worker_cap_exceeded:3", ledger["violations"])
-        self.assertIn("unexpected_agent:gpt56_luna_worker", ledger["violations"])
+        self.assertIn("unexpected_agent:", ledger["violations"])
 
     def test_staged_plans_enforce_agent_order(self) -> None:
         router_hook.handle({
@@ -6176,7 +6627,7 @@ class RouterTests(unittest.TestCase):
         router_hook.handle(start)
         router_hook.handle({
             "hook_event_name": "SubagentStart", "session_id": "s5", "turn_id": "child-turn",
-            "agent_type": "gpt56_terra_deep",
+            "agent_type": "default", "model": "gpt-6-sol", "reasoning_effort": "high",
         })
         ledger = json.loads((Path(self.temp.name) / "s5--parent-turn.json").read_text())
         self.assertIn("gpt6_sol_high", ledger["subagents_started"])

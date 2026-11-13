@@ -103,6 +103,8 @@ STATE_VERSION = 4
 STATE_MARKER_SCHEMA = 1
 MAX_CHILD_PROMPT_OBSERVATIONS = 64
 TRANSCRIPT_MAX_LINE_BYTES = 16 * 1024 * 1024
+ROOT_EFFORT_MAX_SCAN_BYTES = 8 * 1024 * 1024
+ROOT_EFFORT_MAX_HEADER_BYTES = 64 * 1024
 TRANSCRIPT_MAX_RETAINED_TEXT_BYTES = 256 * 1024
 TRANSCRIPT_MAX_CALLS = 256
 TRANSCRIPT_MAX_AGENTS = 64
@@ -685,12 +687,100 @@ def _active_effort(data: dict[str, Any]) -> str:
     return raw.lower() if isinstance(raw, str) and raw.lower() in model_policy.ROOT_EFFORTS else "unknown"
 
 
-def _effort_evidence(data: dict[str, Any], decision: dict[str, Any]) -> str:
+def _effort_evidence(
+    data: dict[str, Any], decision: dict[str, Any], root_effort: dict[str, Any] | None = None,
+) -> str:
     if decision.get("route") != "current":
         return "owned_agent_config_intent"
+    if root_effort is not None:
+        return str(root_effort["root_effort_evidence"])
     if isinstance(data.get("model_reasoning_effort"), str):
         return "hook_observed"
     return "unavailable"
+
+
+def _acquire_root_effort(data: dict[str, Any]) -> dict[str, str]:
+    """One immediate exact lookup; never substitute config or a neighbouring turn."""
+    effort = _active_effort(data)
+    result = {
+        "root_effort": effort, "root_effort_evidence": "hook_observed" if effort != "unknown" else "unavailable",
+        "root_effort_lookup_status": "HOOK_DIRECT" if effort != "unknown" else "IDENTITY_UNPROVEN",
+    }
+    if effort != "unknown":
+        return result
+    session, turn, model = data.get("session_id"), data.get("turn_id"), data.get("model")
+    uuid = r"[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}"
+    if not all(isinstance(value, str) and re.fullmatch(uuid, value) for value in (session, turn)) or not isinstance(model, str) or not model:
+        return result
+    supplied = data.get("transcript_path")
+    result["root_effort_lookup_status"] = "PATH_REJECTED"
+    if not isinstance(supplied, str) or len(supplied) > 4096 or "\0" in supplied:
+        return result
+    path = Path(supplied)
+    if not path.is_absolute() or ".." in path.parts:
+        return result
+    try:
+        parts = path.relative_to(CODEX_HOME.resolve(strict=True)).parts
+    except (ValueError, OSError, RuntimeError):
+        return result
+    dated = (
+        len(parts) == 5 and parts[0] == "sessions"
+        and re.fullmatch(r"[0-9]{4}", parts[1])
+        and re.fullmatch(r"(?:0[1-9]|1[0-2])", parts[2])
+        and re.fullmatch(r"(?:0[1-9]|[12][0-9]|3[01])", parts[3])
+    )
+    archived = len(parts) == 2 and parts[0] == "archived_sessions"
+    filename = (
+        r"rollout-[0-9]{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12][0-9]|3[01])"
+        r"T(?:[01][0-9]|2[0-3])-[0-5][0-9]-[0-5][0-9]-" + re.escape(session) + r"\.jsonl"
+    )
+    if not (dated or archived) or not re.fullmatch(filename, path.name):
+        return result
+    matched: tuple[str, str] | None = None
+    identity_failure = conflict = False
+    records = 0
+
+    def visit(record: dict[str, Any]) -> bool:
+        nonlocal matched, identity_failure, conflict, records
+        records += 1
+        payload = record.get("payload")
+        if records == 1 and record.get("type") != "session_meta":
+            identity_failure = True
+        if record.get("type") == "session_meta":
+            if not isinstance(payload, dict) or payload.get("id") != session or (
+                "session_id" in payload and payload["session_id"] != session
+            ):
+                identity_failure = True
+        if record.get("type") != "turn_context" or not isinstance(payload, dict) or payload.get("turn_id") != turn:
+            return False
+        observed_effort, observed_model = payload.get("effort"), payload.get("model")
+        if (
+            payload.get("root_turn_id") != turn
+            or ("session_id" in payload and payload["session_id"] != session)
+            or not isinstance(observed_effort, str) or observed_effort not in model_policy.ROOT_EFFORTS
+            or not isinstance(observed_model, str) or not observed_model
+        ):
+            identity_failure = True
+            return False
+        pair = (observed_model, observed_effort)
+        conflict = conflict or observed_model != model or (matched is not None and matched != pair)
+        matched = pair
+        return True
+
+    outcome = _scan_discovered_child(
+        path, visit, max_bytes=ROOT_EFFORT_MAX_SCAN_BYTES, tail_window=True,
+    )
+    status = str(outcome["status"])
+    if status in {"FOUND", "NOT_FOUND"}:
+        if identity_failure:
+            status = "IDENTITY_UNPROVEN"
+        elif conflict:
+            status = "CONFLICT"
+        elif matched is not None:
+            status = "FOUND_EXACT"
+            result.update({"root_effort": matched[1], "root_effort_evidence": "exact_turn_context"})
+    result["root_effort_lookup_status"] = status
+    return result
 
 
 def _toml_scalar(path: Path, key: str) -> str | None:
@@ -795,7 +885,7 @@ def _write_health_record(path: Path, payload: dict[str, Any]) -> None:
             temporary.unlink()
 
 
-def _record_root_observation(data: dict[str, Any]) -> dict[str, Any]:
+def _record_root_observation(data: dict[str, Any], root_effort: dict[str, str] | None = None) -> dict[str, Any]:
     identity = _runtime_identity(data)
     session_id = str(data.get("session_id") or "")
     turn_id = str(data.get("turn_id") or "")
@@ -806,6 +896,8 @@ def _record_root_observation(data: dict[str, Any]) -> dict[str, Any]:
         "session_id": session_id or None,
         "turn_id": turn_id or None,
         "root_model": str(data.get("model") or "") or None,
+        "root_model_evidence": "UserPromptSubmit.model" if data.get("model") else "unavailable",
+        **(root_effort or {}),
         **identity,
         "timestamp": int(time.time()),
     }
@@ -3208,8 +3300,60 @@ def _transcript_outcome(status: str, records_scanned: int = 0, bytes_scanned: in
     }
 
 
-def _scan_jsonl_transcript(path: Path, visitor: Any, *, directory_fd: int | None = None, header_only: bool = False) -> dict[str, Any]:
+class _BoundedTranscriptReader:
+    """Count actual unbuffered I/O, including discarded partial-tail bytes."""
+    def __init__(self, stream: Any, max_bytes: int):
+        self.stream = stream
+        self.max_bytes = max_bytes
+        self.bytes_scanned = 0
+        self.pending = b""
+        self.chunk_bytes = 256
+
+    def tell(self) -> int:
+        return self.stream.tell() - len(self.pending)
+
+    def seek(self, offset: int) -> None:
+        self.pending = b""
+        self.stream.seek(offset)
+
+    def readline(self, limit: int) -> bytes:
+        parts: list[bytes] = []
+        total = 0
+        while total < limit:
+            if not self.pending:
+                remaining = self.max_bytes - self.bytes_scanned
+                if remaining <= 0:
+                    break
+                self.pending = self.stream.read(min(self.chunk_bytes, remaining))
+                self.bytes_scanned += len(self.pending)
+                if not self.pending:
+                    break
+            count = min(len(self.pending), limit - total)
+            newline = self.pending.find(b"\n", 0, count)
+            if newline >= 0:
+                count = newline + 1
+            parts.append(self.pending[:count])
+            self.pending = self.pending[count:]
+            total += count
+            if newline >= 0:
+                break
+        return b"".join(parts)
+
+    def boundary_byte(self, offset: int) -> bytes:
+        self.seek(offset)
+        if self.bytes_scanned >= self.max_bytes:
+            raise _TranscriptIncomplete
+        value = self.stream.read(1)
+        self.bytes_scanned += len(value)
+        return value
+
+
+def _scan_jsonl_transcript(
+    path: Path, visitor: Any, *, directory_fd: int | None = None,
+    max_bytes: int | None = None, tail_window: bool = False, header_only: bool = False,
+) -> dict[str, Any]:
     """Scan one JSONL transcript with bounded I/O and descriptor validation."""
+    max_bytes = 64 * 1024 if header_only else max_bytes
     records_scanned = 0
     bytes_scanned = 0
     found = False
@@ -3234,6 +3378,8 @@ def _scan_jsonl_transcript(path: Path, visitor: Any, *, directory_fd: int | None
         flags |= os.O_CLOEXEC
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
+    if max_bytes is not None and hasattr(os, "O_NONBLOCK"):
+        flags |= os.O_NONBLOCK
     try:
         descriptor = os.open(target, flags, **options)
         opened = os.fstat(descriptor)
@@ -3245,19 +3391,32 @@ def _scan_jsonl_transcript(path: Path, visitor: Any, *, directory_fd: int | None
             or (hasattr(os, "getuid") and int(opened.st_uid) != int(os.getuid()))
         ):
             return _transcript_outcome("PATH_REJECTED")
-        with os.fdopen(descriptor, "rb", closefd=True) as stream:
+        with os.fdopen(descriptor, "rb", buffering=0 if max_bytes is not None else -1, closefd=True) as stream:
             descriptor = None
+            reader = _BoundedTranscriptReader(stream, max_bytes) if max_bytes is not None else None
+            omitted = False
             while True:
-                line_limit = 64 * 1024 if header_only else TRANSCRIPT_MAX_LINE_BYTES
-                line = stream.readline(line_limit + 1)
+                if reader is not None:
+                    limit = ROOT_EFFORT_MAX_HEADER_BYTES if header_only or (tail_window and records_scanned == 0) else TRANSCRIPT_MAX_LINE_BYTES
+                    line = reader.readline(limit + 1)
+                    bytes_scanned = reader.bytes_scanned
+                    if len(line) > limit:
+                        return _transcript_outcome("LINE_TOO_LARGE" if limit == TRANSCRIPT_MAX_LINE_BYTES else "BOUND_EXCEEDED", records_scanned, bytes_scanned)
+                    if line and not line.endswith(b"\n"):
+                        status = "BOUND_EXCEEDED" if bytes_scanned >= max_bytes else "MALFORMED"
+                        return _transcript_outcome(status, records_scanned, bytes_scanned)
+                    if not line and reader.tell() < opened.st_size:
+                        return _transcript_outcome("BOUND_EXCEEDED", records_scanned, bytes_scanned)
+                else:
+                    line = stream.readline(TRANSCRIPT_MAX_LINE_BYTES + 1)
+                    bytes_scanned += len(line)
                 if not line:
                     break
-                bytes_scanned += len(line)
-                if len(line) > line_limit:
+                if len(line) > TRANSCRIPT_MAX_LINE_BYTES:
                     return _transcript_outcome("LINE_TOO_LARGE", records_scanned, bytes_scanned)
                 try:
                     record = json.loads(line)
-                except (json.JSONDecodeError, UnicodeDecodeError):
+                except (json.JSONDecodeError, UnicodeDecodeError, RecursionError):
                     return _transcript_outcome("MALFORMED", records_scanned, bytes_scanned)
                 if not isinstance(record, dict):
                     return _transcript_outcome("MALFORMED", records_scanned, bytes_scanned)
@@ -3268,6 +3427,35 @@ def _scan_jsonl_transcript(path: Path, visitor: Any, *, directory_fd: int | None
                         return _transcript_outcome("FOUND" if found else "NOT_FOUND", records_scanned, bytes_scanned)
                 except _TranscriptIncomplete:
                     return _transcript_outcome("INCOMPLETE", records_scanned, bytes_scanned)
+                if reader is not None and tail_window and records_scanned == 1:
+                    header_end = reader.tell()
+                    tail_start = max(header_end, opened.st_size - (max_bytes - reader.bytes_scanned - 1))
+                    reader.chunk_bytes = 64 * 1024
+                    omitted = tail_start > header_end
+                    if omitted:
+                        try:
+                            previous = reader.boundary_byte(tail_start - 1)
+                        except _TranscriptIncomplete:
+                            return _transcript_outcome("BOUND_EXCEEDED", records_scanned, reader.bytes_scanned)
+                        if previous != b"\n":
+                            partial = reader.readline(TRANSCRIPT_MAX_LINE_BYTES + 1)
+                            if len(partial) > TRANSCRIPT_MAX_LINE_BYTES or not partial.endswith(b"\n"):
+                                return _transcript_outcome("BOUND_EXCEEDED", records_scanned, reader.bytes_scanned)
+                if reader is not None:
+                    bytes_scanned = reader.bytes_scanned
+            if reader is not None:
+                after = os.fstat(stream.fileno())
+                if (
+                    not stat.S_ISREG(after.st_mode) or int(getattr(after, "st_nlink", 1)) != 1
+                    or (hasattr(os, "getuid") and int(after.st_uid) != int(os.getuid()))
+                ):
+                    return _transcript_outcome("PATH_REJECTED", records_scanned, bytes_scanned)
+                if (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns) != (
+                    opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns,
+                ):
+                    return _transcript_outcome("IO_ERROR", records_scanned, bytes_scanned)
+                if omitted and not found:
+                    return _transcript_outcome("BOUND_EXCEEDED", records_scanned, bytes_scanned)
     except OSError:
         return _transcript_outcome("IO_ERROR", records_scanned, bytes_scanned)
     finally:
@@ -3382,7 +3570,9 @@ def _discover_child_transcript(agent_id: str) -> tuple[str, list[Path]]:
         return "IO_ERROR", candidates
 
 
-def _scan_discovered_child(candidate: Path, visitor: Any) -> dict[str, Any]:
+def _scan_discovered_child(
+    candidate: Path, visitor: Any, *, max_bytes: int | None = None, tail_window: bool = False, header_only: bool = False,
+) -> dict[str, Any]:
     """Reopen the authorised directory chain safely before the unchanged file gate."""
     try:
         home = CODEX_HOME.resolve(strict=True)
@@ -3395,7 +3585,9 @@ def _scan_discovered_child(candidate: Path, visitor: Any) -> dict[str, Any]:
             for part in relative.parts[:-1]:
                 path = path / part
                 descriptor = stack.enter_context(_transcript_directory(path, descriptor))
-            outcome = _scan_jsonl_transcript(candidate, visitor, directory_fd=descriptor)
+            outcome = _scan_jsonl_transcript(
+                candidate, visitor, directory_fd=descriptor, max_bytes=max_bytes, tail_window=tail_window,
+            )
         return outcome
     except (_ChildDiscoveryError, ValueError) as error:
         return _transcript_outcome(getattr(error, "status", "PATH_REJECTED"))
@@ -3617,6 +3809,11 @@ def _remember_spawn_contract(state: dict[str, Any], key: str, observation: dict[
         evidence = {**old, "spawn_contract_valid": False,
                     "reasons": sorted(set(old.get("reasons", [])) | {"conflicting_spawn_evidence"})}
     records[key] = {**(old or {}), **evidence}
+    records[key].update({
+        "parent_session_id": state.get("session_id"),
+        "parent_turn_id": state.get("turn_id"),
+        "profile": spawn_compat.current_role_spec(str(evidence.get("role") or "")).get("profile"),
+    })
     if not evidence["spawn_contract_valid"]:
         violation = f"spawn_contract_invalid:{key}:" + ",".join(evidence["reasons"])
         if violation not in state.setdefault("violations", []):
@@ -3670,10 +3867,63 @@ def _event_role(data: dict[str, Any], state: dict[str, Any]) -> str:
     """Resolve a direct-spawn child to the planned internal role."""
     agent_id = str(data.get("agent_id") or "")
     existing = state.get("agents", {}).get(agent_id, {}) if agent_id else {}
+    intent = _bound_spawn_intent(state, agent_id)
+    allowed = state.get("decision", {}).get("orchestration", {}).get("allowed_agents", [])
+    if intent is not None:
+        return spawn_compat.role_from_event(data, allowed, intent) or ""
     if existing.get("type"):
         return str(existing["type"])
-    allowed = state.get("decision", {}).get("orchestration", {}).get("allowed_agents", [])
     return spawn_compat.role_from_event(data, allowed) or ""
+
+
+def _bound_spawn_intent(state: dict[str, Any], agent_id: str) -> dict[str, Any] | None:
+    """Read intent only through an exact, nonconflicting parent/call/child link."""
+    agent = state.get("agents", {}).get(agent_id, {})
+    record = state.get("spawn_contracts", {}).get(agent.get("spawn_call_key"), {})
+    if (
+        not agent_id or agent.get("spawn_binding_conflict")
+        or agent.get("spawn_contract_valid") is not True
+        or record.get("spawn_contract_valid") is not True
+        or record.get("agent_id") != agent_id
+        or record.get("parent_session_id") != state.get("session_id")
+        or record.get("parent_turn_id") != state.get("turn_id")
+        or not spawn_compat.current_role_spec(str(record.get("role") or ""))
+    ):
+        return None
+    return record
+
+
+def _populate_bound_child_intent(state: dict[str, Any], agent_id: str) -> None:
+    agent = state["agents"][agent_id]
+    intent = _bound_spawn_intent(state, agent_id)
+    if intent is None:
+        agent["expected_by_parent"] = False
+        return
+    role = str(intent["role"])
+    plan = state["decision"]["orchestration"]
+    same_role = sum(
+        1 for other_id, other in state["agents"].items()
+        if other_id != agent_id and other.get("type") == role and other.get("expected_by_parent")
+    )
+    slots = int(plan.get("required_agents", {}).get(role, 0))
+    if plan.get("mode") == "routing_council" and plan.get("selected_execution_role") == role:
+        slots = max(slots, 1)
+    observed_matches = all(
+        not agent.get(field) or agent[field] == intent[expected]
+        for field, expected in (("start_observed_model", "model"), ("start_observed_effort", "effort"),
+                                ("stop_observed_model", "model"), ("stop_observed_effort", "effort"))
+    )
+    if not observed_matches:
+        agent["expected_by_parent"] = False
+        return  # Never replace contradictory observed/requested evidence.
+    agent.update({
+        "requested_model": intent["model"], "requested_effort": intent["effort"],
+        "requested_profile": intent["profile"],
+        "parent_session_id": intent["parent_session_id"], "parent_turn_id": intent["parent_turn_id"],
+        "expected_by_parent": bool(role in plan.get("allowed_agents", []) and same_role < slots and observed_matches),
+    })
+    if observed_matches and agent.get("start_observed_model") == intent["model"]:
+        agent["correlation_mode"] = "direct_agent_id"
 
 
 def _transcript_tool_call(payload: dict[str, Any]) -> tuple[str, str, str] | None:
@@ -4234,6 +4484,7 @@ def _apply_subagent_scan(state: dict[str, Any], path: Path, context: dict[str, A
         }
         state["agents"][agent_id].setdefault("spawn_contract_valid", False)
         state["agents"][agent_id].setdefault("spawn_contract_reasons", ["unproven_spawn_call"])
+        _populate_bound_child_intent(state, agent_id)
         if context["plan"]["mode"] == "routing_council" and existing.get("phase") == "execution":
             context["plan"]["execution_agent_id"] = agent_id
         if role in ROUTES:
@@ -4331,9 +4582,10 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         if _record_child_prompt(data):
             return None
         _cleanup_state()
+        root_effort = _acquire_root_effort(data)
         root_observation_error = None
         try:
-            _record_root_observation(data)
+            _record_root_observation(data, root_effort)
         except (OSError, RuntimeError) as exc:
             root_observation_error = type(exc).__name__
         prompt = _classification_text(str(data.get("prompt") or ""))
@@ -4353,7 +4605,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
                 decision = state["decision"]
                 selected_execution = decision.get("orchestration", {}).get("selected_execution_role")
                 decision = _apply_actual_root_policy(
-                    decision, str(data.get("model") or ""), _active_effort(data), "host"
+                    decision, str(data.get("model") or ""), root_effort["root_effort"], "host"
                 )
                 if selected_execution:
                     _set_route_fields(decision, str(selected_execution))
@@ -4361,7 +4613,8 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
                 state["decision"] = decision
                 state["runtime_identity"] = _runtime_identity(data)
                 decision.update(_service_tier(data))
-                decision["effort_evidence"] = _effort_evidence(data, decision)
+                decision.update(root_effort)
+                decision["effort_evidence"] = _effort_evidence(data, decision, root_effort)
                 decision["visible_route"] = _visible_route(decision, data)
                 decision["announce_route"] = False
                 _write_existing_state(data, state)
@@ -4370,7 +4623,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         decision = classify_prompt(
             prompt,
             str(data.get("model") or ""),
-            _active_effort(data),
+            root_effort["root_effort"],
             routing_profile,
             routing_profile_source,
             discovery_state="host",
@@ -4387,7 +4640,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             inherited_from_turn = previous.get("turn_id")
             selected_execution = decision.get("orchestration", {}).get("selected_execution_role")
             decision = _apply_actual_root_policy(
-                decision, str(data.get("model") or ""), _active_effort(data), "host"
+                decision, str(data.get("model") or ""), root_effort["root_effort"], "host"
             )
             prior_plan = decision.get("orchestration", {})
             if selected_execution:
@@ -4407,7 +4660,8 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
                 decision["max_workers"] = 1
                 decision["delegate"] = not direct
         decision.update(_service_tier(data))
-        decision["effort_evidence"] = _effort_evidence(data, decision)
+        decision.update(root_effort)
+        decision["effort_evidence"] = _effort_evidence(data, decision, root_effort)
         decision["visible_route"] = _visible_route(decision, data)
         decision["announce_route"] = decision["route"] != "current" or decision.get("delegate") is True
         state = {
@@ -4501,14 +4755,15 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         direct_effort = str(data.get("reasoning_effort") or data.get("model_reasoning_effort") or "")
         council = plan["mode"] == "routing_council"
         council_phase = str(plan.get("phase") or "")
-        existing_roles = [str(agent.get("type") or "") for agent in state.setdefault("agents", {}).values()]
+        prior_agent = state.setdefault("agents", {}).get(agent_id, {})
+        existing_roles = [str(agent.get("type") or "") for key, agent in state["agents"].items() if key != agent_id]
         mismatch = role not in allowed or (
             council and council_phase == "advisory" and role in existing_roles
         ) or (
             council and council_phase != "advisory" and role != plan.get("selected_execution_role")
         )
         over_cap = sum(
-            1 for agent in state.setdefault("agents", {}).values() if agent.get("status") != "completed"
+            1 for key, agent in state["agents"].items() if key != agent_id and agent.get("status") != "completed"
         ) >= int(plan["max_workers"])
         completed_by_role: dict[str, int] = {}
         for completed_id, agent in state["agents"].items():
@@ -4568,6 +4823,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
                 expected_spec.get("effort") if direct_lifecycle
                 else direct_effort or ROUTES.get(role, {}).get("effort")
             ),
+            "requested_profile": expected_spec.get("profile") if direct_lifecycle else None,
             "start_observed_effort": direct_effort or None,
             "observed_model": None,
             "observed_effort": None,
@@ -4592,6 +4848,16 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         }
         state["agents"][agent_id].setdefault("spawn_contract_valid", False)
         state["agents"][agent_id].setdefault("spawn_contract_reasons", ["unproven_spawn_call"])
+        # A late/duplicate start must not erase exact prompt/terminal evidence.
+        for key, value in prior_agent.items():
+            if key.startswith(("prompt_", "child_turn", "observed_", "stop_", "completion_")) or key in {
+                "model_evidence_consistent", "model_match", "receipt_recorded", "duplicate_prompt_events",
+                "duplicate_stops", "stopped_at",
+            }:
+                state["agents"][agent_id][key] = value
+        if prior_agent.get("status") == "completed":
+            state["agents"][agent_id]["status"] = "completed"
+        _populate_bound_child_intent(state, agent_id)
         state.setdefault("telemetry", {})["child_count"] = len(state["agents"])
         if role in ROUTES:
             state.setdefault("agent_attestations", {})[agent_id] = _agent_config_attestation(
@@ -4630,7 +4896,11 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         elif council and phase == "execution":
             message += " This is the selected execution slot; use distilled advisor evidence without repeating routing analysis."
         if mismatch:
-            message += " This agent does not match the selected route; avoid substantive work and return ROUTE_UP."
+            message += (
+                " This agent does not match the selected route or its exact lifecycle binding is unproven; "
+                "avoid substantive work and report the binding/contract failure. "
+                "Lifecycle metadata failure is not a capability limit and must not request a stronger profile."
+            )
         elif over_cap or ordering_violation:
             message += " This spawn violates the worker cap or staged ordering; do not mutate, report the contract failure, and do not return ROUTE_UP."
         return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": message}}

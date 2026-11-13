@@ -302,15 +302,44 @@ def role_from_arguments(arguments: dict[str, Any]) -> str | None:
     return legacy if legacy in LEGACY_ROLES else None
 
 
-def role_from_event(data: dict[str, Any], allowed: list[str]) -> str | None:
+def current_role_spec(role: str) -> dict[str, str]:
+    """Resolve internal roles through the active model/profile registry only."""
+    for model in model_policy.ACTIVE_MODELS.values():
+        if not model.child_target_allowed:
+            continue
+        for effort in model.explicit_child_efforts:
+            if role_for(model.canonical_id, effort) == role:
+                profile = "frontier" if model.canonical_id == "gpt-6-astra" else "balanced" if effort == "medium" else "high"
+                return {"model": model.canonical_id, "effort": effort, "profile": profile}
+    return {}
+
+
+def role_from_event(data: dict[str, Any], allowed: list[str],
+                    intent: dict[str, Any] | None = None) -> str | None:
+    """Prefer exact bound intent; a model alone cannot distinguish profiles."""
+    model = str(data.get("model") or "")
+    effort = str(data.get("reasoning_effort") or data.get("model_reasoning_effort") or "")
+    if intent is not None:
+        role = role_for(str(intent.get("model") or ""), str(intent.get("effort") or ""))
+        if (
+            intent.get("spawn_contract_valid") is not True
+            or role != intent.get("role")
+            or (model and model != intent.get("model"))
+            or (effort and effort != intent.get("effort"))
+        ):
+            return None
+        return role
     direct = role_for(
-        str(data.get("model") or ""),
-        str(data.get("reasoning_effort") or data.get("model_reasoning_effort") or ""),
+        model, effort,
     )
     if direct:
         return direct
-    model = str(data.get("model") or "")
-    candidates = [role for role in allowed if _legacy_spec(role)[0] == model]
+    if model in model_policy.ACTIVE_MODELS:
+        if effort:  # An unsupported explicit effort is not missing evidence.
+            return None
+        candidates = [role for role in allowed if current_role_spec(role).get("model") == model]
+        return candidates[0] if len(candidates) == 1 else None
+    candidates = [role for role in allowed if model and _legacy_spec(role)[0] == model]
     if len(candidates) == 1:
         return candidates[0]
     legacy = str(data.get("agent_type") or "")
