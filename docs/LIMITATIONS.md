@@ -91,35 +91,41 @@ Full plugin mode targets Codex Desktop and CLI. Codex IDE extensions do not curr
 Checksums and inventories prevent accidental overwrite, partial lifecycle recovery, and unnoticed ownership drift; they are not signatures against a malicious process already running as the same operating-system user. Post-crash edits, corrupt controller copies, and modified quarantine trees are preserved and require manual review.
 # Configured AI routing candidate (proposed v0.3)
 
-The production classifier is disabled before subprocess creation. An offline,
-loopback-only request capture from CLI 0.153.4 showed `functions.exec`, `wait` and
-`request_user_input` despite the proposed disable flags; nested guidance included
-`apply_patch` and `view_image`. `debug prompt-input` alone omitted the separate
-tool declarations and was not sufficient evidence. The fixture returned no model
-generation and used no credentials or external inference.
+The nested CLI classifier was removed because feature-disable flags did not
+establish tool exclusion. Configured mode instead uses the OpenAI Responses API
+with `tools: []`, `tool_choice: "none"` and strict JSON schema. Only the `openai`
+provider is supported in this candidate. User-selected API models must support
+that interface and reasoning effort; setup does not prove API entitlement.
+No live inference is part of automated development tests.
 
-[Upstream issue 60069](https://github.com/openai/codex/issues/60069) reports the
-same distinction on a newer CLI. Disabling Code Mode can fail closed for that
-path, but it is not a universal tool-execution policy. Official hook coverage
-excludes hosted and some specialized paths; a deny-all hook is not complete
-isolation. No unsupported flag, hook-trust bypass, sandbox-only claim, proxy or
-post-execution validator is used to bypass this blocker. A supported complete
-denial boundary must be established before restoring a real classifier runner.
+The classifier can recommend only configured model/effort pairs. Codex performs
+native compatibility validation before child creation; the router does not
+reproduce that policy or treat API availability as Codex child support. A local
+catalogue is advisory and can be stale. Native validation is not a guarantee
+against account restrictions, transient failures, worker limits or later errors.
+Known model/effort preparation errors can prove rejection before creation. Other
+errors without start evidence retain an unknown creation boundary. Missing
+PostToolUse/result evidence remains unobservable, never successful by default.
 
-Prompt hooks also do not expose the exact current-session spawn model/effort
-capabilities through a supported interface. The catalogue is not that schema,
-and another CLI process's models are not proof for a Desktop session. All
-configured child contracts, including fallback selections, are therefore
-rejected as compatibility-unverified. No model list from one audit is hardcoded
-or persisted as capability authority. Exact already-running model/effort pairs
-can stay current without a child; this is not delegation proof.
+Fallback is a classification-time choice only, using the same configured
+allowlist. After a spawn request there is no automatic retry, fallback child,
+cost-tier escalation or reclassification. The parent reports failures and retains
+responsibility for verification. A successful return/child ID is not proof of
+child start, completion or model/effort attestation.
 
-Setup remains useful for preparing configuration, not authorizing execution.
-Setup/status expose the blockers and health cannot report configured routing
-READY from receipts alone. The schema/allowlist, timeout fallback, recursion and
-duplicate-delivery logic is exercised with injected mock runners. The disabled
-production path reports zero attempts and does not choose a fallback on an
-isolation failure. No live inference is part of development tests.
+The standard-library HTTP worker has no model tools, Codex invocation or hooks.
+Its parent enforces the total request deadline, including DNS/TLS and slow reads,
+and terminates the worker on timeout. A timeout can still mean a provider received
+and billed the request; unknown usage is not zero and cancellation does not prove
+refund. There is no automatic retry. API response bodies are bounded at 128 KiB,
+task input at 32 KiB, output at 256 tokens, timeout at 1–6 seconds. The output cap
+includes reasoning usage and can cause incomplete results/fallback.
+
+API billing must be explicitly enabled. CLI-era schema-v1 configs require setup;
+they never silently start API spending. The ledger is reserved before an attempt
+to suppress duplicate delivery after interruption. Simple continuations do not
+repeat classification or execution. Configuration changes invalidate in-flight
+reuse. Setup/status do not claim execution acceptance or capability receipts.
 
 The classifier is prompted to minimize cost to reliable completion, but no live
 rate card or verified intelligence ranking is inferred from model names. Real

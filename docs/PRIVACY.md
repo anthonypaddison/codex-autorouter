@@ -28,27 +28,37 @@ Builds before the ownership-marker hardening used an unbound `router-state` dire
 Checksums protect lifecycle consistency and ownership decisions; they are not cryptographic authentication against another process already running as the same operating-system user.
 # Configured AI routing candidate
 
-Setup stores only exact model identifiers, explicitly allowed efforts, fallback
-and the classifier timeout in `CODEX_HOME/autorouter/config.json`. It rejects
+Setup stores only the provider, credential environment-variable name, enabled
+flag, exact model identifiers, allowed efforts, fallback and classifier timeout
+in `CODEX_HOME/autorouter/config.json`. It rejects
 unknown configuration fields and never stores credentials. Reconfiguration
 preserves an owner-only byte-exact backup. It does not edit global Codex settings.
 
-The production classifier runner is disabled before creating a subprocess;
-prompts are not sent to Codex CLI or a remote classifier by this candidate.
-Injected mock runners receive bounded prompt/configuration data and a temporary
-JSON schema during tests. Autorouter does not open authentication storage, copy
-tokens or introduce API credentials. Restoring live classification requires a
-supported isolation boundary and a separate acceptance review.
+When explicitly enabled, classification sends the bounded supplied task and
+executor allowlist to OpenAI's Responses API. It does not read repository files,
+transcripts or saved Codex/ChatGPT authentication. Its only credential source is
+the explicitly configured API environment variable. The Python HTTP worker
+inherits that credential and required OS metadata, not unrelated environment
+secrets. No credential or prompt is put in argv or written to temporary files.
+Requests explicitly exclude tools and use `store:false`; this is not a claim
+that provider abuse-monitoring retention is disabled. Provider data controls and
+the user's API account apply, separately from Codex authentication/allowance.
+Development tests use fake keys and mocked HTTP only.
 
 The classifier's short rationale is schema-validated but deliberately discarded:
 it can paraphrase private prompt content. Ledgers retain only selected model and
-effort, fixed reason/status codes, elapsed milliseconds, CLI invocation attempts
+effort, classifier provider/model/effort, fixed reason/status codes, elapsed milliseconds, request attempts
 and observed numeric token counts. Invocation attempts are not billed-request
-counts. Missing usage is unknown, not zero; cached input is already part of input.
+counts. A reserved interrupted attempt has unknown call count, not a claimed
+zero. Missing usage is unknown, not zero; cached input is already part of input.
+Delegation outcome records contain only opaque call IDs, selected model/effort
+and fixed outcome categories. Native error bodies and available-model text are
+not persisted. HTTP error bodies are never read or logged.
 
 Configured roles/settings fingerprints derive only from model/effort choices and
 configuration, never prompts. Existing no-raw-prompt/no-transcript-path ledger
 rules and independent execution evidence requirements still apply. Model
 selection does not authorize additional filesystem/network access or permission
-changes. Authentication and remote retention are governed by the user's existing
-Codex/ChatGPT service, not a new router service.
+changes. The root and child lifecycle evidence remains independent of the API
+classification result. No gateway, proxy, database or external router service is
+introduced.

@@ -34,6 +34,7 @@ CAPABILITY_SPECS = model_policy.capability_specs()
 CAPABILITY_MODELS = tuple(CAPABILITY_SPECS)
 CAPABILITY_EFFORTS = {key: frozenset({spec[2]}) for key, spec in CAPABILITY_SPECS.items()}
 _CONFIGURED_ROUTING = False
+_CONFIGURED_ROUTING_ENABLED = False
 _CONFIGURED_CONFIG_ERROR = False
 PLUGIN_IDENTITY_FILES = (
     ".codex-plugin/plugin.json",
@@ -52,7 +53,7 @@ PLUGIN_IDENTITY_FILES = (
 
 def refresh_configured_capabilities(home: Path | None = None) -> None:
     """Discover configured receipt identities without model-family source changes."""
-    global CAPABILITY_MODELS, CAPABILITY_EFFORTS, _CONFIGURED_ROUTING, _CONFIGURED_CONFIG_ERROR
+    global CAPABILITY_MODELS, CAPABILITY_EFFORTS, _CONFIGURED_ROUTING, _CONFIGURED_CONFIG_ERROR, _CONFIGURED_ROUTING_ENABLED
     _CONFIGURED_CONFIG_ERROR = False
     try:
         path = home / "autorouter/config.json" if home is not None else routing_config.config_path()
@@ -63,6 +64,7 @@ def refresh_configured_capabilities(home: Path | None = None) -> None:
         config = None
         _CONFIGURED_CONFIG_ERROR = True
     _CONFIGURED_ROUTING = config is not None
+    _CONFIGURED_ROUTING_ENABLED = bool(config and config.get("schema_version") == 2 and config.get("enabled"))
     model_policy.configure_capabilities(specs)
     CAPABILITY_SPECS.clear()
     capabilities = model_policy.capability_specs()
@@ -394,9 +396,9 @@ def _routing_health(
     if _CONFIGURED_CONFIG_ERROR:
         status = "UNAVAILABLE"
         reasons.append("Autorouter configuration is invalid; rerun setup before configured routing.")
-    elif _CONFIGURED_ROUTING:
+    elif _CONFIGURED_ROUTING and not _CONFIGURED_ROUTING_ENABLED:
         status = "UNAVAILABLE"
-        reasons.append("Configured AI routing is blocked: classifier tool isolation and current-session child capabilities are unverified.")
+        reasons.append("API routing is disabled or the CLI-era configuration requires explicit setup.")
     elif not effective.get("available"):
         status = "UNAVAILABLE"
         reasons.append("The supported plugin hook and direct-child routing path is not available in effective configuration.")

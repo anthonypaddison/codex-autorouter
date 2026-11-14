@@ -198,31 +198,34 @@ def _ai_decision(data: dict[str, Any], root_effort: dict[str, str], reused: dict
     role = spawn_compat.role_for(model, effort) if isinstance(model, str) and isinstance(effort, str) else None
     direct = (model, effort) == (active, root_effort["root_effort"])
     permitted = role is not None and result.get("status") in {"selected", "fallback"} and bool(active)
-    compatibility = "not_required" if permitted and direct else "unverified"
-    # No supported prompt-hook field supplies the exact current spawn schema.
-    # Catalogue membership cannot authorize a selected or fallback executor.
-    valid = permitted and direct
+    continuation = result.get("execution_reused") is True
+    compatibility = "not_required" if permitted and direct else "codex_native_validation"
+    valid = permitted
+    delegate = valid and not direct and not continuation
     return {
-        "route": "current", "model": "current", "effort": "current",
-        "delegate": False, "parallel": False, "max_workers": 1, "max_depth": 1, "max_escalations": 0,
+        "route": role if delegate else "current", "model": model if delegate else "current",
+        "effort": effort if delegate else "current",
+        "delegate": delegate, "parallel": False, "max_workers": 1, "max_depth": 1, "max_escalations": 0,
         "actual_root_model": active, "root_model_evidence": "UserPromptSubmit.model" if active else "unavailable",
         "classification": result, "capability_eligible": valid, "capability_target": role if valid else "current",
         "executor_compatibility": compatibility,
         "configuration_id": _AI_CONFIG_ID,
-        "profile_satisfaction": "satisfied" if valid else "unproven",
+        "profile_satisfaction": "satisfied" if valid and direct else "unproven",
         "route_policy_outcome": "approved" if valid else "unavailable",
         "catalogue_availability": result.get("catalogue_availability", "available" if permitted else "unavailable"),
         "routing_profile": "configured", "routing_profile_label": "User configured", "routing_profile_source": "autorouter_config",
         "route_transition": "none",
-        "reason": "configured AI selection" if valid else "configured routing unavailable: classifier isolation or executor compatibility is unverified",
+        "reason": ("continued assignment; do not repeat delegation" if continuation else
+                   "configured AI selection; native compatibility/execution pending" if valid else
+                   "configured routing unavailable; retain the parent"),
         "verification": "targeted tests or task-appropriate evidence after the final mutation",
         "requires_clarification": False,
         "task_profile": {"active_model": active, "active_effort": root_effort["root_effort"],
                          "task_type": "ai_classified", "risk": "unassessed", "mutation": None,
                          "clear_spec": None, "signals": []},
-        "orchestration": {"mode": "direct", "max_workers": 1,
-                          "max_depth": 1, "required_agents": {},
-                          "allowed_agents": [], "synthesis_owner": "root",
+        "orchestration": {"mode": "single_delegate" if delegate else "direct", "max_workers": 1,
+                          "max_depth": 1, "required_agents": {role: 1} if delegate else {},
+                          "allowed_agents": [role] if delegate else [], "synthesis_owner": "root",
                           "final_acceptance_owner": "root"},
     }
 ASTRA_EXPLICIT_REQUEST = re.compile(
@@ -2824,7 +2827,7 @@ def _context(decision: dict[str, Any]) -> str:
     if decision.get("capability_eligible") is not True:
         if "classification" in decision:
             return (
-                "Configured AI routing is unavailable: classifier tool isolation or current-session child model compatibility is unverified. "
+                "Configured AI routing is unavailable or disabled; inspect classification status. "
                 "Continue as the current root, do not spawn a selected or fallback child, and do not claim configured execution is verified."
             )
         if decision.get("requires_clarification"):
@@ -4395,7 +4398,7 @@ def _record_scanned_spawn(state: dict[str, Any], context: dict[str, Any], role: 
         raise _TranscriptIncomplete
     if not tier_overridden:
         context["inheriting_spawns"] += 1
-    if role and role not in state["subagents_started"]:
+    if role and role not in state["subagents_started"] and "classification" not in state.get("decision", {}):
         state["subagents_started"].append(role)
     violations = []
     if role and role not in context["allowed"]:
@@ -4413,6 +4416,24 @@ def _record_scanned_spawn(state: dict[str, Any], context: dict[str, Any], role: 
     for violation in violations:
         if violation not in state["violations"]:
             state["violations"].append(violation)
+
+
+def _record_configured_spawn_result(state: dict[str, Any], call_id: str | None, response: Any) -> str | None:
+    decision = state.get("decision", {})
+    if ("classification" not in decision or not isinstance(call_id, str)
+            or OPAQUE_LIFECYCLE_EVENT_ID.fullmatch(call_id) is None):
+        return None
+    attempts = state.setdefault("delegation_attempts", {})
+    if call_id in attempts or len(attempts) >= TRANSCRIPT_MAX_CALLS:
+        return attempts.get(call_id, {}).get("outcome")
+    selected = decision["classification"]
+    outcome = spawn_compat.result_outcome(
+        response, model=str(selected.get("model") or ""), effort=str(selected.get("effort") or ""),
+        child_started=any(agent.get("status") in {"started", "completed"} or agent.get("start_observed_model")
+                          for agent in state.get("agents", {}).values()),
+    )
+    attempts[call_id] = {"outcome": outcome, "selected_model": selected.get("model"), "selected_effort": selected.get("effort")}
+    return outcome
 
 
 def _consume_subagent_record(
@@ -4477,6 +4498,10 @@ def _consume_subagent_record(
             return kind in {"completed", "interacted", "interrupted"}
         return False
     payload_type = str(payload.get("type") or "")
+    if payload_type == "function_call_output":
+        result_call_id = _bounded_transcript_key(payload.get("call_id"))
+        if result_call_id in context["spawn_calls"]:
+            _record_configured_spawn_result(state, result_call_id, payload.get("output"))
     if payload_type not in {"custom_tool_call", "custom_tool_call_output", "function_call_output", "message", "agent_message"}:
         return False
     if payload_type == "custom_tool_call":
@@ -4667,10 +4692,18 @@ def _apply_subagent_scan(state: dict[str, Any], path: Path, context: dict[str, A
             state["agent_ids"].append(agent_id)
         existing = state["agents"].get(agent_id, {})
         transcript_complete = agent_id in context["completed_ids"] and agent_id in context["structured_ids"]
+        default_status = "started"
+        if "classification" in state.get("decision", {}):
+            default_status = "started" if context["lifecycle_starts"].get(agent_id) else "creation_reported"
+            if (default_status == "started" or transcript_complete) and role and role not in state["subagents_started"]:
+                state["subagents_started"].append(role)
+        existing_status = existing.get("status", default_status)
+        if existing_status == "creation_reported" and default_status == "started":
+            existing_status = "started"
         state["agents"][agent_id] = {
             **existing,
             "type": role,
-            "status": "completed" if transcript_complete else existing.get("status", "started"),
+            "status": "completed" if transcript_complete else existing_status,
             "completion_structured": True if transcript_complete else bool(existing.get("completion_structured")),
             "completion_source": "transcript" if transcript_complete else existing.get("completion_source"),
         }
@@ -4809,7 +4842,7 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
                 if "classification" in decision:
                     if decision.get("configuration_id") != _AI_CONFIG_ID:
                         return {"continue": True, "systemMessage": "Autorouter settings changed; start a fresh task."}
-                    reused = {**decision["classification"], "calls": 0, "duration_ms": 0, "usage": {}}
+                    reused = {**decision["classification"], "calls": 0, "duration_ms": 0, "usage": {}, "execution_reused": True}
                     decision = _ai_decision(data, root_effort, reused)
                 else:
                     decision = _apply_actual_root_policy(
@@ -4833,8 +4866,11 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
         if (_AI_CONFIG is not None and previous and previous.get("decision", {}).get("configuration_id") == _AI_CONFIG_ID
                 and CONTINUATION.match(prompt) and isinstance(previous["decision"].get("classification"), dict)):
             reused = {**previous["decision"]["classification"], "calls": 0, "duration_ms": 0,
-                      "usage": {}, "reason_code": "continued_prior_decision"}
-        decision = _ai_decision(data, root_effort, reused) if _AI_CONFIG is not None or _AI_CONFIG_ERROR else classify_prompt(
+                      "usage": {}, "reason_code": "continued_prior_decision", "execution_reused": True}
+        classify_after_reservation = _AI_CONFIG is not None and reused is None
+        reservation = {"status": "unavailable", "model": None, "effort": None, "calls": None,
+                       "duration_ms": None, "usage": {}, "reason_code": "interrupted_classification_unknown"}
+        decision = _ai_decision(data, root_effort, reservation if classify_after_reservation else reused) if _AI_CONFIG is not None or _AI_CONFIG_ERROR else classify_prompt(
             prompt,
             str(data.get("model") or ""),
             root_effort["root_effort"],
@@ -4943,6 +4979,20 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             },
         }
         _write_existing_state(data, state)
+        if classify_after_reservation:
+            # Persist a valid owned ledger before the potentially billed request.
+            # If killed after submission, redelivery must not submit it again.
+            decision = _ai_decision(data, root_effort)
+            decision.update(_service_tier(data))
+            decision.update(root_effort)
+            decision["effort_evidence"] = _effort_evidence(data, decision, root_effort)
+            decision["visible_route"] = _visible_route(decision, data)
+            decision["announce_route"] = False
+            state["decision"] = decision
+            roles = decision["orchestration"]["allowed_agents"]
+            state["telemetry"]["requested_child_models"] = list(dict.fromkeys(ROUTES[role]["model"] for role in roles))
+            state["telemetry"]["effort_intents"] = list(dict.fromkeys(ROUTES[role]["effort"] for role in roles))
+            _write_existing_state(data, state)
         return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": _context(decision)}}
 
     agent_id = str(data.get("agent_id") or "")
@@ -5126,6 +5176,16 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
 
     if event == "PostToolUse":
         tool = str(data.get("tool_name") or "")
+        if tool.split("__")[-1].split(".")[-1] == "spawn_agent" and "classification" in decision:
+            outcome = _record_configured_spawn_result(state, _hook_tool_call_id(data), data.get("tool_response"))
+            _write_existing_state(data, state)
+            if outcome not in {None, "creation_reported"}:
+                return {"continue": True, "systemMessage": (
+                    "Configured delegation did not establish successful execution (" + outcome + "). "
+                    "Retain the current parent, report the failure/uncertainty and preserve verification. "
+                    "Do not retry classification, spawn another fallback or duplicate possibly completed work."
+                )}
+            return None
         command = _command_from(data)
         mutation = _is_mutation(tool, command)
         if mutation:
@@ -5506,8 +5566,16 @@ def handle(data: dict[str, Any]) -> dict[str, Any] | None:
                     and str(existing.get("turn_id")) == str(data.get("turn_id"))):
                 if existing["decision"].get("actual_root_model") != data.get("model"):
                     return {"continue": True, "systemMessage": "Autorouter root identity conflicts with this turn's stored evidence; repeated classification was suppressed."}
+                # Do not re-issue an executable contract on duplicate delivery.
+                # Keep the original ledger/required plan intact for attestation.
+                replay = dict(existing["decision"])
+                replay.update(route="current", model="current", effort="current", delegate=False,
+                              reason="duplicate delivery; use original assignment evidence, never spawn again")
+                replay["classification"] = {**replay["classification"], "execution_reused": True}
+                replay["orchestration"] = {**replay["orchestration"], "mode": "direct",
+                                           "required_agents": {}, "allowed_agents": []}
                 return {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit",
-                                               "additionalContext": _context(existing["decision"])}}
+                                               "additionalContext": _context(replay)}}
         return _handle_unlocked(data)
 
 

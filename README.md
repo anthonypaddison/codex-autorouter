@@ -9,13 +9,12 @@ not a released or automatically deployed version. Existing installations and
 historical evidence remain compatible; until setup is run, the legacy routing
 path remains available with a setup reminder.
 
-**Runtime status: BLOCKED.** CLI 0.153.4 still exposes tools with the proposed
-disable flags, and prompt hooks do not expose the current session's child-model
-capabilities through a supported interface. This candidate refuses real CLI
-classification before process creation and rejects configured child/fallback
-contracts as compatibility-unverified. Setup and mocked development remain
-available; do not activate this candidate for an AI-routing installation trial.
-Unconfigured legacy routing is unchanged.
+**Runtime status: NOT LIVE-ACCEPTED.** Configured mode uses the OpenAI Responses
+API, not a nested Codex CLI. It explicitly disables model tools, validates the
+selection against the configured allowlist and asks Codex to validate the child
+model/effort natively before spawning. Configuration is not execution proof.
+Unconfigured legacy routing is unchanged. Do not promote this candidate on the
+strength of mocked tests alone.
 
 After a separately reviewed installation of this candidate, run the setup
 command from that plugin's root:
@@ -26,17 +25,22 @@ python3 scripts/autorouter.py setup
 python3 scripts/autorouter.py status
 ```
 
-The wizard lists the fresh local Codex model catalogue and asks for a classifier
-model/effort, permitted executor models/efforts and fallback. A catalogue entry
-is not proof of account entitlement or successful execution. Models without
-observable supported reasoning efforts cannot safely be offered by this adapter.
+The wizard shows advisory Codex executor catalogue entries, then asks separately
+for the API provider (`openai`), API classifier model/effort, credential environment
+variable **name**, executor models/efforts, fallback and explicit billing opt-in.
+API model identifiers are not Codex executor capabilities. The provider/model
+must support Responses, strict JSON-schema output and the configured reasoning
+effort. An absent/stale Codex catalogue does not prevent entering explicit pairs;
+Codex rejects unsupported requests before child creation where its native
+validation applies. The router never bypasses those restrictions.
 
 Without an interactive terminal, use the equivalent flags, replacing identifiers
 with exact values from `models`:
 
 ```sh
 python3 scripts/autorouter.py setup \
-  --classifier CLASSIFIER_ID --classifier-effort CLASSIFIER_EFFORT \
+  --provider openai --classifier API_CLASSIFIER_ID --classifier-effort CLASSIFIER_EFFORT \
+  --credential-env AUTOROUTER_OPENAI_API_KEY --enabled \
   --allow SMALL_ID=SMALL_EFFORT \
   --allow LARGE_ID=MEDIUM_EFFORT,HIGH_EFFORT \
   --fallback LARGE_ID=HIGH_EFFORT
@@ -45,15 +49,30 @@ python3 scripts/autorouter.py setup \
 Setup writes only `CODEX_HOME/autorouter/config.json` (normally under `~/.codex`),
 or the explicit `--config` path for offline preparation. Repeating setup makes a
 byte-exact backup before replacement. It does not install plugins, log in,
-modify Codex defaults, run inference or verify model entitlement.
+modify Codex defaults, run inference or verify model entitlement. Use `--disabled`
+instead of `--enabled` to keep configured AI routing inactive. Reconfigure with
+the same command; reinstalling is unnecessary. Schema-v1 CLI-era configurations
+remain readable but require explicit setup before API usage; no automatic
+conversion can silently start API spending.
 
-The classification interface validates schema-constrained model/effort choices,
-a 32 KiB prompt limit and a configured fallback without retries. An injected mock
-runner exercises that interface; the production runner always refuses to launch
-until tool-execution isolation is established. It reports zero CLI attempts and
-does not turn that safety failure into an executor or fallback authorization.
-Exact duplicate delivery and simple continuations reuse the recorded decision.
-No credentials, API keys, proxy or separate billing service are introduced.
+Provision the referenced environment variable in the process that starts Codex;
+Desktop must inherit it. Never paste the key into setup, task text, JSON config,
+Git or logs. The router reads only that explicitly referenced API credential,
+never saved Codex/ChatGPT authentication. Requests use API-account billing/credits,
+not the signed-in Codex allowance. No credential is provisioned by setup.
+
+Classification sends only the supplied task and allowlist, with a 32 KiB task
+limit, 256 output-token cap, 128 KiB response bound and a 1–6 second deadline.
+A short-lived standard-library Python HTTP worker makes one HTTPS request; it
+does not run Codex, hooks or tools. There are no automatic API retries, redirects,
+proxies, repository scans or new dependencies. Failures may select only the
+configured fallback before execution starts. No fallback is automatically spawned
+after a delegation rejection, uncertain result or child failure.
+
+The owned turn ledger is reserved before classification. Duplicate delivery,
+including after an interrupted request with unknown billing outcome, cannot
+repeat it. Simple continuations reuse the decision without spawning the assignment
+again; use existing child evidence rather than duplicating possibly completed work.
 
 For a directly enforced preference, start a prompt with:
 
@@ -61,26 +80,27 @@ For a directly enforced preference, start a prompt with:
 Use model EXACT_MODEL_ID at EXACT_EFFORT effort.
 ```
 
-That model/effort must be permitted and advertised by the current catalogue;
+That model/effort must be permitted by the configured allowlist;
 otherwise routing reports unavailable rather than silently choosing another
 model. An omitted effort uses the first effort explicitly selected during setup.
-This exact directive skips the classifier. It can stay current only when the
-requested pair exactly matches the observed root; it cannot bypass the child
-compatibility guard. Other natural-language preferences are tested only through
-the mock classifier; live interpretation remains blocked.
+This exact directive skips the classifier. An exact observed root pair stays
+current; otherwise one explicit native-validated child is requested. Other
+natural-language preferences are classifier input, not a deterministic override.
 
 The existing root cannot be changed by this plugin. A catalogue listing or
 configuration entry is not proof that the host's child tool accepts that model.
-Configured child assignments currently fail closed, including fallback choices;
-status reports compatibility as unverified. Existing correlation, attestation
-and verification gates remain intact. Configuration changes during an in-flight
-task invalidate reuse of its old routing contract.
+Status reports `codex_native_validation`, not preverified execution. Known native
+preparation errors are recorded as rejection before creation; generic errors
+without start evidence retain an unknown creation boundary. A returned child ID
+alone is not lifecycle completion. Existing correlation, attestation and
+verification gates remain intact. Configuration changes during an in-flight task
+invalidate reuse of its old routing contract.
 
 Classifier elapsed time, invocation attempts and observed token usage are
 recorded separately from executor evidence. Missing token telemetry is unknown,
 not zero. Real latency, classifier quality, account access and financial savings
-require supported isolation/capability evidence followed by an explicitly approved
-live evaluation; mocked tests cannot establish them. See
+require a separately authorised live evaluation with explicitly provisioned API
+credentials and a verifiable spending ceiling; mocked tests cannot establish them. See
 [limitations](docs/LIMITATIONS.md) and [privacy](docs/PRIVACY.md).
 
 The remaining sections describe the released v0.2 compatibility workflow.

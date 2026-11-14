@@ -15,6 +15,7 @@ from typing import Any
 
 MAX_CONFIG_BYTES = 64 * 1024
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
+ENV_REFERENCE = re.compile(r"[A-Z_][A-Z0-9_]{0,127}\Z")
 
 
 class ConfigError(ValueError):
@@ -44,10 +45,17 @@ def _identifier(value: Any) -> bool:
 
 
 def validate_config(document: Any, catalogue: dict[str, list[str]] | None = None) -> dict[str, Any]:
-    if not isinstance(document, dict) or set(document) != {
-        "schema_version", "classifier", "executors", "fallback", "timeout_seconds",
-    } or type(document.get("schema_version")) is not int or document["schema_version"] != 1:
+    # Catalogue metadata is advisory; Codex validates native spawn compatibility.
+    if not isinstance(document, dict) or type(document.get("schema_version")) is not int:
         raise ConfigError("invalid_configuration_schema")
+    version = document["schema_version"]
+    fields = {"schema_version", "classifier", "executors", "fallback", "timeout_seconds"}
+    if version == 2:
+        fields.add("enabled")
+    if version not in (1, 2) or set(document) != fields:
+        raise ConfigError("invalid_configuration_schema")
+    if version == 2 and type(document["enabled"]) is not bool:
+        raise ConfigError("invalid_enabled_setting")
     timeout = document["timeout_seconds"]
     if type(timeout) not in (int, float) or not 1 <= timeout <= 6:
         raise ConfigError("invalid_classifier_timeout")
@@ -68,16 +76,22 @@ def validate_config(document: Any, catalogue: dict[str, list[str]] | None = None
         models[model] = efforts
     for key in ("classifier", "fallback"):
         pair = document[key]
-        if not isinstance(pair, dict) or set(pair) != {"model", "effort"} or not all(_identifier(pair[k]) for k in pair):
+        expected = {"model", "effort"}
+        if key == "classifier" and version == 2:
+            expected.update({"provider", "credential_env"})
+        if (not isinstance(pair, dict) or set(pair) != expected
+                or not all(_identifier(pair[k]) for k in ("model", "effort"))):
             raise ConfigError("invalid_model_effort_pair")
+    if version == 2:
+        classifier = document["classifier"]
+        if classifier["provider"] != "openai":
+            raise ConfigError("unsupported_classifier_provider")
+        reference = classifier["credential_env"]
+        if not isinstance(reference, str) or ENV_REFERENCE.fullmatch(reference) is None:
+            raise ConfigError("invalid_credential_reference")
     fallback = document["fallback"]
     if fallback["effort"] not in models.get(fallback["model"], []):
         raise ConfigError("fallback_not_permitted")
-    if catalogue is not None:
-        pairs = [(e["model"], effort) for e in executors for effort in e["efforts"]]
-        pairs.append((document["classifier"]["model"], document["classifier"]["effort"]))
-        if any(effort not in catalogue.get(model, []) for model, effort in pairs):
-            raise ConfigError("catalogue_model_or_effort_unavailable")
     if len(json.dumps(document).encode()) > MAX_CONFIG_BYTES:
         raise ConfigError("configuration_too_large")
     return json.loads(json.dumps(document))

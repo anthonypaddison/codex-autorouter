@@ -25,11 +25,12 @@ Choose the least expensive route likely to produce a correct result. Optimize to
 
 ### Configured AI mode (proposed v0.3)
 
-This candidate blocks real classifier launches and configured child execution:
-tool isolation and exact current-session child capabilities remain unverified.
-Do not bypass those guards through another CLI command, a different model,
-fallback, tool flags, hook trust changes or legacy routing. An exact selected
-pair already observed in the root may remain current without delegation.
+Configured mode uses one bounded tool-free Responses API classification, with
+an explicit API credential environment reference and billing opt-in. It never
+launches Codex for classification or reads saved ChatGPT/Codex tokens. Disabled
+or schema-v1 configurations cannot start API calls. Exact selected pairs already
+observed in the root remain current; other permitted pairs request one child.
+Codex performs native model/effort compatibility checks before creation.
 
 When the trusted envelope includes `classification`, its model and effort were
 validated against the user's explicit executor configuration. Follow that exact
@@ -39,6 +40,13 @@ tiers below. Do not invent an effort, substitute another model, retry the
 classifier, fan out, or recursively delegate. A selected model does not replace
 the current root. Report blocked/unavailable execution truthfully; require the
 same independent completion, exact correlation, attestation and verification.
+If Codex rejects a request, retain the parent and report the rejection. If the
+outcome is ambiguous or a child already started, never retry or duplicate the
+work. A fallback is permitted only as the recorded classification-time choice,
+not an automatic post-spawn retry. Continuations marked `execution_reused` must
+not spawn again; use the original assignment's evidence, without claiming it
+completed when proof is absent. Do not replace configured-mode choices with the
+legacy policies below. Respect all task-specific no-child/no-spend constraints.
 
 Setup is an explicit user action through `python3 <plugin-root>/scripts/autorouter.py
 setup`; it offers a wizard and equivalent noninteractive flags. Never run setup

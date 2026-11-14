@@ -152,11 +152,8 @@ def validate_arguments(arguments: Any) -> dict[str, Any]:
             reasons.append("invalid_fork_turns")
     if "service_tier" in arguments:
         reasons.append("service_tier_override")
-    if _CONFIGURED_SPECS is not None:
-        # The configured allowlist and model catalogue are not the current
-        # session's spawn schema. Prompt hooks do not expose that capability
-        # evidence through a supported interface; do not self-attest it.
-        reasons.append("child_capabilities_unverified")
+    # This validates our configured contract, not runtime compatibility or actual
+    # execution. Codex natively validates model/effort before creating a child.
     role = role_for(model, effort) if isinstance(model, str) and isinstance(effort, str) else None
     return {
         "spawn_contract_valid": not reasons,
@@ -165,6 +162,45 @@ def validate_arguments(arguments: Any) -> dict[str, Any]:
         "model": model if isinstance(model, str) and model in SUPPORTED_EFFORTS else None,
         "effort": effort if role else None,
     }
+
+
+def result_outcome(response: Any, *, model: str, effort: str, child_started: bool) -> str:
+    """Summarise native results, never retaining error text or claiming completion.
+
+    Only the known native preparation errors establish rejection before creation.
+    Generic errors without lifecycle evidence have an unknown creation boundary.
+    """
+    if isinstance(response, str) and len(response) <= 16384:
+        try:
+            response = json.loads(response)
+        except (ValueError, RecursionError):
+            pass
+    error = None
+    if isinstance(response, dict):
+        if isinstance(response.get("agent_id"), str) and response["agent_id"]:
+            return "creation_reported"
+        error = response.get("error")
+        if isinstance(error, dict):
+            error = error.get("message")
+        if response.get("isError") is True and error is None:
+            content = response.get("content")
+            if isinstance(content, list) and len(content) == 1 and isinstance(content[0], dict):
+                error = content[0].get("text")
+        if error is None and response.get("status") in ("failed", "error", "rejected"):
+            error = "unclassified_native_failure"
+    elif isinstance(response, str):
+        error = response
+    if not isinstance(error, str) or not error or len(error) > 16384:
+        return "outcome_unobservable"
+    if child_started:
+        return "failed_after_creation"
+    patterns = (
+        rf"Unknown model `{re.escape(model)}` for spawn_agent\. Available models: [A-Za-z0-9_., `-]*",
+        rf"Reasoning effort `{re.escape(effort)}` is not supported for model `{re.escape(model)}`\. Supported reasoning efforts: [A-Za-z0-9_, -]*",
+    )
+    if any(re.fullmatch(pattern, error) for pattern in patterns):
+        return "rejected_before_creation"
+    return "failed_creation_unknown"
 
 
 class _UnprovenSpawn(ValueError):
