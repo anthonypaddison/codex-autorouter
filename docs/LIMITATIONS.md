@@ -118,7 +118,8 @@ Its parent enforces the total request deadline, including DNS/TLS and slow reads
 and terminates the worker on timeout. A timeout can still mean a provider received
 and billed the request; unknown usage is not zero and cancellation does not prove
 refund. There is no automatic retry. API response bodies are bounded at 128 KiB,
-task input at 32 KiB, output at 256 tokens, timeout at 1–6 seconds. The output cap
+task input at 32 KiB, output at 256 tokens, timeout at 1–30 seconds (default ten
+seconds for new setup; existing settings are not silently changed). The output cap
 includes reasoning usage and can cause incomplete results/fallback.
 
 API billing must be explicitly enabled. CLI-era schema-v1 configs require setup;
@@ -130,7 +131,10 @@ reuse. Setup/status do not claim execution acceptance or capability receipts.
 The classifier is prompted to minimize cost to reliable completion, but no live
 rate card or verified intelligence ranking is inferred from model names. Real
 selection quality, unnecessary escalation/under-routing, classifier cost and
-task quality are unmeasured. The existing benchmark fixtures test the transport
+task quality are not established across representative workloads. A single
+v0.3.0 CLI acceptance task proved automatic classification and a matching
+Terra/Medium child's completion; it is not a savings or reliability baseline.
+The existing benchmark fixtures test the transport
 using mocked selections only. Legacy route-audit/fuzz checks still test the v0.2
 compatibility path; they do not grade an AI classifier.
 

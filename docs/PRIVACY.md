@@ -33,6 +33,9 @@ flag, exact model identifiers, allowed efforts, fallback and classifier timeout
 in `CODEX_HOME/autorouter/config.json`. It rejects
 unknown configuration fields and never stores credentials. Reconfiguration
 preserves an owner-only byte-exact backup. It does not edit global Codex settings.
+Status reports only whether the configured credential variable's name is present
+in that command's environment. It does not print its value, validate the key,
+prove a billing organisation, or attest a different Desktop process's environment.
 
 When explicitly enabled, classification sends the bounded supplied task and
 executor allowlist to OpenAI's Responses API. It does not read repository files,

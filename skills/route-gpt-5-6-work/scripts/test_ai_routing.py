@@ -57,6 +57,17 @@ class ConfigurationTests(unittest.TestCase):
         doc = configuration(); doc['classifier']['model'] = 'api-only-model'
         self.assertEqual(self.config.validate_config(doc, {}), doc)
 
+    def test_trial_timeouts_are_configurable_and_bounded(self):
+        for timeout in (1, 6, 10, 12.5, 30):
+            with self.subTest(timeout=timeout):
+                doc = configuration(); doc['timeout_seconds'] = timeout
+                self.assertEqual(self.config.validate_config(doc), doc)
+        for timeout in (0, -1, 30.1, 600, True, '10', float('nan'), float('inf')):
+            with self.subTest(timeout=timeout):
+                doc = configuration(); doc['timeout_seconds'] = timeout
+                with self.assertRaises(self.config.ConfigError):
+                    self.config.validate_config(doc)
+
     def test_invalid_fallback_and_provider_are_rejected(self):
         for path, bad in ((('classifier', 'provider'), 'unknown'), (('classifier', 'credential_env'), 'KEY=secret'),
                           (('fallback', 'model'), 'future-classifier'), (('fallback', 'effort'), 'low')):
@@ -195,6 +206,19 @@ class ClassifierTests(unittest.TestCase):
         self.assertEqual(result['reason_code'], 'classifier_timeout')
         self.assertEqual(len(self.calls), 1)
 
+    def test_configured_trial_deadline_reaches_one_request_without_retry(self):
+        doc = configuration(); doc['timeout_seconds'] = 30
+        calls = []
+
+        def runner(payload, credential_env, timeout):
+            calls.append(timeout)
+            return answer()
+
+        result = self.ai.classify('Read only.', doc, runner=runner)
+        self.assertEqual(result['status'], 'selected')
+        self.assertEqual(result['calls'], 1)
+        self.assertEqual(calls, [30])
+
     def test_recursion_guard_never_invokes_api(self):
         with mock.patch.dict(os.environ, {'AUTOROUTER_CLASSIFIER_ACTIVE': '1'}):
             result = self.run_classifier()
@@ -245,11 +269,11 @@ class ClassifierTests(unittest.TestCase):
                 self.assertEqual(result['calls'], 1)
                 self.assertNotIn('savings', result)
 
-    def test_six_second_classifier_budget_is_below_existing_hook_timeout(self):
+    def test_maximum_classifier_budget_has_prompt_hook_headroom(self):
         root = Path(__file__).resolve().parents[3]
         hooks = json.loads((root / 'hooks/hooks.json').read_text())['hooks']['UserPromptSubmit']
         timeout = hooks[0]['hooks'][0]['timeout']
-        self.assertLess(configuration()['timeout_seconds'], timeout)
+        self.assertLess(30, timeout)
 
     def test_disabled_classification_does_not_spend_or_delegate(self):
         doc = configuration(); doc['enabled'] = False
@@ -283,6 +307,29 @@ class ClassifierTests(unittest.TestCase):
 
 
 class SetupCommandTests(unittest.TestCase):
+    def test_interactive_setup_can_include_the_root_pair_without_catalogue_proof(self):
+        from contextlib import redirect_stdout, redirect_stderr
+        from io import StringIO
+        root = Path(__file__).resolve().parents[3]
+        spec = importlib.util.spec_from_file_location('autorouter_setup_test', root / 'scripts/autorouter.py')
+        tool = importlib.util.module_from_spec(spec); spec.loader.exec_module(tool)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'routing.json'
+            output, errors = StringIO(), StringIO()
+            inputs = ['openai', 'future-classifier', 'low', 'AUTOROUTER_TEST_API_KEY',
+                      'future-small=low future-large=medium,high', 'future-large=high', '', 'y']
+            with mock.patch.object(tool, 'available_models', return_value={}), \
+                    mock.patch.object(tool.sys.stdin, 'isatty', return_value=True), \
+                    mock.patch('builtins.input', side_effect=inputs), \
+                    redirect_stdout(output), redirect_stderr(errors):
+                self.assertEqual(tool.main(['setup', '--config', str(path)]), 0)
+            doc = json.loads(path.read_text())
+            self.assertIn({'model': 'future-small', 'efforts': ['low']}, doc['executors'])
+            self.assertTrue(doc['enabled'])
+            self.assertEqual(doc['timeout_seconds'], 10)
+            self.assertIn('current root model and effort', errors.getvalue())
+            self.assertEqual(json.loads(output.getvalue())['live_classifier_calls'], 0)
+
     def test_noninteractive_setup_and_repeat_use_catalogue_and_backup(self):
         root = Path(__file__).resolve().parents[3]
         with tempfile.TemporaryDirectory() as tmp:
@@ -308,12 +355,49 @@ class SetupCommandTests(unittest.TestCase):
                 self.assertEqual(data.get('executor_compatibility'), 'codex_native_validation')
                 self.assertEqual(bool(data['backup']), bool(iteration))
             path = home / 'autorouter/config.json'
-            self.assertEqual(json.loads(path.read_text()), configuration())
+            expected = configuration(); expected['timeout_seconds'] = 10
+            self.assertEqual(json.loads(path.read_text()), expected)
             before = path.read_bytes()
             invalid = args.copy(); invalid[invalid.index('openai')] = 'unknown'
             self.assertNotEqual(subprocess.run(invalid, capture_output=True, env=env).returncode, 0)
             self.assertEqual(path.read_bytes(), before)
             self.assertFalse((home / 'config.toml').exists())
+
+    def test_setup_accepts_an_explicit_timeout_without_inference(self):
+        root = Path(__file__).resolve().parents[3]
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            env = {**os.environ, 'CODEX_HOME': str(home), 'PYTHONDONTWRITEBYTECODE': '1'}
+            args = [sys.executable, '-B', str(root / 'scripts/autorouter.py'), 'setup',
+                    '--provider', 'openai', '--credential-env', 'AUTOROUTER_TEST_API_KEY', '--enabled',
+                    '--classifier', 'future-classifier', '--classifier-effort', 'low',
+                    '--allow', 'future-small=low', '--allow', 'future-large=medium,high',
+                    '--fallback', 'future-large=high', '--timeout-seconds', '12.5']
+            result = subprocess.run(args, capture_output=True, text=True, env=env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            path = home / 'autorouter/config.json'
+            self.assertEqual(json.loads(path.read_text())['timeout_seconds'], 12.5)
+            self.assertEqual(json.loads(result.stdout)['live_classifier_calls'], 0)
+            before = path.read_bytes()
+            invalid = args.copy(); invalid[-1] = '31'
+            self.assertEqual(subprocess.run(invalid, capture_output=True, env=env).returncode, 2)
+            self.assertEqual(path.read_bytes(), before)
+
+    def test_status_reports_credential_presence_without_its_value(self):
+        root = Path(__file__).resolve().parents[3]
+        with tempfile.TemporaryDirectory() as tmp:
+            import routing_config
+            path = Path(tmp) / 'routing.json'
+            routing_config.save_config(path, configuration())
+            args = [sys.executable, '-B', str(root / 'scripts/autorouter.py'), 'status', '--config', str(path)]
+            for present in (False, True):
+                env = {k: v for k, v in os.environ.items() if k != 'AUTOROUTER_TEST_API_KEY'}
+                if present:
+                    env['AUTOROUTER_TEST_API_KEY'] = 'fake-key-must-not-appear'
+                result = subprocess.run(args, capture_output=True, text=True, env=env)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIs(json.loads(result.stdout).get('credential_environment_present'), present)
+                self.assertNotIn('fake-key-must-not-appear', result.stdout + result.stderr)
 
     def test_status_separates_configured_routing_from_execution_proof(self):
         root = Path(__file__).resolve().parents[3]
@@ -440,6 +524,29 @@ class ConfiguredHookTests(unittest.TestCase):
         self.assertEqual(decision['route'], 'current')
         self.assertFalse(decision['delegate'])
         self.assertEqual(decision['orchestration']['required_agents'], {})
+
+    def test_allowlisted_low_effort_root_completes_without_a_child(self):
+        self.classifier.return_value.update(model='future-small', effort='low')
+        data = {**self.data, 'model': 'future-small', 'model_reasoning_effort': 'low'}
+        self.hook.handle(data)
+        decision = self.state()['decision']
+        self.assertEqual(decision['route'], 'current')
+        self.assertFalse(decision['delegate'])
+        self.assertEqual(decision['profile_satisfaction'], 'satisfied')
+        self.assertEqual(decision['executor_compatibility'], 'not_required')
+        self.hook.handle({**data, 'hook_event_name': 'Stop'})
+        self.assertEqual(self.classifier.call_count, 1)
+        state = self.state()
+        self.assertEqual(state['agents'], {})
+        self.assertEqual(state['status'], 'COMPLETE')
+        self.assertEqual(state['violations'], [])
+
+    def test_same_model_with_different_effort_is_not_a_direct_match(self):
+        self.hook.handle({**self.data, 'model': 'future-large', 'model_reasoning_effort': 'medium'})
+        decision = self.state()['decision']
+        self.assertTrue(decision['delegate'])
+        self.assertEqual(decision['effort'], 'high')
+        self.assertEqual(decision['executor_compatibility'], 'codex_native_validation')
 
     def test_guard_returns_before_ledger_or_classifier(self):
         with mock.patch.dict(os.environ, {'AUTOROUTER_CLASSIFIER_ACTIVE': '1'}):

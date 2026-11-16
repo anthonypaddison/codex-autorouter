@@ -14,6 +14,8 @@ from typing import Any
 
 
 MAX_CONFIG_BYTES = 64 * 1024
+DEFAULT_CLASSIFIER_TIMEOUT_SECONDS = 10
+MAX_CLASSIFIER_TIMEOUT_SECONDS = 30
 IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 ENV_REFERENCE = re.compile(r"[A-Z_][A-Z0-9_]{0,127}\Z")
 
@@ -57,7 +59,7 @@ def validate_config(document: Any, catalogue: dict[str, list[str]] | None = None
     if version == 2 and type(document["enabled"]) is not bool:
         raise ConfigError("invalid_enabled_setting")
     timeout = document["timeout_seconds"]
-    if type(timeout) not in (int, float) or not 1 <= timeout <= 6:
+    if type(timeout) not in (int, float) or not 1 <= timeout <= MAX_CLASSIFIER_TIMEOUT_SECONDS:
         raise ConfigError("invalid_classifier_timeout")
     executors = document["executors"]
     if not isinstance(executors, list) or not 1 <= len(executors) <= 64:

@@ -9,7 +9,16 @@ not a released or automatically deployed version. Existing installations and
 historical evidence remain compatible; until setup is run, the legacy routing
 path remains available with a setup reminder.
 
-**Runtime status: NOT LIVE-ACCEPTED.** Configured mode uses the OpenAI Responses
+**Runtime status: LIMITED CLI ACCEPTANCE PASSED.** The installed v0.3.0 trial
+automatically classified one Luna/Low task and completed one correlated
+Terra/Medium child with zero violations. The accepted payload was
+`sha256:46a2e7837fad421bc95ee545de509fadb9f4534162267735f6fa5dfa20754448`.
+Later timeout/setup finalisation is regression-tested, not automatically deployed
+or covered by a repeated live test. This does not prove Desktop credential
+inheritance, routing quality across workloads, or savings. See the
+[limited-trial operator guide](docs/TRIAL.md) for activation, metrics and rollback.
+
+Configured mode uses the OpenAI Responses
 API, not a nested Codex CLI. It explicitly disables model tools, validates the
 selection against the configured allowlist and asks Codex to validate the child
 model/effort natively before spawning. Configuration is not execution proof.
@@ -41,10 +50,23 @@ with exact values from `models`:
 python3 scripts/autorouter.py setup \
   --provider openai --classifier API_CLASSIFIER_ID --classifier-effort CLASSIFIER_EFFORT \
   --credential-env AUTOROUTER_OPENAI_API_KEY --enabled \
+  --allow CURRENT_ROOT_ID=CURRENT_ROOT_EFFORT \
   --allow SMALL_ID=SMALL_EFFORT \
   --allow LARGE_ID=MEDIUM_EFFORT,HIGH_EFFORT \
-  --fallback LARGE_ID=HIGH_EFFORT
+  --fallback LARGE_ID=HIGH_EFFORT --timeout-seconds 10
 ```
+
+Include the actual root model/effort to permit stay-current execution when the
+classifier selects it. If that model is already listed, add the effort to its
+existing entry rather than duplicating the model. An exact selected root pair
+stays direct; a different pair still requires native Codex validation and a
+permitted child. The wizard does not force a different model or infer the root
+from global defaults. Explicit supported model preferences remain enforced.
+
+New setup defaults to a ten-second total classifier deadline; `--timeout-seconds`
+and the wizard support 1–30 seconds. Existing configured deadlines remain intact
+until explicit reconfiguration. UserPromptSubmit has a 35-second outer deadline;
+other hooks retain their existing limits. No automatic retry is added.
 
 Setup writes only `CODEX_HOME/autorouter/config.json` (normally under `~/.codex`),
 or the explicit `--config` path for offline preparation. Repeating setup makes a
@@ -62,7 +84,8 @@ never saved Codex/ChatGPT authentication. Requests use API-account billing/credi
 not the signed-in Codex allowance. No credential is provisioned by setup.
 
 Classification sends only the supplied task and allowlist, with a 32 KiB task
-limit, 256 output-token cap, 128 KiB response bound and a 1–6 second deadline.
+limit, 256 output-token cap, 128 KiB response bound and a configurable 1–30 second
+deadline (ten seconds by default for new setup).
 A short-lived standard-library Python HTTP worker makes one HTTPS request; it
 does not run Codex, hooks or tools. There are no automatic API retries, redirects,
 proxies, repository scans or new dependencies. Failures may select only the
