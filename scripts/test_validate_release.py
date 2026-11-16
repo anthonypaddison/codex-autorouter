@@ -33,13 +33,13 @@ class ReleaseContractTests(unittest.TestCase):
         source = marketplace["plugins"][0]["source"]
 
         self.assertEqual(source["url"], "https://github.com/anthonypaddison/Codex-Autorouter.git")
-        self.assertEqual(source["ref"], "v0.2.0")
+        self.assertEqual(source["ref"], "v0.3.0")
         self.assertNotIn(source["ref"].lower(), {"main", "master", "head"})
 
     def test_manifest_identifies_candidate_without_losing_original_author(self) -> None:
         manifest = json.loads((ROOT / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))
 
-        self.assertEqual(manifest["version"], "0.2.0")
+        self.assertEqual(manifest["version"], "0.3.0")
         self.assertEqual(manifest["author"]["name"], "Alchemist")
         self.assertEqual(manifest["interface"]["websiteURL"], "https://github.com/anthonypaddison/Codex-Autorouter")
 
@@ -71,7 +71,7 @@ class ReleaseContractTests(unittest.TestCase):
     def test_release_procedure_requires_reviewed_tag_archive_and_sha256(self) -> None:
         release = (ROOT / "docs/RELEASING.md").read_text(encoding="utf-8")
 
-        for required in ("v0.2.0", "git tag", "archive", "SHA256", "scripts/validate_release.py"):
+        for required in ("v0.3.0", "git tag", "archive", "SHA256", "scripts/validate_release.py"):
             self.assertIn(required, release)
 
     def test_astra_frontier_policy_is_part_of_the_release_contract(self) -> None:

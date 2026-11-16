@@ -1,6 +1,6 @@
 {
   "name": "gpt-5-6-router",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Autorouter selects a cost-effective Codex model, effort, and bounded agent plan, with GPT-6 Astra behind a rare frontier gate.",
   "author": {
     "name": "Alchemist"
@@ -23,7 +23,7 @@
     "developerName": "Alchemist",
     "category": "Developer Tools",
     "websiteURL": "https://github.com/anthonypaddison/Codex-Autorouter",
-    "privacyPolicyURL": "https://github.com/anthonypaddison/Codex-Autorouter/blob/v0.2.0/docs/PRIVACY.md",
+    "privacyPolicyURL": "https://github.com/anthonypaddison/Codex-Autorouter/blob/v0.3.0/docs/PRIVACY.md",
     "capabilities": [
       "Interactive",
       "Write"

@@ -2,7 +2,7 @@
   <img src="assets/readme/hero.svg" alt="Autorouter — the right model and effort, automatically" width="100%">
 </p>
 
-## Proposed v0.3: user-configured AI routing
+## Proposed v0.3.0: user-configured AI routing
 
 This branch adds an opt-in replacement for the deterministic classifier. It is
 not a released or automatically deployed version. Existing installations and
@@ -146,10 +146,10 @@ Existing GPT-6.1 Sol and GPT-6.1 Terra roots are also supported. Autorouter reta
 
 ### 2. Install the reviewed release
 
-Version `v0.2.0` is the planned immutable release reference. The tag does not exist merely because it appears in this candidate's metadata; use the commands below only after the reviewed tag has been created by the release procedure:
+Version `v0.3.0` is the planned immutable release reference. The tag does not exist merely because it appears in this candidate's metadata; use the commands below only after the reviewed tag has been created by the release procedure:
 
 ```bash
-codex plugin marketplace add anthonypaddison/Codex-Autorouter --ref v0.2.0
+codex plugin marketplace add anthonypaddison/Codex-Autorouter --ref v0.3.0
 codex plugin add gpt-5-6-router@codex-autorouter
 ```
 

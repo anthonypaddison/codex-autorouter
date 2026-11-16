@@ -25,7 +25,7 @@ AGENTS = {
     "gpt56_sol_deep.toml",
     "gpt56_sol_xhigh.toml",
 }
-RELEASE_VERSION = "0.2.0"
+RELEASE_VERSION = "0.3.0"
 RELEASE_REF = f"v{RELEASE_VERSION}"
 REPOSITORY_URL = "https://github.com/anthonypaddison/Codex-Autorouter"
 

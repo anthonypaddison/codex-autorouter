@@ -17,10 +17,10 @@ This is a user-controlled one-time selection. Autorouter never edits global/root
 
 ## Install the immutable reviewed release
 
-After the reviewed `v0.2.0` tag exists:
+After the reviewed `v0.3.0` tag exists:
 
 ```bash
-codex plugin marketplace add anthonypaddison/Codex-Autorouter --ref v0.2.0
+codex plugin marketplace add anthonypaddison/Codex-Autorouter --ref v0.3.0
 codex plugin add gpt-5-6-router@codex-autorouter
 ```
 
