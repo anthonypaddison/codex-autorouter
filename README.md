@@ -2,7 +2,7 @@
   <img src="assets/readme/hero.svg" alt="Autorouter — the right model and effort, automatically" width="100%">
 </p>
 
-## Proposed v0.3.0: user-configured AI routing
+## v0.3.0 release candidate: user-configured AI routing
 
 This branch adds an opt-in replacement for the deterministic classifier. It is
 not a released or automatically deployed version. Existing installations and
@@ -126,10 +126,18 @@ require a separately authorised live evaluation with explicitly provisioned API
 credentials and a verifiable spending ceiling; mocked tests cannot establish them. See
 [limitations](docs/LIMITATIONS.md) and [privacy](docs/PRIVACY.md).
 
-The remaining sections describe the released v0.2 compatibility workflow.
+## Legacy deterministic routing reference
+
+The remaining routing diagrams, profiles and policy examples describe the legacy
+v0.2-compatible deterministic mode, not configured AI classification. They are
+retained for existing users; neither v0.2.0 nor v0.3.0 is claimed as a published
+release by this document. New users should start with the configured-mode setup
+above and the [installation guide](docs/INSTALL.md). Configured mode does not
+inherit the legacy fixed-family ladder, three-child plans or frontier gates;
+only the user's exact allowlist and native Codex restrictions apply.
 
 <p align="center">
-  <a href="https://github.com/anthonypaddison/Codex-Autorouter/actions/workflows/ci.yml"><img alt="Release quality" src="https://img.shields.io/github/actions/workflow/status/anthonypaddison/Codex-Autorouter/ci.yml?branch=ap-cheap-root-routing&amp;style=flat-square&amp;label=release%20quality"></a>
+  <a href="https://github.com/anthonypaddison/Codex-Autorouter/actions/workflows/ci.yml"><img alt="Release quality" src="https://img.shields.io/github/actions/workflow/status/anthonypaddison/Codex-Autorouter/ci.yml?branch=ap-configurable-ai-routing&amp;style=flat-square&amp;label=release%20quality"></a>
   <img alt="Python 3.10 through 3.14" src="https://img.shields.io/badge/Python-3.10%E2%80%933.14-3776AB?style=flat-square">
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-E9A23B?style=flat-square"></a>
   <img alt="Private beta" src="https://img.shields.io/badge/status-private%20beta-8B5CF6?style=flat-square">
@@ -360,16 +368,22 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_release.py
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/fuzz_router.py
 
 cd skills/route-gpt-5-6-work/scripts
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_spawn_compat test_router test_routerctl
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_spawn_compat test_router test_routerctl test_ai_routing test_model_policy
 
 cd ../../../scripts
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_check_hooks test_standalonectl test_validate_release
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_check_hooks test_standalonectl test_validate_release test_model_catalogue
 
 cd ..
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v benchmarks.test_autorouter_bench
 ```
 
 The release gate covers the repository-defined routing, lifecycle, release-contract, and benchmark suites plus 5,000 deterministic fuzz cases. See [release evidence](docs/RELEASE_EVIDENCE.md), the [release checklist](docs/RELEASE_CHECKLIST.md), and [Autorouter Arena](benchmarks/README.md) for the full proof and benchmark method.
+
+Live benchmark execution and grading are disabled: generated code must never be
+graded by unrestricted host Python. Offline fixture generation, deterministic
+route auditing and mocked tests remain available. External review is optional,
+separately billable and restricted to explicitly authorised benchmark artifacts;
+it is not part of installation or normal routing.
 
 </details>
 

@@ -11,6 +11,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReleaseContractTests(unittest.TestCase):
+    def test_local_secrets_and_trial_data_cannot_enter_release_inputs(self) -> None:
+        for name in (".env", ".env.local", ".all-env", "auth.json", "autorouter-acceptance.json", ".trigger-tree/history.jsonl", "router-state-v2/turn.json"):
+            with self.subTest(name=name), self.assertRaisesRegex(AssertionError, "local-only"):
+                validate_release.candidate_source_paths({name}, set())
+        self.assertEqual([Path(".env.example")], validate_release.candidate_source_paths({".env.example"}, set()))
+
     def test_ignored_generated_runtime_artifacts_do_not_become_candidate_drift(self) -> None:
         paths = validate_release.candidate_source_paths(
             {"src/keep.py"},

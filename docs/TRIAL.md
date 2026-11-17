@@ -12,6 +12,11 @@ Classifier usage was 299 input and 186 output tokens, with zero cached input.
 There is no recorded rate card or authoritative dollar debit for that execution.
 
 The finalised source adds setup timeout controls and root-allowlist guidance.
+Subsequent publication corrections disable unsafe live benchmark grading, secure
+optional benchmark artifact/cleanup boundaries and correct public descriptions.
+These do not change the classifier or delegation runtime. Metadata changes still
+change shipped-payload identity; the installed accepted identity above is not the
+new source identity.
 These changes are mock-tested. They have not been reinstalled or subjected to
 another live test. Keep the accepted installation unchanged until an explicit
 update. A manifest version alone is not payload identity or release approval.

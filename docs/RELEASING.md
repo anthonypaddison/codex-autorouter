@@ -13,11 +13,18 @@ git remote -v
 git status --short
 git rev-parse HEAD
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_release.py
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v scripts.test_validate_release
+(cd scripts && PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_validate_release)
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/fuzz_router.py
 ```
 
-Run the full repository-defined test suite and complete the real Desktop/CLI acceptance evidence before continuing. The health check must not run an automatic paid probe; readiness capability must come from a genuine successful GPT-6 Sol or Astra escalation during controlled acceptance or normal work. Astra acceptance is a separately bounded frontier check, not part of routine release probing.
+Run the full CI-defined offline suite listed in README and review
+`RELEASE_CHECKLIST.md`. Label v0.3.0 as a limited trial with its demonstrated
+macOS CLI scope; other surfaces remain unverified until separately approved
+acceptance. Configured-mode proof must use its exact allowlist, not a mandatory
+legacy Sol/Astra probe. Health checks must never run paid probes. Do not infer
+general classifier quality, entitlement or savings from one accepted child.
+Enable and test GitHub private vulnerability reporting before public installation.
+Review all reachable refs for secrets and deliberate author-identity exposure.
 
 ## 2. Create a local reviewed tag
 

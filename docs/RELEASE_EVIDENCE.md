@@ -1,65 +1,73 @@
-# Release evidence
+# v0.3.0 release evidence
 
-- Current source candidate: manifest version `0.2.0` on the fork's `ap-cheap-root-routing` branch
-- Recorded: 2026-08-11
-- Release status: **not released**; the planned immutable `v0.2.0` tag, archive, SHA256, host acceptance, publication, and merge have not been performed.
+Status: **unpublished release candidate for a limited normal-use trial**, not a
+cross-platform stable release. Planned `v0.3.0` URLs do not create a tag. No
+publication, merge or installed-plugin update is implied.
 
-This file distinguishes current-candidate proof from predecessor history. Evidence from `0.1.0` custom-agent builds does not prove the `0.2.0` direct-child path, receipt binding, or cheap-root behaviour.
+## Source baseline and scope
 
-## Current-candidate source evidence
+The publication audit reviewed `9bd875ca91e5a2c572d3542193f1f659d7554437` on
+`ap-configurable-ai-routing`. Identify its subsequent publication-correction
+commit using `git rev-parse HEAD`; version 0.3.0 alone is not payload identity.
 
-Record exact command output and commit identifiers here before checking the matching rows in `RELEASE_CHECKLIST.md`.
+Configured mode uses one bounded OpenAI API classification, exact user-approved
+executor pairs, an approved fallback and native Codex delegation. Exact root
+matches stay direct. Legacy deterministic GPT-6 policy and compatibility assets
+remain separate regression coverage, not evidence of AI-classifier quality.
 
-- Release-contract tests cover fork metadata, immutable planned ref, retained Alchemist attribution, cheap-root documentation, and the future tag/archive/SHA256 procedure.
-- The release validator requires manifest `0.2.0`, fork URLs, privacy URL pinned to `v0.2.0`, known optional legacy assets only, and the release procedure. It rejects moving `main`, `master`, or `HEAD` marketplace refs.
-- Normal lifecycle behaviour and health no longer depend on legacy custom-agent TOMLs. Those assets remain optional compatibility material selected only through `activate --legacy-agents`.
-- Direct GPT-6 Sol/Astra argument construction, schema detection, and fallback are expected to pass only through the central compatibility adapter; current automated and real-host results must be attached before release.
-- Hook definitions are expected to execute only the router under their own exact plugin root and fail open without sibling-cache discovery; current exact-candidate test output must be attached before release.
-- `UserPromptSubmit.model` is the required per-turn active-root evidence. Current tests must prove GPT-6 Luna/Sol/Astra policy, clarification without escalation for user-intent ambiguity, and `DEGRADED` health for every non-Luna turn. GPT-5.6 evidence is historical/transition-only.
-- Astra evidence must prove that generic classification never selects it, explicit requests default to Medium and reject Low/Ultra, the sole automatic Sol route-up targets Medium with exact attestation, and no automatic Astra effort retry exists.
-- Capability receipts must bind plugin version, observable Codex runtime/build, host type, platform, observed child model, effort intent, capability/schema signature, and timestamp. Current tests and host runs must prove runtime invalidation and absence of automatic paid probes.
-- Status commands must be proven read-only against an absent `CODEX_HOME` tree and existing state. This cannot be inferred from implementation review alone.
+## Recorded live evidence — earlier installed payload only
 
-The full suite, 5,000-case fuzz run, clean-tree release validation, and hosted Python/OS matrix remain candidate gates until their exact commit and outputs are recorded.
+[TRIAL.md](TRIAL.md) records limited macOS CLI acceptance of payload
+`sha256:46a2e7837fad421bc95ee545de509fadb9f4534162267735f6fa5dfa20754448`:
 
-## Current real-host evidence required
+- Luna/Low root; one automatic classification selected Terra/Medium.
+- One native-accepted child started and completed, returned 10, and matched its
+  lifecycle/attestation with zero violations.
+- Classifier latency 5.642154 seconds; task duration 25.440 seconds.
+- Classifier usage 299 input and 186 output tokens; cached input zero.
+- No authoritative API dollar debit or causal cost-saving comparison.
 
-No `0.2.0` Desktop or CLI row is accepted yet. Each row must follow `HOST_ACCEPTANCE.md` and retain:
+Later timeout/setup and publication-security changes are offline-tested, not
+installed or covered by another live acceptance. This evidence does not prove
+Desktop credential inheritance, arbitrary-model entitlement, other hosts,
+workload-wide quality or savings. Missing runtime/build identity still limits
+global capability-receipt claims.
 
-- exact plugin/tag/archive identity and SHA256;
-- Codex runtime/build, Desktop or CLI host, platform, and hook trust;
-- hook-observed Luna root for the efficient path;
-- a genuine successful Sol escalation through the direct compatibility adapter, plus a separately bounded Astra gate check;
-- a matching `READY` receipt followed by proven `DEGRADED` behaviour after runtime/build identity changes;
-- proof that health/status did not launch a paid child;
-- bounded Luna Low evidence and, only if Low is unreliable, a controlled Luna Medium comparison;
-- truthful non-Luna `DEGRADED` matrix evidence and no classifier-driven downward delegation from Sol.
+## Publication-security corrections
 
-## Historical predecessor evidence
+- Live benchmark run, single-run execution and grading fail closed before model
+  calls or workspace Python execution. Grader hashes are not isolation.
+- Review packets read bounded regular files from the exact owned run. Links,
+  traversal and substituted workspaces are rejected; no workspace Git commands
+  execute. POSIX no-follow access is required for workspace/review operations.
+- Cleanup requires a marker bound to a benchmark-created output directory.
+  Protected roots, foreign directories and linked paths are refused.
+- Local credentials, acceptance settings and telemetry are ignored, not deleted.
+  MIT/Alchemist attribution remains; legacy screenshots are retained as source
+  assets but no longer advertised as configured AI mode.
 
-The upstream `0.1.0` line had extensive automated coverage for routing classification, nonce-bound ledgers, fail-open terminal hooks, sanitizer behaviour, standalone transaction recovery, filesystem ownership, Windows path safety, and deterministic fuzzing. Historical hosted runs included [29233219101](https://github.com/vibeforge1111/Codex-Autorouter/actions/runs/29233219101) and [29333382896](https://github.com/vibeforge1111/Codex-Autorouter/actions/runs/29333382896).
+The exact reviewed commit must pass all CI-defined offline tests, the strict
+10-contract route audit, 5,000-case fuzz and release validation. Current command
+results belong in the delivery report. Hosted CI cannot be inferred from local
+tests. CI targets Python 3.10–3.14 on macOS/Linux/Windows; POSIX-only benchmark
+workspace tests explicitly skip unsupported Windows operations.
 
-Those builds also produced live macOS CLI custom-agent evidence using named `gpt56_terra_worker` and `gpt56_sol_deep` TOMLs. That evidence is retained only as regression context for ledger and verification behaviour. It is not current-path acceptance because `0.2.0` deliberately replaces normal named-agent activation with direct model/effort spawning behind a compatibility adapter.
+## Historical evidence and history publication
 
-Historical failures remain relevant test motivations:
+Earlier v0.1/v0.2 policy, custom-agent and release-planning evidence remains in Git
+history; it does not prove configured v0.3.0 execution. The audit found no confirmed
+credentials in reachable history; scanner matches were synthetic test route/event
+identifiers. Commit author identities remain public metadata if history is
+published. Review those deliberately. Old commits retain the benchmark defects:
+do not distribute an older branch/tag as the corrected release.
 
-- source-thread UUID digits and synthetic technical vocabulary once distorted classification;
-- incomplete orchestration results once made successful verification unobservable;
-- terminal hard-block feedback once poisoned persisted transcripts;
-- stale-cache discovery once risked executing a sibling installation;
-- default/full-history spawns and custom `agent_type` mismatches once invalidated child attestation.
+## Still required before publication
 
-The `0.2.0` candidate must retain regression coverage for the underlying privacy, verification, idempotency, and fail-open properties without restoring obsolete legacy-agent requirements.
-
-## Distribution evidence required
-
-Before publication, append:
-
-1. the reviewed commit and annotated `v0.2.0` tag resolution;
-2. clean-room archive validation and full suite output;
-3. the archive SHA256 and successful checksum verification;
-4. every required Desktop/CLI row;
-5. private vulnerability-reporting evidence;
-6. confirmation that the immutable marketplace/privacy URLs resolve to the reviewed tag.
-
-Until those items exist, do not describe `0.2.0` as stable, installable, fully accepted, released, or `READY` on any untested host.
+1. Review the corrected commit and obtain hosted CI for those exact bytes.
+2. Enable and test GitHub private vulnerability reporting before public
+   installation; see [SECURITY.md](../SECURITY.md).
+3. Under separate approval, create/publish an immutable reviewed tag, validate its
+   archive in a clean checkout, record/verify SHA256, and check marketplace and
+   privacy URLs resolve to it.
+4. Label the distribution as a limited trial. Keep unverified environments
+   unverified until separately authorised real-host evidence exists.

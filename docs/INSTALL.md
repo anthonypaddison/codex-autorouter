@@ -1,8 +1,48 @@
 # Installation and lifecycle
 
-This page covers the supported plugin path for Desktop and CLI. Autorouter routes through Codex's direct child capability; the bundled custom-agent TOMLs are not required. For a surface without plugin support, use [Standalone advisory mode](STANDALONE.md).
+This page covers the plugin workflow for hosts that expose trusted hooks and
+native child execution. v0.3.0 is an unpublished limited-trial candidate. One
+macOS CLI execution of an earlier payload is demonstrated; Desktop credential
+inheritance and Linux/Windows real-host execution remain unverified. Python
+3.10–3.14 is the CI target, not proof of every host surface. The bundled legacy
+custom-agent TOMLs are not required. Non-plugin surfaces use
+[Standalone advisory mode](STANDALONE.md), not full hook-driven routing.
 
-## Select the cheap root once
+## Configure v0.3.0 AI routing
+
+After installing and reviewing the exact candidate's five hooks as described
+below, run from its installed root:
+
+```sh
+python3 scripts/autorouter.py models
+python3 scripts/autorouter.py setup
+python3 scripts/autorouter.py status
+```
+
+Setup asks for the API classifier, credential environment-variable **name**,
+executor model/effort allowlist, fallback and explicit API-billing consent. Include
+the actual root pair if it should be allowed to stay direct. No fixed model family
+is required in configured mode. Catalogue availability is advisory; native Codex
+validation and session policy ultimately accept or reject a child. A returned
+selection is not execution evidence.
+
+Provision the named variable in the environment that launches Codex. Never place
+its value in setup/config JSON, task text, Git or logs. A running Desktop cannot
+inherit a later Terminal export; see [TRIAL.md](TRIAL.md) for an explicit relaunch
+procedure. Setup does not provision credentials or change global model settings.
+Classification uses separately billed OpenAI API credits, not Codex subscription
+allowance. Check account-side credit balance, payment/recharge controls and current
+pricing before opting in; a timeout or local budget estimate is not a hard cap.
+
+To disable AI classification, repeat the supported setup command with
+`--disabled` instead of `--enabled`; preserve the desired allowlist/fallback.
+This disables paid classification, **not the plugin's legacy deterministic
+routing**. To disable all router hooks, disable the plugin through Codex or remove
+it using the uninstall steps below. Neither operation changes the root model.
+Status/health do not run inference. New setup deadlines default to ten seconds
+and support 1–30 seconds with no automatic retry.
+
+## Legacy deterministic mode: select the cheap root once
 
 Select **GPT-6 Luna** in Codex Desktop before starting a new task. For a personal CLI default, use top-level Codex configuration:
 
@@ -36,7 +76,11 @@ From the exact installed plugin root, run:
 python3 scripts/check_hooks.py
 ```
 
-The combined check reports:
+The following cheap-root/frontier readiness descriptions apply to **legacy
+deterministic mode**, not configured allowlist policy. Configured-mode checks use
+the configured exact executor pairs; unknown runtime/build or entitlement stays
+unproven. A conservative global `DEGRADED` result does not invalidate a separately
+correlated successful child. The legacy combined check reports:
 
 - `READY` when the current task observed GPT-6 Luna and at least one model-keyed non-stale capability receipt proves a genuine successful GPT-6 Sol or Astra escalation against the same plugin candidate and at least one matching versioned Codex runtime/build identifier;
 - `DEGRADED` when Autorouter works but the observed root is not Luna, the runtime/build changed, or current escalation capability is not yet proven; a non-Luna root substantially reduces credit-saving behaviour;

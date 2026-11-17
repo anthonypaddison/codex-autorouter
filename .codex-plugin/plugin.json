@@ -1,7 +1,7 @@
 {
   "name": "gpt-5-6-router",
   "version": "0.3.0",
-  "description": "Autorouter selects a cost-effective Codex model, effort, and bounded agent plan, with GPT-6 Astra behind a rare frontier gate.",
+  "description": "Opt-in API classification selects a user-allowlisted Codex model and effort. Legacy deterministic routing remains available.",
   "author": {
     "name": "Alchemist"
   },
@@ -18,8 +18,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Autorouter",
-    "shortDescription": "The right model and effort for every Codex task",
-    "longDescription": "Profiles each task, chooses an appropriate GPT-6 Luna or Sol model and reasoning effort, exposes GPT-6 Astra only through an explicit or attested frontier gate, orchestrates bounded subagents, preserves Fast or Standard, and requires proportionate verification.",
+    "shortDescription": "Configurable AI routing with native Codex delegation",
+    "longDescription": "v0.3.0 offers opt-in OpenAI API classification with separately billed API credits, exact user-approved model/effort pairs, direct execution for an exact root match, and at most one native-validated child for a different selection. Codex permissions and model restrictions still apply. Legacy deterministic GPT-6 Luna or Sol routing, with a gated Astra tier, remains available when configured AI routing is not enabled. Limited macOS CLI execution is demonstrated; Desktop credential inheritance, other environments, workload quality and cost savings are not established.",
     "developerName": "Alchemist",
     "category": "Developer Tools",
     "websiteURL": "https://github.com/anthonypaddison/Codex-Autorouter",
@@ -29,18 +29,13 @@
       "Write"
     ],
     "defaultPrompt": [
-      "Automatically choose the best cost-effective route for this task.",
-      "Show me the model, effort, speed, and verification plan.",
-      "Route this product-building task for maximum cost efficiency."
+      "Show the current routing configuration without making model calls.",
+      "Explain the API billing and hook permissions before setup.",
+      "Route this task using only my configured model and effort allowlist."
     ],
     "brandColor": "#48D7E8",
     "composerIcon": "./assets/icon.svg",
     "logo": "./assets/icon.svg",
-    "logoDark": "./assets/icon.svg",
-    "screenshots": [
-      "./assets/screenshots/routing-map.png",
-      "./assets/screenshots/profiles.png",
-      "./assets/screenshots/orchestration.png"
-    ]
+    "logoDark": "./assets/icon.svg"
   }
 }

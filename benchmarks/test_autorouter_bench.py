@@ -18,6 +18,154 @@ SPEC.loader.exec_module(bench)
 
 
 class ArenaTests(unittest.TestCase):
+    def test_grading_never_executes_workspace_python(self):
+        with mock.patch.object(bench.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, '{"score": 1}', "")) as launch:
+            with self.assertRaisesRegex(ValueError, "disabled"):
+                bench._grade(Path("unused"))
+            launch.assert_not_called()
+
+    @unittest.skipUnless(os.name == "posix", "artifact collection requires POSIX no-follow access")
+    def test_review_rejects_symlink_artifacts(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "output"
+            bench.prepare(root, [bench.CASES[0]])
+            workspace = bench._copy_starter(root, bench.CASES[0], "baseline", 1)
+            secret = Path(td) / "outside.txt"
+            secret.write_text("OUTSIDE CANARY", encoding="utf-8")
+            for directory in (False, True):
+                link = workspace / "leak"
+                link.symlink_to(secret.parent if directory else secret, target_is_directory=directory)
+                try:
+                    with self.assertRaises(ValueError):
+                        bench._workspace_patch(workspace)
+                finally:
+                    link.unlink()
+
+    def test_clean_refuses_unowned_nonempty_directory(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            canary = root / "keep.txt"
+            canary.write_text("keep", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                bench.prepare(root, [], clean=True)
+            self.assertEqual("keep", canary.read_text(encoding="utf-8"))
+
+    @unittest.skipUnless(os.name == "posix", "workspace operations require POSIX no-follow access")
+    def test_clean_preserves_owned_output_workflow(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "arena"
+            bench.prepare(root, [bench.CASES[0]])
+            (root / "old-result").write_text("old", encoding="utf-8")
+            bench.prepare(root, [bench.CASES[0]], clean=True)
+            self.assertFalse((root / "old-result").exists())
+            self.assertTrue((root / "starters/locale_batch/TASK.md").is_file())
+
+    def test_clean_refuses_protected_roots_before_deleting(self):
+        for target in (Path.home(), bench.ROOT, bench.ROOT.parent, Path(Path.cwd().anchor)):
+            with self.subTest(target=target), mock.patch.object(bench.shutil, "rmtree") as delete:
+                with self.assertRaises(ValueError):
+                    bench.prepare(target, [], clean=True)
+                delete.assert_not_called()
+
+    @unittest.skipUnless(os.name == "posix", "artifact collection requires POSIX no-follow access")
+    def test_artifact_reader_rejects_escape_and_bounds_regular_files(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "workspace"
+            root.mkdir()
+            inside = root / "safe.txt"
+            inside.write_text("0123456789", encoding="utf-8")
+            outside = root.parent / "outside.txt"
+            outside.write_text("OUTSIDE CANARY", encoding="utf-8")
+            self.assertEqual("01234\n[truncated]\n", bench._bounded_text(inside, 5, root=root))
+            self.assertEqual("", bench._bounded_text(root / "missing", root=root))
+            with mock.patch.object(bench, "_read_regular_at", side_effect=PermissionError):
+                self.assertEqual("", bench._bounded_text(inside, root=root))
+            for path in (outside, root / ".." / "outside.txt", root):
+                with self.subTest(path=path), self.assertRaises(ValueError):
+                    bench._bounded_text(path, root=root)
+            (root / "file-link").symlink_to(outside)
+            (root / "dir-link").symlink_to(root.parent, target_is_directory=True)
+            for path in (root / "file-link", root / "dir-link/outside.txt"):
+                with self.subTest(path=path), self.assertRaises(ValueError):
+                    bench._bounded_text(path, root=root)
+            with mock.patch.object(bench.subprocess, "run", side_effect=AssertionError("artifact collection must not execute Git")):
+                (root / "file-link").unlink()
+                (root / "dir-link").unlink()
+                self.assertIn("0123456789", bench._workspace_patch(root))
+
+    @unittest.skipUnless(os.name == "posix" and hasattr(os, "geteuid") and os.geteuid() != 0, "requires normal POSIX file permissions")
+    def test_inaccessible_artifact_is_not_read_or_submitted(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            artifact = root / "private.txt"
+            artifact.write_text("UNREADABLE CANARY", encoding="utf-8")
+            artifact.chmod(0)
+            try:
+                self.assertEqual("", bench._bounded_text(artifact, root=root))
+                with self.assertRaises(ValueError):
+                    bench._workspace_patch(root)
+            finally:
+                artifact.chmod(0o600)
+
+    @unittest.skipUnless(os.name == "posix", "workspace operations require POSIX no-follow access")
+    def test_clean_rejects_links_copied_markers_and_linked_starters(self):
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            root = base / "arena"
+            bench.prepare(root, [bench.CASES[0]])
+            alias = base / "alias"
+            alias.symlink_to(root, target_is_directory=True)
+            self.assertEqual(1, bench.main(["prepare", "--output", str(alias), "--clean"]))
+            copy = base / "unrelated"
+            copy.mkdir()
+            (copy / bench.OUTPUT_MARKER).write_bytes((root / bench.OUTPUT_MARKER).read_bytes())
+            with self.assertRaises(ValueError):
+                bench.prepare(copy, [], clean=True)
+            starter = root / "starters" / "locale_batch"
+            starter.rename(root / "saved-starter")
+            starter.symlink_to(copy, target_is_directory=True)
+            with self.assertRaises(ValueError):
+                bench.prepare(root, [bench.CASES[0]])
+            self.assertTrue((copy / bench.OUTPUT_MARKER).exists())
+
+    @unittest.skipUnless(os.name == "posix", "artifact collection requires POSIX no-follow access")
+    def test_review_rejects_report_and_packet_escape_before_provider_calls(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / "arena"
+            bench.prepare(root, [bench.CASES[0]])
+            outside = Path(td) / "outside.json"
+            outside.write_text('{"results": []}', encoding="utf-8")
+            report = root / "report.json"
+            report.symlink_to(outside)
+            args = bench.parser().parse_args(["review", "--execute", "--acknowledge-external-review-cost"])
+            with mock.patch.object(bench, "_provider_review", side_effect=AssertionError("no provider call allowed")):
+                with self.assertRaises(ValueError):
+                    bench.review(args, root, [bench.CASES[0]])
+                report.unlink()
+                results = []
+                for arm in bench.ARMS:
+                    workspace = bench._copy_starter(root, bench.CASES[0], arm, 1)
+                    results.append({"arm": arm, "workspace": str(workspace)})
+                results[0]["workspace"] = str(Path(td))
+                with self.assertRaises(ValueError):
+                    bench._blind_packet(bench.CASES[0], 1, results, root)
+                results[0]["workspace"] = str(root / "runs/repeat-1/baseline/locale_batch/workspace")
+                final = Path(results[0]["workspace"]).parent / "final.txt"
+                final.symlink_to(outside)
+                with self.assertRaises(ValueError):
+                    bench._blind_packet(bench.CASES[0], 1, results, root)
+                final.unlink()
+                task = Path(results[0]["workspace"]) / "TASK.md"
+                task.unlink()
+                task.symlink_to(outside)
+                with self.assertRaises(ValueError):
+                    bench._blind_packet(bench.CASES[0], 1, results, root)
+
+    def test_disabled_single_run_cannot_start_codex(self):
+        with mock.patch.object(bench.subprocess, "run", side_effect=AssertionError("must not launch")):
+            with self.assertRaisesRegex(ValueError, "disabled"):
+                bench._run_one(bench.parser().parse_args(["run"]), Path("unused"), bench.CASES[0], "baseline", 1)
+
     def test_route_contracts(self):
         self.assertEqual(0, bench.route_audit(strict=True))
 
@@ -39,6 +187,7 @@ class ArenaTests(unittest.TestCase):
                     self.assertEqual(mode, decision["orchestration"]["mode"])
                     self.assertEqual(roles, decision["orchestration"]["required_agents"])
 
+    @unittest.skipUnless(os.name == "posix", "workspace operations require POSIX no-follow access")
     def test_prepare_all_cases_and_graders_start_red(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -113,7 +262,7 @@ class ArenaTests(unittest.TestCase):
         self.assertEqual(bench.ARMS[1:] + bench.ARMS[:1], bench._arm_order(2))
         self.assertEqual(set(bench.ARMS), set(bench._arm_order(7)))
 
-    def test_live_matrix_restores_the_users_original_profile(self):
+    def test_live_matrix_is_disabled_without_profile_changes_or_inference(self):
         args = bench.parser().parse_args([
             "run", "--case", "locale_batch", "--execute", "--trust-reviewed-hooks"
         ])
@@ -131,9 +280,10 @@ class ArenaTests(unittest.TestCase):
                 mock.patch.object(bench, "_profile", side_effect=profile), \
                 mock.patch.object(bench, "_run_one", return_value=fake_result), \
                 mock.patch.object(bench, "_render_report"):
-            self.assertEqual(0, bench.run(args, Path(td), [bench.CASES[0]]))
-        self.assertEqual([None, "token-saver", "balanced", "max-quality", "balanced"], profile_calls)
+            self.assertEqual(2, bench.run(args, Path(td), [bench.CASES[0]]))
+        self.assertEqual([], profile_calls)
 
+    @unittest.skipUnless(os.name == "posix", "artifact collection requires POSIX no-follow access")
     def test_blind_packet_hides_profiles_tokens_and_paths(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -152,7 +302,7 @@ class ArenaTests(unittest.TestCase):
                     "quality": {"passed": 1, "total": 1, "checks": [{"name": "x", "passed": True}]},
                     "elapsed_seconds": 99,
                 })
-            packet, mapping = bench._blind_packet(bench.CASES[0], 1, results)
+            packet, mapping = bench._blind_packet(bench.CASES[0], 1, results, root)
             serialized = json.dumps(packet)
             self.assertEqual(set(bench.ARMS), set(mapping.values()))
             for hidden in (*bench.ARMS, "999999", str(root)):
@@ -177,6 +327,7 @@ class ArenaTests(unittest.TestCase):
         self.assertEqual("token-saver", full["consensus_winner"])
         self.assertEqual(11, full["arms"]["token-saver"]["total_tokens"])
 
+    @unittest.skipUnless(os.name == "posix", "artifact collection requires POSIX no-follow access")
     def test_private_reviewer_pipeline_writes_only_full_quorum_as_official(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
