@@ -7,3 +7,15 @@ __pycache__/
 .ruff_cache/
 dist/
 release/
+
+# Local credentials, task telemetry and machine-specific trial configuration.
+.env
+.env.*
+!.env.example
+.all-env
+auth.json
+.trigger-tree/
+autorouter-acceptance.json
+router-state*/
+router-observations*/
+*.jsonl

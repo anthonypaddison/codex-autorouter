@@ -2,8 +2,142 @@
   <img src="assets/readme/hero.svg" alt="Autorouter — the right model and effort, automatically" width="100%">
 </p>
 
+## v0.3.0 release candidate: user-configured AI routing
+
+This branch adds an opt-in replacement for the deterministic classifier. It is
+not a released or automatically deployed version. Existing installations and
+historical evidence remain compatible; until setup is run, the legacy routing
+path remains available with a setup reminder.
+
+**Runtime status: LIMITED CLI ACCEPTANCE PASSED.** The installed v0.3.0 trial
+automatically classified one Luna/Low task and completed one correlated
+Terra/Medium child with zero violations. The accepted payload was
+`sha256:46a2e7837fad421bc95ee545de509fadb9f4534162267735f6fa5dfa20754448`.
+Later timeout/setup finalisation is regression-tested, not automatically deployed
+or covered by a repeated live test. This does not prove Desktop credential
+inheritance, routing quality across workloads, or savings. See the
+[limited-trial operator guide](docs/TRIAL.md) for activation, metrics and rollback.
+
+Configured mode uses the OpenAI Responses
+API, not a nested Codex CLI. It explicitly disables model tools, validates the
+selection against the configured allowlist and asks Codex to validate the child
+model/effort natively before spawning. Configuration is not execution proof.
+Unconfigured legacy routing is unchanged. Do not promote this candidate on the
+strength of mocked tests alone.
+
+After a separately reviewed installation of this candidate, run the setup
+command from that plugin's root:
+
+```sh
+python3 scripts/autorouter.py models
+python3 scripts/autorouter.py setup
+python3 scripts/autorouter.py status
+```
+
+The wizard shows advisory Codex executor catalogue entries, then asks separately
+for the API provider (`openai`), API classifier model/effort, credential environment
+variable **name**, executor models/efforts, fallback and explicit billing opt-in.
+API model identifiers are not Codex executor capabilities. The provider/model
+must support Responses, strict JSON-schema output and the configured reasoning
+effort. An absent/stale Codex catalogue does not prevent entering explicit pairs;
+Codex rejects unsupported requests before child creation where its native
+validation applies. The router never bypasses those restrictions.
+
+Without an interactive terminal, use the equivalent flags, replacing identifiers
+with exact values from `models`:
+
+```sh
+python3 scripts/autorouter.py setup \
+  --provider openai --classifier API_CLASSIFIER_ID --classifier-effort CLASSIFIER_EFFORT \
+  --credential-env AUTOROUTER_OPENAI_API_KEY --enabled \
+  --allow CURRENT_ROOT_ID=CURRENT_ROOT_EFFORT \
+  --allow SMALL_ID=SMALL_EFFORT \
+  --allow LARGE_ID=MEDIUM_EFFORT,HIGH_EFFORT \
+  --fallback LARGE_ID=HIGH_EFFORT --timeout-seconds 10
+```
+
+Include the actual root model/effort to permit stay-current execution when the
+classifier selects it. If that model is already listed, add the effort to its
+existing entry rather than duplicating the model. An exact selected root pair
+stays direct; a different pair still requires native Codex validation and a
+permitted child. The wizard does not force a different model or infer the root
+from global defaults. Explicit supported model preferences remain enforced.
+
+New setup defaults to a ten-second total classifier deadline; `--timeout-seconds`
+and the wizard support 1–30 seconds. Existing configured deadlines remain intact
+until explicit reconfiguration. UserPromptSubmit has a 35-second outer deadline;
+other hooks retain their existing limits. No automatic retry is added.
+
+Setup writes only `CODEX_HOME/autorouter/config.json` (normally under `~/.codex`),
+or the explicit `--config` path for offline preparation. Repeating setup makes a
+byte-exact backup before replacement. It does not install plugins, log in,
+modify Codex defaults, run inference or verify model entitlement. Use `--disabled`
+instead of `--enabled` to keep configured AI routing inactive. Reconfigure with
+the same command; reinstalling is unnecessary. Schema-v1 CLI-era configurations
+remain readable but require explicit setup before API usage; no automatic
+conversion can silently start API spending.
+
+Provision the referenced environment variable in the process that starts Codex;
+Desktop must inherit it. Never paste the key into setup, task text, JSON config,
+Git or logs. The router reads only that explicitly referenced API credential,
+never saved Codex/ChatGPT authentication. Requests use API-account billing/credits,
+not the signed-in Codex allowance. No credential is provisioned by setup.
+
+Classification sends only the supplied task and allowlist, with a 32 KiB task
+limit, 256 output-token cap, 128 KiB response bound and a configurable 1–30 second
+deadline (ten seconds by default for new setup).
+A short-lived standard-library Python HTTP worker makes one HTTPS request; it
+does not run Codex, hooks or tools. There are no automatic API retries, redirects,
+proxies, repository scans or new dependencies. Failures may select only the
+configured fallback before execution starts. No fallback is automatically spawned
+after a delegation rejection, uncertain result or child failure.
+
+The owned turn ledger is reserved before classification. Duplicate delivery,
+including after an interrupted request with unknown billing outcome, cannot
+repeat it. Simple continuations reuse the decision without spawning the assignment
+again; use existing child evidence rather than duplicating possibly completed work.
+
+For a directly enforced preference, start a prompt with:
+
+```text
+Use model EXACT_MODEL_ID at EXACT_EFFORT effort.
+```
+
+That model/effort must be permitted by the configured allowlist;
+otherwise routing reports unavailable rather than silently choosing another
+model. An omitted effort uses the first effort explicitly selected during setup.
+This exact directive skips the classifier. An exact observed root pair stays
+current; otherwise one explicit native-validated child is requested. Other
+natural-language preferences are classifier input, not a deterministic override.
+
+The existing root cannot be changed by this plugin. A catalogue listing or
+configuration entry is not proof that the host's child tool accepts that model.
+Status reports `codex_native_validation`, not preverified execution. Known native
+preparation errors are recorded as rejection before creation; generic errors
+without start evidence retain an unknown creation boundary. A returned child ID
+alone is not lifecycle completion. Existing correlation, attestation and
+verification gates remain intact. Configuration changes during an in-flight task
+invalidate reuse of its old routing contract.
+
+Classifier elapsed time, invocation attempts and observed token usage are
+recorded separately from executor evidence. Missing token telemetry is unknown,
+not zero. Real latency, classifier quality, account access and financial savings
+require a separately authorised live evaluation with explicitly provisioned API
+credentials and a verifiable spending ceiling; mocked tests cannot establish them. See
+[limitations](docs/LIMITATIONS.md) and [privacy](docs/PRIVACY.md).
+
+## Legacy deterministic routing reference
+
+The remaining routing diagrams, profiles and policy examples describe the legacy
+v0.2-compatible deterministic mode, not configured AI classification. They are
+retained for existing users; neither v0.2.0 nor v0.3.0 is claimed as a published
+release by this document. New users should start with the configured-mode setup
+above and the [installation guide](docs/INSTALL.md). Configured mode does not
+inherit the legacy fixed-family ladder, three-child plans or frontier gates;
+only the user's exact allowlist and native Codex restrictions apply.
+
 <p align="center">
-  <a href="https://github.com/anthonypaddison/Codex-Autorouter/actions/workflows/ci.yml"><img alt="Release quality" src="https://img.shields.io/github/actions/workflow/status/anthonypaddison/Codex-Autorouter/ci.yml?branch=ap-cheap-root-routing&amp;style=flat-square&amp;label=release%20quality"></a>
+  <a href="https://github.com/anthonypaddison/Codex-Autorouter/actions/workflows/ci.yml"><img alt="Release quality" src="https://img.shields.io/github/actions/workflow/status/anthonypaddison/Codex-Autorouter/ci.yml?branch=ap-configurable-ai-routing&amp;style=flat-square&amp;label=release%20quality"></a>
   <img alt="Python 3.10 through 3.14" src="https://img.shields.io/badge/Python-3.10%E2%80%933.14-3776AB?style=flat-square">
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-E9A23B?style=flat-square"></a>
   <img alt="Private beta" src="https://img.shields.io/badge/status-private%20beta-8B5CF6?style=flat-square">
@@ -43,10 +177,10 @@ Existing GPT-6.1 Sol and GPT-6.1 Terra roots are also supported. Autorouter reta
 
 ### 2. Install the reviewed release
 
-Version `v0.2.0` is the planned immutable release reference. The tag does not exist merely because it appears in this candidate's metadata; use the commands below only after the reviewed tag has been created by the release procedure:
+Version `v0.3.0` is the planned immutable release reference. The tag does not exist merely because it appears in this candidate's metadata; use the commands below only after the reviewed tag has been created by the release procedure:
 
 ```bash
-codex plugin marketplace add anthonypaddison/Codex-Autorouter --ref v0.2.0
+codex plugin marketplace add anthonypaddison/Codex-Autorouter --ref v0.3.0
 codex plugin add gpt-5-6-router@codex-autorouter
 ```
 
@@ -234,16 +368,22 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_release.py
 PYTHONDONTWRITEBYTECODE=1 python3 scripts/fuzz_router.py
 
 cd skills/route-gpt-5-6-work/scripts
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_spawn_compat test_router test_routerctl
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_spawn_compat test_router test_routerctl test_ai_routing test_model_policy
 
 cd ../../../scripts
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_check_hooks test_standalonectl test_validate_release
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_check_hooks test_standalonectl test_validate_release test_model_catalogue
 
 cd ..
 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v benchmarks.test_autorouter_bench
 ```
 
 The release gate covers the repository-defined routing, lifecycle, release-contract, and benchmark suites plus 5,000 deterministic fuzz cases. See [release evidence](docs/RELEASE_EVIDENCE.md), the [release checklist](docs/RELEASE_CHECKLIST.md), and [Autorouter Arena](benchmarks/README.md) for the full proof and benchmark method.
+
+Live benchmark execution and grading are disabled: generated code must never be
+graded by unrestricted host Python. Offline fixture generation, deterministic
+route auditing and mocked tests remain available. External review is optional,
+separately billable and restricted to explicitly authorised benchmark artifacts;
+it is not part of installation or normal routing.
 
 </details>
 

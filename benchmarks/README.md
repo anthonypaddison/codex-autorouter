@@ -1,154 +1,87 @@
-# Autorouter Arena
+# Autorouter Arena — offline tools and restricted review
 
-Autorouter Arena is a controlled benchmark for the part unit tests cannot
-prove: whether Autorouter changes execution in a useful way.
+## Live execution and grading are disabled
 
-It measures three layers independently:
+`run` always returns nonzero, even with `--execute --trust-reviewed-hooks`.
+Single-run execution and `_grade` also refuse. No hook-trust bypass, profile
+change, Codex inference or host-Python grading occurs through that command.
 
-1. **Outcome quality** — deterministic graders run against frozen task fixtures.
-2. **Routing behavior** — the router ledger is checked for the expected route,
-   orchestration shape, bounded depth, and worker coverage.
-3. **Efficiency** — Codex JSON events provide wall time and token usage for the
-   baseline, Token Saver, Balanced, and Max Quality runs.
-4. **Outsider review** — the same separated GLM 5.2 + DeepSeek V4 Pro panel used
-   by Spark Loops can privately review randomized, output-only artifacts.
+Previously model-written `benchmark_grader.py` and imported application code ran
+with unrestricted host Python after sandboxed generation. A grader hash cannot
+isolate imports. This workflow stays disabled until an enforced grading sandbox
+is implemented and reviewed. Do not manually execute a grader or its imports
+after a model has modified the workspace.
 
-The suite deliberately includes work where different behavior should emerge:
+## Non-billable tools
 
-| Case | Capability under test | Expected Autorouter behavior |
-|---|---|---|
-| `locale_batch` | repeated, objectively checked transformation | direct Luna execution |
-| `webhook_race` | difficult concurrency debugging | Sol High when the root does not already satisfy the profile |
-| `sqlite_migration` | reversible, expensive-to-get-wrong ownership | Sol ownership and migration/rollback evidence |
-| `parallel_audit` | independent security, accessibility, and data review | Sol evidence gathering with root-owned synthesis when appropriate |
+From the repository root:
 
-Route-only probes also exercise ordinary implementation, unclear multi-area
-work, protected security floors, profile changes, high-volume delegation,
-explicit Astra Medium selection, and Astra keyword-noise rejection.
-
-## Start with a zero-cost route audit
-
-```bash
-python3 benchmarks/autorouter_bench.py route-audit
+```sh
+python3 -B benchmarks/autorouter_bench.py route-audit --strict
+python3 -B -m unittest -v benchmarks.test_autorouter_bench
+python3 -B benchmarks/autorouter_bench.py prepare --output /tmp/autorouter-arena
 ```
 
-This calls the checked-in classifier directly. It does not call a model or
-spend tokens.
+The route audit checks ten **legacy deterministic** contracts. The separate
+`test_ai_routing` suite uses mocked API responses for configured allowlisting,
+transport, deduplication, fallback and telemetry. Neither measures real classifier
+quality, unnecessary escalation, latency or savings.
 
-## Prepare inspectable fixtures
+Preparation writes inspectable fixtures and trusted initial grader source, not
+model results. Tests execute only freshly generated repository-defined fixture
+graders in temporary directories before any model changes; live grading is disabled.
 
-```bash
-python3 benchmarks/autorouter_bench.py prepare --output /tmp/autorouter-arena
+## Output ownership and cleanup
+
+Use a new empty directory outside this repository. Preparation creates
+`.autorouter-arena.json`, binding ownership to its canonical path. Reuse/cleanup
+requires that exact marker:
+
+```sh
+python3 -B benchmarks/autorouter_bench.py prepare --output /tmp/autorouter-arena --clean
 ```
 
-Every case gets a clean starter repository, a `TASK.md`, and a deterministic
-grader. You can open any fixture in Codex and run the task manually.
+Cleanup deletes/recreates only positively owned output. Home, filesystem/repository
+roots and their ancestors, repository subdirectories, nonempty unowned paths,
+copied markers, traversal and linked paths are refused. Fixed macOS `/tmp` and
+`/var` system aliases are canonicalised; user-created links are refused. Old output
+without a marker is not adopted or deleted: use a new directory.
 
-## Run the four controlled arms
+Workspace/review operations require POSIX descriptor-relative no-follow access.
+Windows is intentionally unsupported for these optional tools; router Windows
+compatibility tests remain separate. Route auditing and pure parser/report tests
+do not require this filesystem capability.
 
-Real runs spend model tokens and execute Codex. They require both explicit
-flags so the cost and reviewed-hook bypass are never accidental:
+## Optional external review of existing authorised artifacts
 
-```bash
-python3 benchmarks/autorouter_bench.py run \
-  --output /tmp/autorouter-arena \
-  --execute \
-  --trust-reviewed-hooks
-```
+Review is optional development tooling, not installation or a runtime/release gate.
+It requires `--execute`, `--acknowledge-external-review-cost`, both provider keys,
+and permission to share selected fixture contents with Z.AI and DeepSeek. This
+version does not generate new live benchmark results.
 
-The baseline keeps the same root model, effort, and service tier but disables
-the Autorouter plugin and ignores routing rules. The other three arms set Token
-Saver, Balanced, and Max Quality in turn. Each arm starts from a fresh copy of
-the same fixture, run order rotates across repetitions, and the user's original
-Autorouter profile is restored even if the run fails.
+For existing owned output with `report.json`, the reader validates each exact
+`runs/repeat-N/ARM/CASE/workspace`. It bounds report, task, final response and file
+snapshot reads; rejects linked files/directories, traversal and substituted
+workspaces; and refuses unsupported platforms. It never runs workspace Git
+configuration, filters or hooks. The compatible `candidate_patch` packet key now
+contains a bounded regular-file snapshot, **not a Git diff**.
 
-Defaults match ordinary cheap-root operation (`gpt-6-luna`, `low`,
-`priority`). Override them only when comparing another controlled GPT-6 root:
+Missing optional text is empty; inaccessible snapshot entries abort review rather
+than claiming complete evidence. Depth, entry count and output size are bounded.
+Only authorised non-sensitive fixtures belong here: no path checker detects
+secrets deliberately placed in regular files. The optional machine-specific
+`--reuse-spark-provider-keys` flag explicitly accesses another application's local
+credentials; it is not required for review or normal router setup.
 
-```bash
-python3 benchmarks/autorouter_bench.py run \
-  --output /tmp/autorouter-arena \
-  --execute --trust-reviewed-hooks \
-  --root-model gpt-6-sol --root-effort medium --service-tier priority
-```
+Reviewers receive opaque artifact IDs, task/check data, snapshots and final
+responses, not model/profile labels, tokens, elapsed time or blind mappings.
+Full panel quorum is required for official scores. Historical deterministic checks
+are report assertions, not newly executed grading. Feedback never changes source,
+policy or installation.
 
-Run one case while iterating:
+## Interpreting historical reports
 
-```bash
-python3 benchmarks/autorouter_bench.py run \
-  --output /tmp/autorouter-arena \
-  --case locale_batch \
-  --execute --trust-reviewed-hooks
-```
-
-## Run the private outsider panel
-
-This is development tooling only. It is not installed as an Autorouter runtime
-gate and users never need it. After the four arms finish, configure the same
-active outside seats used by Spark Loops and run:
-
-```bash
-export ZAI_API_KEY=...
-export DEEPSEEK_API_KEY=...
-
-python3 benchmarks/autorouter_bench.py review \
-  --output /tmp/autorouter-arena \
-  --execute \
-  --acknowledge-external-review-cost
-```
-
-On the same Mac used by Spark Loops, the benchmark can reuse its existing
-reviewer credentials without printing or copying them into the repository:
-
-```bash
-python3 benchmarks/autorouter_bench.py review \
-  --output /tmp/autorouter-arena \
-  --execute \
-  --acknowledge-external-review-cost \
-  --reuse-spark-provider-keys
-```
-
-That explicit flag checks Spark Loops' macOS Keychain service first and its
-permission-restricted `~/.spark/.env` fallback second. Keys are held only in
-memory for their matching provider request and are never written to reports.
-
-Each reviewer receives opaque artifact ids, the task, deterministic check
-results, the candidate patch, and the candidate's final response. It does not
-receive model names, Autorouter profiles, routes, tokens, latency, or the blind
-mapping. The mapping is applied only after both reviewers return.
-
-A panel is official only at full `2/2` quorum. Partial or malformed panels are
-saved as diagnostic evidence and cannot declare a winner. Reviewer feedback is
-repair input for us; it never automatically mutates or promotes routing policy.
-
-## Read the result
-
-`report.md` and `report.json` are written under the output directory. A useful
-Autorouter result requires more than passing tasks:
-
-- quality is equal to or better than baseline;
-- routing behavior matches the case contract;
-- total tokens or elapsed time improve on cheaper/batch cases; and
-- deeper orchestration improves coverage on consequential cases enough to
-  justify its overhead.
-
-Do not treat one run as a model ranking. Run at least three repetitions before
-making cost or quality claims. The CLI records raw evidence so medians can be
-computed without relying on screenshots or memory.
-
-## Safety and limitations
-
-- `--trust-reviewed-hooks` passes Codex's hook-trust bypass only for the
-  isolated benchmark subprocess. Review the installed Autorouter hooks first.
-- Outsider review sends candidate patches and responses to Z.AI and DeepSeek.
-  Use only benchmark fixtures or code you are authorized to share with those
-  providers. The command refuses to run without explicit cost acknowledgement
-  and both provider keys.
-- Tasks run with `workspace-write` inside generated fixture directories.
-- Token totals depend on what the installed Codex JSON stream exposes. Missing
-  usage is reported as unavailable, never estimated.
-- Dollar cost is intentionally omitted. Token and service-tier evidence remain
-  comparable without baking changing prices into the repository.
-- A skill cannot replace the already-running root model. The benchmark makes
-  this visible: savings on a Sol root must come from useful bounded delegation,
-  not from claiming the root silently became Sol or Luna.
+Keep quality, planned routing, actual children, tokens and elapsed time separate.
+Missing usage is unknown, not zero; cached input is already included in input.
+A rate-card comparison does not establish causal savings or subscription debit.
+One accepted task is execution evidence, not a workload benchmark or guarantee.

@@ -88,6 +88,15 @@ ROUTE_PROFILES: Mapping[str, RouteProfile] = MappingProxyType({
 
 ROOT_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max", "ultra"})
 _EFFORT_ORDINAL = {name: index for index, name in enumerate(("low", "medium", "high", "xhigh", "max", "ultra"))}
+_CONFIGURED_CAPABILITIES: dict[str, tuple[str, str, str]] = {}
+
+
+def configure_capabilities(specs: dict) -> None:
+    """Bind configured receipts to exact settings; never infer family equivalence."""
+    _CONFIGURED_CAPABILITIES.clear()
+    for spec in specs.values():
+        model, profile, effort = spec["model"], spec["profile"], spec["effort"]
+        _CONFIGURED_CAPABILITIES[f"{model}|{profile}|{effort}|{POLICY_REVISION}"] = (model, profile, effort)
 
 
 def root_profile_satisfaction(root_model: str | None, root_effort: str | None, profile_id: str) -> RootSatisfaction:
@@ -171,6 +180,9 @@ def select_target(profile_id: str, *, root_model: str | None = None, root_effort
 
 def capability_key(model_id: str, profile_id: str, effort: str) -> str:
     """Return the receipt key bound to exact model, profile, effort and policy revision."""
+    configured = f"{model_id}|{profile_id}|{effort}|{POLICY_REVISION}"
+    if configured in _CONFIGURED_CAPABILITIES:
+        return configured
     if model_id not in ACTIVE_MODELS or profile_id not in ROUTE_PROFILES or not effort:
         raise ValueError("unknown capability identity")
     return f"{model_id}|{profile_id}|{effort.lower()}|{POLICY_REVISION}"
@@ -181,7 +193,7 @@ def capability_specs() -> dict[str, tuple[str, str, str]]:
     specs = [(model, profile, effort) for model in sorted(WORKHORSE_MODELS)
              for profile, effort in (("balanced", "medium"), ("high", "high"), ("high", "xhigh"))]
     specs.append(("gpt-6-astra", "frontier", "medium"))
-    return {capability_key(*spec): spec for spec in specs}
+    return {**{capability_key(*spec): spec for spec in specs}, **_CONFIGURED_CAPABILITIES}
 
 
 def validate_registry() -> None:

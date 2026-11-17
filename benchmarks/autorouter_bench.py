@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import errno
 import hashlib
 import importlib.util
 import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import textwrap
@@ -25,6 +27,8 @@ from typing import Any, Callable
 ROOT = Path(__file__).resolve().parents[1]
 ROUTER = ROOT / "skills" / "route-gpt-5-6-work" / "scripts" / "router_hook.py"
 DEFAULT_OUTPUT = Path("/tmp/autorouter-arena")
+OUTPUT_MARKER = ".autorouter-arena.json"
+LIVE_DISABLED = "live benchmarks and grading are disabled: no enforced grading sandbox is configured"
 ROUTERCTL = ROOT / "skills" / "route-gpt-5-6-work" / "scripts" / "routerctl.py"
 ARMS = ("baseline", "token-saver", "balanced", "max-quality")
 AUTOROUTER_ARMS = ARMS[1:]
@@ -446,12 +450,51 @@ def _select_cases(case_ids: list[str]) -> list[Case]:
     return selected
 
 
+def _checked_path(path: Path) -> Path:
+    if ".." in path.parts:
+        raise ValueError("path traversal is not allowed")
+    absolute = path.absolute()
+    # Expand only these fixed OS aliases. Resolving arbitrary paths after a
+    # link check would introduce a check/use race at the artifact boundary.
+    if sys.platform == "darwin" and len(absolute.parts) > 1 and absolute.parts[1] in {"tmp", "var"}:
+        absolute = Path("/private") / absolute.relative_to("/")
+    for part in (absolute, *absolute.parents):
+        if part.is_symlink():
+            raise ValueError("symlinked benchmark paths are not allowed")
+    return absolute
+
+
+def _owned_output(output: Path, create: bool = False) -> Path:
+    output = _checked_path(output)
+    home = Path.home().resolve()
+    if (output == home or output in home.parents or output == ROOT
+            or output in ROOT.parents or ROOT in output.parents):
+        raise ValueError("protected path cannot be a benchmark output directory")
+    if os.name != "posix":
+        raise ValueError("benchmark workspace operations currently require POSIX no-follow access")
+    marker = output / OUTPUT_MARKER
+    expected = {"schema": "autorouter-arena.output.v1", "root": str(output)}
+    if marker.exists() or marker.is_symlink():
+        if json.loads(_bounded_text(marker, 4096, root=output)) != expected:
+            raise ValueError("benchmark ownership marker does not match this directory")
+    elif create and (not output.exists() or not any(output.iterdir())):
+        output.mkdir(parents=True, exist_ok=True)
+        with marker.open("x", encoding="utf-8") as stream:
+            json.dump(expected, stream, sort_keys=True)
+    else:
+        raise ValueError("output is not a benchmark-owned directory; use a new empty path")
+    return output
+
+
 def prepare(output: Path, cases: list[Case], clean: bool = False) -> None:
-    if clean and output.exists():
+    if any(case not in CASES for case in cases):
+        raise ValueError("unknown benchmark case")
+    output = _owned_output(output, create=not clean or not output.exists())
+    if clean:
         shutil.rmtree(output)
-    output.mkdir(parents=True, exist_ok=True)
+        output = _owned_output(output, create=True)
     for case in cases:
-        starter = output / "starters" / case.case_id
+        starter = _checked_path(output / "starters" / case.case_id)
         if starter.exists():
             shutil.rmtree(starter)
         starter.mkdir(parents=True)
@@ -460,11 +503,14 @@ def prepare(output: Path, cases: list[Case], clean: bool = False) -> None:
 
 
 def _copy_starter(output: Path, case: Case, arm: str, repetition: int) -> Path:
-    source = output / "starters" / case.case_id
-    target = output / "runs" / f"repeat-{repetition}" / arm / case.case_id / "workspace"
+    output = _owned_output(output)
+    if arm not in ARMS or repetition < 1 or case not in CASES:
+        raise ValueError("invalid benchmark run coordinates")
+    source = _checked_path(output / "starters" / case.case_id)
+    target = _checked_path(output / "runs" / f"repeat-{repetition}" / arm / case.case_id / "workspace")
     if target.parent.exists():
         shutil.rmtree(target.parent)
-    shutil.copytree(source, target)
+    shutil.copytree(source, target, symlinks=True)
     subprocess.run(["git", "init", "-q"], cwd=target, check=True)
     subprocess.run(["git", "add", "."], cwd=target, check=True)
     subprocess.run(
@@ -566,15 +612,8 @@ def _find_ledger(thread_id: str | None, started: float) -> tuple[dict[str, Any] 
 
 
 def _grade(workspace: Path) -> dict[str, Any]:
-    result = subprocess.run([sys.executable, "benchmark_grader.py"], cwd=workspace, capture_output=True, text=True)
-    payload: dict[str, Any]
-    try:
-        payload = json.loads(result.stdout.strip().splitlines()[-1])
-    except (json.JSONDecodeError, IndexError):
-        payload = {"passed": 0, "total": 1, "score": 0.0, "checks": [], "parse_error": result.stdout[-500:]}
-    payload["exit_code"] = result.returncode
-    payload["stderr"] = result.stderr[-1000:]
-    return payload
+    # Both the grader and anything it imports may have been changed by a model.
+    raise ValueError(LIVE_DISABLED)
 
 
 def _route_score(case: Case, ledger: dict[str, Any] | None, arm: str) -> dict[str, Any]:
@@ -637,37 +676,7 @@ def _codex_command(args: argparse.Namespace, arm: str, workspace: Path, prompt: 
 
 
 def _run_one(args: argparse.Namespace, output: Path, case: Case, arm: str, repetition: int) -> dict[str, Any]:
-    workspace = _copy_starter(output, case, arm, repetition)
-    run_dir = workspace.parent
-    events = run_dir / "events.jsonl"
-    final_message = run_dir / "final.txt"
-    command = _codex_command(args, arm, workspace, case.prompt)
-    command[-1:-1] = ["--output-last-message", str(final_message)]
-    started = time.time()
-    with events.open("w", encoding="utf-8") as stream:
-        completed = subprocess.run(command, stdout=stream, stderr=subprocess.PIPE, text=True, timeout=args.timeout)
-    elapsed = time.time() - started
-    thread_id = _thread_id_from_events(events)
-    ledger, ledger_path = _find_ledger(thread_id, started) if arm != "baseline" else (None, None)
-    if ledger_path is not None:
-        shutil.copy2(ledger_path, run_dir / "router-ledger.json")
-    grade = _grade(workspace)
-    result = {
-        "case": case.case_id,
-        "arm": arm,
-        "routing_profile": arm if arm in AUTOROUTER_ARMS else None,
-        "repetition": repetition,
-        "codex_exit_code": completed.returncode,
-        "codex_stderr": completed.stderr[-2000:],
-        "elapsed_seconds": round(elapsed, 3),
-        "usage": _usage_from_events(events),
-        "thread_id": thread_id,
-        "quality": grade,
-        "routing": _route_score(case, ledger, arm),
-        "workspace": str(workspace),
-    }
-    (run_dir / "result.json").write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    return result
+    raise ValueError(LIVE_DISABLED)
 
 
 def _profile(value: str | None = None) -> str:
@@ -687,12 +696,54 @@ def _arm_order(repetition: int) -> tuple[str, ...]:
     return ARMS[offset:] + ARMS[:offset]
 
 
-def _bounded_text(path: Path, limit: int = 50_000) -> str:
+def _directory_fd(path: Path) -> int:
+    if (not hasattr(os, "O_NOFOLLOW") or os.open not in os.supports_dir_fd
+            or os.scandir not in os.supports_fd):
+        raise ValueError("safe benchmark artifact access is unsupported on this platform")
+    path = _checked_path(path)
+    fd = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
     try:
-        value = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+        for name in path.parts[1:]:
+            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def _read_regular_at(directory: int, name: str, limit: int) -> str:
+    fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+    with os.fdopen(fd, "rb") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError("benchmark artifacts must be regular files")
+        data = stream.read(limit + 1)
+    value = data[:limit].decode("utf-8", errors="replace")
+    return value + ("\n[truncated]\n" if len(data) > limit else "")
+
+
+def _bounded_text(path: Path, limit: int = 50_000, *, root: Path) -> str:
+    if ".." in path.parts:
+        raise ValueError("artifact path traversal is not allowed")
+    relative = path.absolute().relative_to(root.absolute())
+    if not relative.parts:
+        raise ValueError("artifact must be a file below its authorised root")
+    fd = None
+    try:
+        fd = _directory_fd(root)
+        for name in relative.parts[:-1]:
+            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = child
+        return _read_regular_at(fd, relative.name, limit)
+    except OSError as exc:
+        if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+            raise ValueError("symlink or invalid artifact directory") from exc
         return ""
-    return value if len(value) <= limit else value[:limit] + "\n[truncated]\n"
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
 def _blind_final_response(value: str) -> str:
@@ -704,31 +755,53 @@ def _blind_final_response(value: str) -> str:
 
 
 def _workspace_patch(workspace: Path, limit: int = 25_000) -> str:
-    completed = subprocess.run(
-        ["git", "diff", "--no-ext-diff", "--binary", "HEAD", "--", "."],
-        cwd=workspace,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    untracked = subprocess.run(
-        ["git", "ls-files", "--others", "--exclude-standard"],
-        cwd=workspace,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    chunks = [completed.stdout]
-    for relative in sorted(line for line in untracked.stdout.splitlines() if line):
-        path = workspace / relative
-        if not path.is_file() or path.stat().st_size > 200_000:
-            continue
-        chunks.append(f"\n--- untracked: {relative} ---\n{_bounded_text(path, 5_000)}")
+    # A bounded regular-file snapshot, not a Git diff. Never execute workspace
+    # Git configuration, filters, hooks, or external diff/textconv programs.
+    chunks = []
+    size = 0
+    count = 0
+
+    def collect(fd: int, prefix: str = "", depth: int = 0) -> None:
+        nonlocal size, count
+        if depth > 32:
+            raise ValueError("benchmark artifact directory depth exceeded")
+        with os.scandir(fd) as entries:
+            for entry in entries:
+                count += 1
+                if count > 1000:
+                    raise ValueError("benchmark artifact count exceeded")
+                if entry.name == ".git":
+                    continue
+                if entry.is_symlink():
+                    raise ValueError("symlink benchmark artifacts are not allowed")
+                relative = prefix + entry.name
+                if entry.is_dir(follow_symlinks=False):
+                    child = os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                    try:
+                        collect(child, relative + "/", depth + 1)
+                    finally:
+                        os.close(child)
+                elif size < limit:
+                    value = _read_regular_at(fd, entry.name, min(5000, limit - size))
+                    chunk = f"\n--- file: {relative} ---\n{value}"
+                    chunks.append(chunk)
+                    size += len(chunk)
+
+    fd = _directory_fd(workspace)
+    try:
+        collect(fd)
+    except OSError as exc:
+        raise ValueError("benchmark artifact is inaccessible or changed during collection") from exc
+    finally:
+        os.close(fd)
     value = "".join(chunks)
     return value if len(value) <= limit else value[:limit] + "\n[artifact patch truncated]\n"
 
 
-def _blind_packet(case: Case, repetition: int, results: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, str]]:
+def _blind_packet(case: Case, repetition: int, results: list[dict[str, Any]], output: Path) -> tuple[dict[str, Any], dict[str, str]]:
+    output = _owned_output(output)
+    if repetition < 1 or case not in CASES:
+        raise ValueError("invalid benchmark packet coordinates")
     by_arm = {str(item.get("arm")): item for item in results}
     missing = [arm for arm in ARMS if arm not in by_arm]
     if missing:
@@ -739,7 +812,10 @@ def _blind_packet(case: Case, repetition: int, results: list[dict[str, Any]]) ->
         opaque = "artifact-" + hashlib.sha256(f"autorouter-arena:{case.case_id}:{repetition}:{arm}".encode()).hexdigest()[:10]
         mapping[opaque] = arm
         item = by_arm[arm]
-        workspace = Path(str(item["workspace"]))
+        expected = output / "runs" / f"repeat-{repetition}" / arm / case.case_id / "workspace"
+        workspace = _checked_path(Path(str(item["workspace"])))
+        if workspace != expected:
+            raise ValueError("report workspace is outside the authorised benchmark run")
         run_dir = workspace.parent
         quality = item.get("quality") if isinstance(item.get("quality"), dict) else {}
         artifacts.append({
@@ -750,16 +826,16 @@ def _blind_packet(case: Case, repetition: int, results: list[dict[str, Any]]) ->
                 "checks": quality.get("checks", []),
             },
             "candidate_patch": _workspace_patch(workspace),
-            "candidate_final_response": _blind_final_response(_bounded_text(run_dir / "final.txt", 8_000)),
+            "candidate_final_response": _blind_final_response(_bounded_text(run_dir / "final.txt", 8_000, root=output)),
         })
     artifacts.sort(key=lambda item: item["artifact_id"])
-    task_path = Path(str(results[0]["workspace"])) / "TASK.md"
+    task_path = workspace / "TASK.md"
     packet = {
         "schema_version": "autorouter-arena.blind-packet.v1",
         "case_id": case.case_id,
         "case_title": case.title,
         "repetition": repetition,
-        "task": _bounded_text(task_path, 20_000),
+        "task": _bounded_text(task_path, 20_000, root=output),
         "evaluation_axes": ["correctness", "completeness", "robustness", "maintainability", "verification"],
         "artifacts": artifacts,
         "blindness_contract": {
@@ -1091,15 +1167,13 @@ def review(args: argparse.Namespace, output: Path, cases: list[Case]) -> int:
     if not args.acknowledge_external_review_cost:
         print("refusing GLM/DeepSeek calls without --acknowledge-external-review-cost", file=sys.stderr)
         return 2
+    output = _owned_output(output)
+    report = json.loads(_bounded_text(output / "report.json", 2_000_000, root=output))
     keys = _reviewer_keys(args.reuse_spark_provider_keys)
     missing = [seat.key_var for seat in REVIEWER_SEATS if seat.key_var not in keys]
     if missing:
         print("outsider reviewer quorum unavailable; missing " + ", ".join(missing), file=sys.stderr)
         return 3
-    report_path = output / "report.json"
-    if not report_path.is_file():
-        raise ValueError(f"benchmark report not found: {report_path}")
-    report = json.loads(report_path.read_text(encoding="utf-8"))
     all_results = report.get("results")
     if not isinstance(all_results, list):
         raise ValueError("benchmark report has no results")
@@ -1112,8 +1186,8 @@ def review(args: argparse.Namespace, output: Path, cases: list[Case]) -> int:
     panels = []
     case_by_id = {case.case_id: case for case in cases}
     for (case_id, repetition), group in sorted(groups.items()):
-        packet, mapping = _blind_packet(case_by_id[case_id], repetition, group)
-        review_dir = output / "reviews" / f"repeat-{repetition}" / case_id
+        packet, mapping = _blind_packet(case_by_id[case_id], repetition, group, output)
+        review_dir = _checked_path(output / "reviews" / f"repeat-{repetition}" / case_id)
         review_dir.mkdir(parents=True, exist_ok=True)
         (review_dir / "blind-packet.json").write_text(json.dumps(packet, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         (review_dir / "blind-map.json").write_text(json.dumps(mapping, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -1151,28 +1225,8 @@ def _render_report(output: Path, results: list[dict[str, Any]]) -> None:
 
 
 def run(args: argparse.Namespace, output: Path, cases: list[Case]) -> int:
-    if not args.execute:
-        print("refusing to spend tokens without --execute", file=sys.stderr)
-        return 2
-    if not args.trust_reviewed_hooks:
-        print("refusing Autorouter subprocesses without --trust-reviewed-hooks", file=sys.stderr)
-        return 2
-    prepare(output, cases, clean=False)
-    results: list[dict[str, Any]] = []
-    original_profile = _profile()
-    try:
-        for repetition in range(1, args.repetitions + 1):
-            for case in cases:
-                for arm in _arm_order(repetition):
-                    if arm in AUTOROUTER_ARMS:
-                        _profile(arm)
-                    print(f"running repeat {repetition}: {case.case_id} / {arm}", flush=True)
-                    results.append(_run_one(args, output, case, arm, repetition))
-                    _render_report(output, results)
-    finally:
-        _profile(original_profile)
-    print(f"wrote {output / 'report.md'}")
-    return 0
+    print(LIVE_DISABLED, file=sys.stderr)
+    return 2
 
 
 def parser() -> argparse.ArgumentParser:
@@ -1184,7 +1238,7 @@ def parser() -> argparse.ArgumentParser:
     prep.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     prep.add_argument("--case", action="append", default=[])
     prep.add_argument("--clean", action="store_true")
-    live = sub.add_parser("run", help="run paid baseline plus all three Autorouter profiles")
+    live = sub.add_parser("run", help="disabled: grading has no enforced sandbox")
     live.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     live.add_argument("--case", action="append", default=[])
     live.add_argument("--repetitions", type=int, default=1)
@@ -1216,13 +1270,13 @@ def main(argv: list[str] | None = None) -> int:
             return route_audit(args.strict)
         cases = _select_cases(args.case)
         if args.command == "prepare":
-            prepare(args.output.resolve(), cases, args.clean)
+            prepare(args.output, cases, args.clean)
             return 0
         if args.command == "review":
-            return review(args, args.output.resolve(), cases)
+            return review(args, args.output, cases)
         if args.repetitions < 1:
             raise ValueError("--repetitions must be at least 1")
-        return run(args, args.output.resolve(), cases)
+        return run(args, args.output, cases)
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
         print(f"autorouter arena failed: {exc}", file=sys.stderr)
         return 1

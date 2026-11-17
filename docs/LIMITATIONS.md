@@ -89,3 +89,63 @@ Full plugin mode targets Codex Desktop and CLI. Codex IDE extensions do not curr
 ## Same-user lifecycle threat model
 
 Checksums and inventories prevent accidental overwrite, partial lifecycle recovery, and unnoticed ownership drift; they are not signatures against a malicious process already running as the same operating-system user. Post-crash edits, corrupt controller copies, and modified quarantine trees are preserved and require manual review.
+# Configured AI routing candidate (proposed v0.3)
+
+The nested CLI classifier was removed because feature-disable flags did not
+establish tool exclusion. Configured mode instead uses the OpenAI Responses API
+with `tools: []`, `tool_choice: "none"` and strict JSON schema. Only the `openai`
+provider is supported in this candidate. User-selected API models must support
+that interface and reasoning effort; setup does not prove API entitlement.
+No live inference is part of automated development tests.
+
+The classifier can recommend only configured model/effort pairs. Codex performs
+native compatibility validation before child creation; the router does not
+reproduce that policy or treat API availability as Codex child support. A local
+catalogue is advisory and can be stale. Native validation is not a guarantee
+against account restrictions, transient failures, worker limits or later errors.
+Known model/effort preparation errors can prove rejection before creation. Other
+errors without start evidence retain an unknown creation boundary. Missing
+PostToolUse/result evidence remains unobservable, never successful by default.
+
+Fallback is a classification-time choice only, using the same configured
+allowlist. After a spawn request there is no automatic retry, fallback child,
+cost-tier escalation or reclassification. The parent reports failures and retains
+responsibility for verification. A successful return/child ID is not proof of
+child start, completion or model/effort attestation.
+
+The standard-library HTTP worker has no model tools, Codex invocation or hooks.
+Its parent enforces the total request deadline, including DNS/TLS and slow reads,
+and terminates the worker on timeout. A timeout can still mean a provider received
+and billed the request; unknown usage is not zero and cancellation does not prove
+refund. There is no automatic retry. API response bodies are bounded at 128 KiB,
+task input at 32 KiB, output at 256 tokens, timeout at 1–30 seconds (default ten
+seconds for new setup; existing settings are not silently changed). The output cap
+includes reasoning usage and can cause incomplete results/fallback.
+
+API billing must be explicitly enabled. CLI-era schema-v1 configs require setup;
+they never silently start API spending. The ledger is reserved before an attempt
+to suppress duplicate delivery after interruption. Simple continuations do not
+repeat classification or execution. Configuration changes invalidate in-flight
+reuse. Setup/status do not claim execution acceptance or capability receipts.
+
+The classifier is prompted to minimize cost to reliable completion, but no live
+rate card or verified intelligence ranking is inferred from model names. Real
+selection quality, unnecessary escalation/under-routing, classifier cost and
+task quality are not established across representative workloads. A single
+v0.3.0 CLI acceptance task proved automatic classification and a matching
+Terra/Medium child's completion; it is not a savings or reliability baseline.
+The existing benchmark fixtures test the transport
+using mocked selections only. Legacy route-audit/fuzz checks still test the v0.2
+compatibility path; they do not grade an AI classifier.
+
+No new model-family edit is needed to prepare configured executors. Exact allowed
+model/effort pairs produce configuration-bound roles and receipt keys. All
+independent identity, lifecycle, ambiguity, verification and receipt gates remain
+in force; a valid classification cannot manufacture a receipt. Existing receipt
+documents with incompatible settings remain historical and may prevent a new
+current receipt rather than being rewritten automatically.
+
+The deterministic classifier, family policies and historical roles are retained
+for unconfigured installation compatibility and fixture comparisons. They do
+not select an executor after successful AI setup. This is a staged replacement,
+not removal of functioning lifecycle safeguards or historical evidence.

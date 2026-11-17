@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### v0.3.0 release candidate
+
+- Added opt-in, schema-constrained OpenAI API classification with a configurable classifier, exact executor allowlist, fallback and explicit API-billing consent. Codex sign-in does not supply API credits automatically.
+- Reused native delegation and execution ledgers; exact selected root pairs remain direct. Preserved legacy deterministic routing as an explicitly separate compatibility mode.
+- Added configurable 1–30 second classification deadlines (ten seconds for new setup), one-request deduplication, bounded transport, and trial reporting without automatic retries.
+- Disabled live benchmark execution and host-Python grading until an enforced grading sandbox is implemented and reviewed. Kept offline fixtures and route audits.
+- Restricted review artifacts to bounded regular files in owned benchmark runs, rejected links and escaping report paths, and removed workspace Git execution from collection.
+- Required bound ownership markers for benchmark output reuse/cleanup, ignored local secrets and trial telemetry, and corrected public metadata and release guidance. Historical policy screenshots are no longer advertised as configured-mode listing screenshots.
+
+### Earlier deterministic-mode changes
+
 - Reconciled current Codex nested `event_msg` / `item_completed` / `SubAgentActivity` lifecycle records by exact parent turn, spawn call ID, and child ID while preserving strict spawn-contract, completion, attestation, and receipt gates.
 - Corrected automation documentation: current Desktop evidence shows hook context and ledgers, but automation remains outside savings attribution until its routing semantics are explicitly validated.
 - Added GPT-6 Astra as a rare frontier tier: explicit requests support Medium, High, Extra High, and Max while Low and Ultra are rejected; the sole automatic path is an authoritative attested Sol route-up to Astra Medium.

@@ -21,6 +21,7 @@ EXPECTED_EVENTS = {"postToolUse", "userPromptSubmit", "subagentStart", "subagent
 CHECKER_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CHECKER_ROOT / "skills" / "route-gpt-5-6-work" / "scripts"))
 import model_policy
+import routing_config
 CAPABILITY_SCHEMA_VERSION = 1
 CAPABILITY_SIGNATURE = "direct-model-spawn-v1"
 ROOT_OBSERVATION_FILE = "root-observation-v1.json"
@@ -32,6 +33,9 @@ CAPABILITY_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
 CAPABILITY_SPECS = model_policy.capability_specs()
 CAPABILITY_MODELS = tuple(CAPABILITY_SPECS)
 CAPABILITY_EFFORTS = {key: frozenset({spec[2]}) for key, spec in CAPABILITY_SPECS.items()}
+_CONFIGURED_ROUTING = False
+_CONFIGURED_ROUTING_ENABLED = False
+_CONFIGURED_CONFIG_ERROR = False
 PLUGIN_IDENTITY_FILES = (
     ".codex-plugin/plugin.json",
     "hooks/hooks.json",
@@ -42,7 +46,32 @@ PLUGIN_IDENTITY_FILES = (
     "skills/route-gpt-5-6-work/scripts/spawn_compat.py",
     "skills/route-gpt-5-6-work/scripts/model_policy.py",
     "scripts/model_catalogue.py",
+    "skills/route-gpt-5-6-work/scripts/routing_config.py",
+    "skills/route-gpt-5-6-work/scripts/ai_classifier.py",
 )
+
+
+def refresh_configured_capabilities(home: Path | None = None) -> None:
+    """Discover configured receipt identities without model-family source changes."""
+    global CAPABILITY_MODELS, CAPABILITY_EFFORTS, _CONFIGURED_ROUTING, _CONFIGURED_CONFIG_ERROR, _CONFIGURED_ROUTING_ENABLED
+    _CONFIGURED_CONFIG_ERROR = False
+    try:
+        path = home / "autorouter/config.json" if home is not None else routing_config.config_path()
+        config = routing_config.load_config(path)
+        specs = routing_config.role_specs(config) if config else {}
+    except routing_config.ConfigError:
+        specs = {}
+        config = None
+        _CONFIGURED_CONFIG_ERROR = True
+    _CONFIGURED_ROUTING = config is not None
+    _CONFIGURED_ROUTING_ENABLED = bool(config and config.get("schema_version") == 2 and config.get("enabled"))
+    model_policy.configure_capabilities(specs)
+    CAPABILITY_SPECS.clear()
+    capabilities = model_policy.capability_specs()
+    CAPABILITY_SPECS.update({key: value for key, value in capabilities.items()
+                             if not _CONFIGURED_ROUTING or value[1].startswith("configured_")})
+    CAPABILITY_MODELS = tuple(CAPABILITY_SPECS)
+    CAPABILITY_EFFORTS = {key: frozenset({spec[2]}) for key, spec in CAPABILITY_SPECS.items()}
 
 
 def _send(process: subprocess.Popen[str], message: dict[str, Any]) -> None:
@@ -364,7 +393,13 @@ def _routing_health(
     ) or _has_historical_capability(data_root):
         historical_escalation_state = "ESCALATION PREVIOUSLY OBSERVED"
 
-    if not effective.get("available"):
+    if _CONFIGURED_CONFIG_ERROR:
+        status = "UNAVAILABLE"
+        reasons.append("Autorouter configuration is invalid; rerun setup before configured routing.")
+    elif _CONFIGURED_ROUTING and not _CONFIGURED_ROUTING_ENABLED:
+        status = "UNAVAILABLE"
+        reasons.append("API routing is disabled or the CLI-era configuration requires explicit setup.")
+    elif not effective.get("available"):
         status = "UNAVAILABLE"
         reasons.append("The supported plugin hook and direct-child routing path is not available in effective configuration.")
     else:
@@ -397,6 +432,9 @@ def _routing_health(
 
         if not isinstance(root_model, str) or not root_model:
             reasons.append("The effective root model is unknown.")
+        elif _CONFIGURED_ROUTING:
+            if observation is not None and session_id:
+                current_task_root_state = "OBSERVED_ROOT_COST_UNASSESSED"
         elif root_model != "gpt-6-luna":
             if observation is not None and session_id:
                 current_task_root_state = "DEGRADED_NON_LUNA"
@@ -430,7 +468,9 @@ def _routing_health(
         if receipt_errors:
             reasons.extend(receipt_errors)
         if not any(receipt is not None for receipt in receipts.values()):
-            reasons.append("No successful GPT-6 Sol/Astra escalation receipt exists; no automatic paid probe was performed.")
+            reasons.append("No successful configured-executor receipt exists; no automatic paid probe was performed."
+                           if _CONFIGURED_ROUTING else
+                           "No successful GPT-6 Sol/Astra escalation receipt exists; no automatic paid probe was performed.")
         elif not current_tiers:
             reasons.extend(dict.fromkeys(
                 reason
@@ -479,6 +519,7 @@ def _routing_health(
 
 
 def inspect(cwd: Path, plugin_prefix: str) -> dict[str, Any]:
+    refresh_configured_capabilities()
     process = subprocess.Popen(
         ["codex", "app-server", "--stdio"],
         stdin=subprocess.PIPE,

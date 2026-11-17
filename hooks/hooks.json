@@ -7,7 +7,7 @@
             "type": "command",
             "command": "python3 \"${PLUGIN_ROOT}/scripts/hook_launcher.py\" \"${PLUGIN_ROOT}\"",
             "commandWindows": "py -3 \"%PLUGIN_ROOT%\\scripts\\hook_launcher.py\" \"%PLUGIN_ROOT%\"",
-            "timeout": 10,
+            "timeout": 35,
             "statusMessage": "Selecting the appropriate GPT-6 route"
           }
         ]

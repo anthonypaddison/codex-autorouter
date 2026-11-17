@@ -25,7 +25,7 @@ AGENTS = {
     "gpt56_sol_deep.toml",
     "gpt56_sol_xhigh.toml",
 }
-RELEASE_VERSION = "0.2.0"
+RELEASE_VERSION = "0.3.0"
 RELEASE_REF = f"v{RELEASE_VERSION}"
 REPOSITORY_URL = "https://github.com/anthonypaddison/Codex-Autorouter"
 
@@ -50,7 +50,17 @@ def candidate_source_paths(tracked: set[str], untracked: set[str]) -> list[Path]
     )
     for name in tracked:
         require(not generated(name), f"release contains generated artifact: {name}")
-    return [Path(name) for name in sorted(tracked | {name for name in untracked if not generated(name)})]
+    candidates = tracked | {name for name in untracked if not generated(name)}
+    for name in candidates:
+        parts = Path(name).parts
+        local_only = any(
+            part in {".env", ".all-env", "auth.json", "autorouter-acceptance.json", ".trigger-tree"}
+            or (part.startswith(".env.") and part != ".env.example")
+            or part.startswith(("router-state", "router-observations"))
+            for part in parts
+        )
+        require(not local_only, f"release contains local-only data: {name}")
+    return [Path(name) for name in sorted(candidates)]
 
 
 def _git_paths(*args: str) -> set[str]:
@@ -80,8 +90,8 @@ def main() -> int:
     )
     require(manifest.get("skills") == "./skills/", "skills path must be plugin-relative")
     require((ROOT / manifest["interface"]["logo"]).is_file(), "logo is missing")
-    screenshots = manifest["interface"].get("screenshots")
-    require(isinstance(screenshots, list) and len(screenshots) == 3, "expected three listing screenshots")
+    screenshots = manifest["interface"].get("screenshots", [])
+    require(isinstance(screenshots, list), "listing screenshots must be a list when supplied")
     for screenshot in screenshots:
         screenshot_path = (ROOT / screenshot).resolve()
         require(screenshot_path.is_relative_to(ROOT / "assets"), "screenshot must stay under assets")

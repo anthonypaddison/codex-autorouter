@@ -15,7 +15,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [ubuntu-latest, macos-15, windows-latest]
         python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     runs-on: ${{ matrix.os }}
     steps:
@@ -27,7 +27,7 @@ jobs:
         run: python scripts/validate_release.py
       - name: Run router and lifecycle tests
         working-directory: skills/route-gpt-5-6-work/scripts
-        run: python -m unittest -v test_spawn_compat test_router test_routerctl
+        run: python -m unittest -v test_spawn_compat test_router test_routerctl test_ai_routing
       - name: Run effective-config checker tests
         working-directory: scripts
         run: python -m unittest -v test_check_hooks test_standalonectl test_validate_release

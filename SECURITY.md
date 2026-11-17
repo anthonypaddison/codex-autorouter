@@ -8,6 +8,11 @@ If the private reporting button is absent or cannot be tested by the publisher, 
 
 ## Security model
 
+- Configured v0.3.0 classification uses the explicitly named API-key environment variable, never saved Codex/ChatGPT authentication. Setup stores the variable name, not its value. API use is separately billed; configure account-side credit/payment controls before opting in.
+- The API worker sends the task and allowlist to OpenAI, disables model tools, accepts only schema-valid allowlisted pairs, and does not run a nested Codex process. A selected child still requires the host's native model/effort validation and execution permission. Neither a catalogue entry nor configuration is an entitlement.
+- Hooks can read task/transcript evidence and write local routing state. Review all five definitions (`UserPromptSubmit`, `SubagentStart`, `PostToolUse`, `SubagentStop`, `Stop`) before trusting them; updates can require renewed review. Never bypass trust to obtain a passing acceptance result.
+- Live benchmark generation/execution and grading are disabled: a sandboxed generator does not make a host-Python grader safe. Do not execute a model-modified `benchmark_grader.py` or its imports on the host. External-review artifact collection uses bounded, descriptor-relative no-follow access on POSIX and refuses unsupported platforms, links and paths outside the selected owned benchmark output. It uses file snapshots, not workspace Git commands. Review still requires separate provider credentials, cost consent and permission to share the fixture content.
+
 - New router ledgers contain opaque task and event identifiers plus routing metadata, never prompt contents or prompt-derived hashes. Affected historical ledgers can retain legacy prompt-derived event keys until normal retention or an explicit owner-checked purge removes them; see `docs/PRIVACY.md`.
 - Plugin hooks run only after Codex hook trust and can be disabled by managed policy.
 - The activator writes only six allowlisted custom-agent filenames under `CODEX_HOME/agents`.
