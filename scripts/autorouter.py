@@ -48,7 +48,7 @@ def main(argv: list[str] | None = None) -> int:
             config = routing_config.load_config(path)
             print(json.dumps({"status": "configured" if config else "setup_required", "config": config,
                               "credential_environment_present": bool(config and config['schema_version'] == 2
-                                  and config['classifier']['credential_env'] in os.environ),
+                                  and os.environ.get(config['classifier']['credential_env'])),
                               "execution_verified": False,
                               "runtime_routing": ("reconfiguration_required" if config and config['schema_version'] == 1 else
                                                   "disabled" if config and not config['enabled'] else

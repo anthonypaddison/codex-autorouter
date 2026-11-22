@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import struct
@@ -71,14 +72,28 @@ def _git_paths(*args: str) -> set[str]:
     return {item.decode("utf-8") for item in result.stdout.split(b"\0") if item}
 
 
+def release_paths(archive: bool) -> list[Path]:
+    if archive:
+        entries = {path.relative_to(ROOT) for path in ROOT.rglob("*")}
+        for path in entries:
+            require(".git" not in path.parts, f"archive contains Git metadata: {path}")
+            require(not (ROOT / path).is_symlink(), f"release contains symlink: {path}")
+        return candidate_source_paths({path.as_posix() for path in entries}, set())
+    checkout = subprocess.run(
+        ["git", "-C", str(ROOT), "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True,
+    )
+    require(checkout.returncode == 0 and Path(checkout.stdout.strip()).resolve() == ROOT,
+            "validate an extracted archive with --archive")
+    return candidate_source_paths(_git_paths("--cached"), _git_paths("--others", "--exclude-standard"))
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--archive", action="store_true", help="scan an extracted release without Git metadata")
+    args = parser.parse_args()
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     require(manifest.get("name") == "gpt-5-6-router", "stable plugin package name changed")
-    folder_names = {ROOT.name.lower(), ROOT.parent.name.lower()}
-    require(
-        bool(folder_names & {"gpt-5-6-router", "codex-autorouter"}),
-        "source folder must use the package or public repository name",
-    )
     require(bool(re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", str(manifest.get("version")))), "invalid semver")
     require(manifest.get("version") == RELEASE_VERSION, "manifest version does not match the planned immutable release")
     require(manifest.get("author", {}).get("name") == "Alchemist", "original plugin attribution changed")
@@ -157,7 +172,7 @@ def main() -> int:
     )
 
     forbidden = (re.compile(r"/Users/[A-Za-z0-9._-]+/"), re.compile(r"[A-Za-z]:\\Users\\[^\\]+\\"))
-    paths = candidate_source_paths(_git_paths("--cached"), _git_paths("--others", "--exclude-standard"))
+    paths = release_paths(args.archive)
     for relative in paths:
         path = ROOT / relative
         require(not path.is_symlink(), f"release contains symlink: {relative}")

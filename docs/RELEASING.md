@@ -1,6 +1,6 @@
 # Release procedure
 
-This fork preserves `vibeforge1111/Codex-Autorouter` as its upstream and publishes installable candidates from `anthonypaddison/Codex-Autorouter`. The marketplace metadata intentionally names the future immutable ref `v0.3.0`; editing that metadata does not create, publish, or validate the tag.
+This fork preserves `vibeforge1111/Codex-Autorouter` as its upstream and publishes installable candidates from `anthonypaddison/Codex-Autorouter`. The commands below document the published v0.3.0 prerelease process. For v1.0.0, follow [the stable release gates](STABLE_READINESS.md).
 
 Do not create or push a tag until the candidate commit, real-host acceptance, and release evidence have been reviewed. Installing from a branch such as `main` is unsupported because a moving branch cannot identify the bytes that were reviewed.
 
@@ -18,7 +18,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/fuzz_router.py
 ```
 
 Run the full CI-defined offline suite listed in README and review
-`RELEASE_CHECKLIST.md`. Label v0.3.0 as a limited trial with its demonstrated
+[the release checklist](RELEASE_CHECKLIST.md). Label v0.3.0 as a limited trial with its demonstrated
 macOS CLI scope; other surfaces remain unverified until separately approved
 acceptance. Configured-mode proof must use its exact allowlist, not a mandatory
 legacy Sol/Astra probe. Health checks must never run paid probes. Do not infer
@@ -50,7 +50,12 @@ shasum -a 256 -c dist/Codex-Autorouter-v0.3.0.zip.SHA256
 unzip -l dist/Codex-Autorouter-v0.3.0.zip
 ```
 
-Extract the archive into a fresh temporary directory and rerun `scripts/validate_release.py` plus the full test and host-acceptance gates against the extracted content. Record the tag commit, archive SHA256, test results, host/build versions, and receipt evidence in the release evidence.
+Extract the archive into a fresh temporary directory. Use
+`PYTHONDONTWRITEBYTECODE=1 python3 scripts/validate_release.py --archive`
+from the extracted root with a build that includes archive validation. Run the
+full test and host-acceptance gates against the extracted content. Record the tag
+commit, archive SHA256, test results, host/build versions, and receipts. Compare
+the released digest with a fresh archive produced from the same tag.
 
 ## 4. Publish only after the final gate
 

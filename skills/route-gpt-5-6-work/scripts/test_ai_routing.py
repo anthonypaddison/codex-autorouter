@@ -390,13 +390,13 @@ class SetupCommandTests(unittest.TestCase):
             path = Path(tmp) / 'routing.json'
             routing_config.save_config(path, configuration())
             args = [sys.executable, '-B', str(root / 'scripts/autorouter.py'), 'status', '--config', str(path)]
-            for present in (False, True):
+            for value in (None, '', 'fake-key-must-not-appear'):
                 env = {k: v for k, v in os.environ.items() if k != 'AUTOROUTER_TEST_API_KEY'}
-                if present:
-                    env['AUTOROUTER_TEST_API_KEY'] = 'fake-key-must-not-appear'
+                if value is not None:
+                    env['AUTOROUTER_TEST_API_KEY'] = value
                 result = subprocess.run(args, capture_output=True, text=True, env=env)
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIs(json.loads(result.stdout).get('credential_environment_present'), present)
+                self.assertIs(json.loads(result.stdout).get('credential_environment_present'), bool(value))
                 self.assertNotIn('fake-key-must-not-appear', result.stdout + result.stderr)
 
     def test_status_separates_configured_routing_from_execution_proof(self):

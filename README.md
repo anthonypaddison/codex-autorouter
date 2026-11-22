@@ -2,12 +2,12 @@
   <img src="assets/readme/hero.svg" alt="Autorouter — the right model and effort, automatically" width="100%">
 </p>
 
-## v0.3.0 release candidate: user-configured AI routing
+## v0.3.0 preview: user-configured AI routing
 
-This branch adds an opt-in replacement for the deterministic classifier. It is
-not a released or automatically deployed version. Existing installations and
-historical evidence remain compatible; until setup is run, the legacy routing
-path remains available with a setup reminder.
+The [v0.3.0 prerelease](https://github.com/anthonypaddison/codex-autorouter/releases/tag/v0.3.0)
+adds opt-in API classification. Legacy routing remains available before setup.
+See the [installation guide](docs/INSTALL.md) and the
+[v1.0.0 release gates](docs/STABLE_READINESS.md).
 
 **Runtime status: LIMITED CLI ACCEPTANCE PASSED.** The installed v0.3.0 trial
 automatically classified one Luna/Low task and completed one correlated
@@ -130,9 +130,8 @@ credentials and a verifiable spending ceiling; mocked tests cannot establish the
 
 The remaining routing diagrams, profiles and policy examples describe the legacy
 v0.2-compatible deterministic mode, not configured AI classification. They are
-retained for existing users; neither v0.2.0 nor v0.3.0 is claimed as a published
-release by this document. New users should start with the configured-mode setup
-above and the [installation guide](docs/INSTALL.md). Configured mode does not
+retained for existing users. New users should start with the configured-mode
+setup above and the [installation guide](docs/INSTALL.md). Configured mode does not
 inherit the legacy fixed-family ladder, three-child plans or frontier gates;
 only the user's exact allowlist and native Codex restrictions apply.
 
@@ -140,7 +139,7 @@ only the user's exact allowlist and native Codex restrictions apply.
   <a href="https://github.com/anthonypaddison/Codex-Autorouter/actions/workflows/ci.yml"><img alt="Release quality" src="https://img.shields.io/github/actions/workflow/status/anthonypaddison/Codex-Autorouter/ci.yml?branch=ap-configurable-ai-routing&amp;style=flat-square&amp;label=release%20quality"></a>
   <img alt="Python 3.10 through 3.14" src="https://img.shields.io/badge/Python-3.10%E2%80%933.14-3776AB?style=flat-square">
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-E9A23B?style=flat-square"></a>
-  <img alt="Private beta" src="https://img.shields.io/badge/status-private%20beta-8B5CF6?style=flat-square">
+  <img alt="Public prerelease" src="https://img.shields.io/badge/status-public%20prerelease-8B5CF6?style=flat-square">
 </p>
 
 <p align="center">
@@ -158,7 +157,7 @@ Autorouter is designed around a cheap GPT-6 Luna root. Describe what you want bu
 
 - Codex Desktop or Codex CLI
 - Python 3.10 or newer
-- Access to this GitHub repository during the private beta
+- Git with access to public GitHub repositories
 
 ### 1. Select Luna once
 
@@ -177,7 +176,7 @@ Existing GPT-6.1 Sol and GPT-6.1 Terra roots are also supported. Autorouter reta
 
 ### 2. Install the reviewed release
 
-Version `v0.3.0` is the planned immutable release reference. The tag does not exist merely because it appears in this candidate's metadata; use the commands below only after the reviewed tag has been created by the release procedure:
+Install the published `v0.3.0` prerelease by its pinned tag:
 
 ```bash
 codex plugin marketplace add anthonypaddison/Codex-Autorouter --ref v0.3.0
@@ -185,15 +184,6 @@ codex plugin add gpt-5-6-router@codex-autorouter
 ```
 
 The second command prints an **Installed plugin root**. Copy that path for the health check. The immutable tag prevents an existing marketplace entry from silently changing underneath an installation.
-
-> The repository is private during beta, so installation currently requires GitHub access. When it becomes public, the same path will work for everyone.
-
-Private-beta users should make sure Git can access the repository before installing. If you use GitHub CLI, the usual setup is:
-
-```bash
-gh auth login
-gh auth setup-git
-```
 
 ### 3. Review the five Autorouter checks
 

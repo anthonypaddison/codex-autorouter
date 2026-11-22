@@ -1,7 +1,7 @@
 # Installation and lifecycle
 
 This page covers the plugin workflow for hosts that expose trusted hooks and
-native child execution. v0.3.0 is an unpublished limited-trial candidate. One
+native child execution. v0.3.0 is a public prerelease. One
 macOS CLI execution of an earlier payload is demonstrated; Desktop credential
 inheritance and Linux/Windows real-host execution remain unverified. Python
 3.10–3.14 is the CI target, not proof of every host surface. The bundled legacy
@@ -57,7 +57,7 @@ This is a user-controlled one-time selection. Autorouter never edits global/root
 
 ## Install the immutable reviewed release
 
-After the reviewed `v0.3.0` tag exists:
+Use the published `v0.3.0` tag:
 
 ```bash
 codex plugin marketplace add anthonypaddison/Codex-Autorouter --ref v0.3.0
@@ -128,17 +128,25 @@ No lifecycle step changes the user-selected Luna root. If legacy agents were nev
 
 ## Uninstall
 
-Optionally purge routing ledgers, then remove the plugin:
-
-```bash
-python3 skills/route-gpt-5-6-work/scripts/router_hook.py --purge-ledgers
-codex plugin remove gpt-5-6-router
-```
-
-If explicit legacy mode was used, deactivate its owned files before plugin removal:
+If explicit legacy custom-agent mode was used, deactivate its owned files first.
+If a legacy managed definition was edited, deactivation refuses to discard it.
+Use `deactivate --keep-modified` when you intend to preserve that file and
+relinquish ownership.
 
 ```bash
 python3 skills/route-gpt-5-6-work/scripts/routerctl.py deactivate
 ```
 
-If a legacy managed definition was edited, deactivation refuses to discard it. Use `deactivate --keep-modified` only when you intentionally preserve that file and relinquish ownership. Plugin removal disables plugin-native hooks but does not change the global/root model selection. See [Local routing data and privacy](PRIVACY.md) for ledger retention.
+From the installed plugin root, optionally purge routing ledgers before removing
+the plugin. Close active Codex tasks that use the plugin first.
+
+```bash
+# Optional: purge local routing ledgers from the installed plugin root.
+python3 skills/route-gpt-5-6-work/scripts/router_hook.py --purge-ledgers
+codex plugin remove gpt-5-6-router@codex-autorouter
+```
+
+If you also want to remove the marketplace source, run
+`codex plugin marketplace remove codex-autorouter`. Plugin removal disables
+plugin-native hooks. Router setup under `CODEX_HOME/autorouter` is retained for
+reinstallation. See [Local routing data and privacy](PRIVACY.md) for ledger retention.

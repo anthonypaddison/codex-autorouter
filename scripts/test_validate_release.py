@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import validate_release
 
@@ -11,6 +13,23 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReleaseContractTests(unittest.TestCase):
+    def test_checkout_mode_rejects_an_enclosing_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            subprocess.run(["git", "init", "--quiet", temp], check=True)
+            extracted = (Path(temp) / "extracted").resolve()
+            extracted.mkdir()
+            with patch.object(validate_release, "ROOT", extracted):
+                with self.assertRaisesRegex(AssertionError, "with --archive"):
+                    validate_release.release_paths(archive=False)
+
+    def test_extracted_archive_uses_its_own_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as temp, patch.object(validate_release, "ROOT", Path(temp)):
+            (Path(temp) / "README.md").touch()
+            self.assertEqual(validate_release.release_paths(archive=True), [Path("README.md")])
+            (Path(temp) / ".env").touch()
+            with self.assertRaisesRegex(AssertionError, "local-only"):
+                validate_release.release_paths(archive=True)
+
     def test_local_secrets_and_trial_data_cannot_enter_release_inputs(self) -> None:
         for name in (".env", ".env.local", ".all-env", "auth.json", "autorouter-acceptance.json", ".trigger-tree/history.jsonl", "router-state-v2/turn.json"):
             with self.subTest(name=name), self.assertRaisesRegex(AssertionError, "local-only"):
