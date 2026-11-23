@@ -493,6 +493,12 @@ CONTINUATION = re.compile(
     r"now do it|okay,?\s*(?:do it|continue|proceed))\s*[.!]*\s*$",
     re.I,
 )
+PRESENTATION_CONTINUATION = re.compile(
+    r"^\s*make\s+(?:that|the\s+(?:previous|last))\s+(?:explanation|answer|summary)\s+"
+    r"(?:one\s+sentence|a\s+single\s+sentence|two\s+sentences)"
+    r"(?:\s+while\s+keeping\s+the\s+same\s+argument)?\s*[.!]?\s*$",
+    re.I,
+)
 NATURAL_CONTINUATION = re.compile(
     r"^\s*(?:sure|sounds good|yes please|okay|ok)[,!;:\s—-]*(?:please\s+)?"
     r"(?:continue(?:\s+with\s+(?:it|that|the\s+(?:fix|change)))?|do that|make\s+(?:those|the)\s+changes|"
@@ -4862,11 +4868,22 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
                 return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": _context(decision)}}
         routing_profile, routing_profile_source = _read_routing_profile()
         previous = _latest_session_state(data.get("session_id"), data.get("turn_id"))
+        previous_decision = previous["decision"] if previous else {}
+        previous_classification = previous_decision.get("classification")
         reused = None
-        if (_AI_CONFIG is not None and previous and previous.get("decision", {}).get("configuration_id") == _AI_CONFIG_ID
-                and CONTINUATION.match(prompt) and isinstance(previous["decision"].get("classification"), dict)):
-            reused = {**previous["decision"]["classification"], "calls": 0, "duration_ms": 0,
-                      "usage": {}, "reason_code": "continued_prior_decision", "execution_reused": True}
+        inherited_from_turn = None
+        if (_AI_CONFIG is not None and previous and previous_decision.get("configuration_id") == _AI_CONFIG_ID
+                and isinstance(previous_classification, dict)):
+            presentation_only = (
+                PRESENTATION_CONTINUATION.fullmatch(prompt)
+                and previous["status"] == "COMPLETE"
+                and previous_classification.get("status") == "selected"
+                and previous.get("session_id") == data.get("session_id")
+            )
+            if CONTINUATION.match(prompt) or presentation_only:
+                reused = {**previous_classification, "calls": 0, "duration_ms": 0,
+                          "usage": {}, "reason_code": "continued_prior_decision", "execution_reused": True}
+                inherited_from_turn = previous.get("turn_id")
         classify_after_reservation = _AI_CONFIG is not None and reused is None
         reservation = {"status": "unavailable", "model": None, "effort": None, "calls": None,
                        "duration_ms": None, "usage": {}, "reason_code": "interrupted_classification_unknown"}
@@ -4880,7 +4897,6 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             enforce_active_root=True,
         )
         previous = _latest_session_state(data.get("session_id"), data.get("turn_id"))
-        inherited_from_turn = None
         if "classification" not in decision and _usable_continuation_context(previous, prompt) and (
             CONTINUATION.match(prompt) or NATURAL_CONTINUATION.match(prompt) or REFERENTIAL_CONTINUATION.match(prompt)
         ):

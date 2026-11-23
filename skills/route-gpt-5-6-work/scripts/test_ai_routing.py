@@ -525,10 +525,16 @@ class ConfiguredHookTests(unittest.TestCase):
         self.assertFalse(decision['delegate'])
         self.assertEqual(decision['orchestration']['required_agents'], {})
 
-    def test_allowlisted_low_effort_root_completes_without_a_child(self):
+    def test_closed_interval_merge_can_complete_on_the_allowlisted_root_without_a_child(self):
         self.classifier.return_value.update(model='future-small', effort='low')
-        data = {**self.data, 'model': 'future-small', 'model_reasoning_effort': 'low'}
+        prompt = (
+            'Write a JavaScript function that merges overlapping closed intervals without mutating the input. '
+            'Include two small test cases, one with unsorted intervals and one with intervals that share an endpoint. '
+            'Reply in chat only. Don’t edit files or run commands.'
+        )
+        data = {**self.data, 'model': 'future-small', 'model_reasoning_effort': 'low', 'prompt': prompt}
         self.hook.handle(data)
+        self.assertEqual(self.classifier.call_args.args[0], prompt)
         decision = self.state()['decision']
         self.assertEqual(decision['route'], 'current')
         self.assertFalse(decision['delegate'])
@@ -621,7 +627,7 @@ class ConfiguredHookTests(unittest.TestCase):
         self.assertNotIn('"model":"future-large"', json.dumps(result))
         self.assertEqual(self.state()['status'], 'FAILED_OPEN')
 
-    def test_correlated_child_start_completion_and_attestation_complete_plan(self):
+    def test_completed_delegation_supplies_context_for_a_presentation_only_follow_up(self):
         import spawn_compat
         self.hook.handle(self.data)
         base = {**self.data, 'model': 'future-large', 'model_reasoning_effort': 'high',
@@ -652,6 +658,50 @@ class ConfiguredHookTests(unittest.TestCase):
         self.assertEqual(state['agent_attestations']['future-child']['effort_evidence'], 'direct_spawn_intent')
         self.assertEqual(self.classifier.call_count, 1)
         self.assertFalse((self.home / 'health/capability-v3.json').exists())
+
+        follow_up = {**self.data, 'turn_id': 'continued-turn',
+                     'prompt': 'Make that explanation one sentence while keeping the same argument.'}
+        self.hook.handle(follow_up)
+        replay = self.hook.handle(follow_up)
+        self.assertEqual(self.classifier.call_count, 1)
+        continued = json.loads((self.home / 'state/configured-session--continued-turn.json').read_text())
+        self.assertEqual(continued['inherited_from_turn'], self.data['turn_id'])
+        decision = continued['decision']
+        self.assertEqual(decision['classification']['calls'], 0)
+        self.assertTrue(decision['classification']['execution_reused'])
+        self.assertEqual(decision['classification']['model'], 'future-large')
+        self.assertFalse(decision['delegate'])
+        self.assertEqual(decision['orchestration']['required_agents'], {})
+        self.assertEqual(continued['agents'], {})
+        self.assertEqual(continued['agent_attestations'], {})
+        self.assertIn('no spawn is permitted', replay['hookSpecificOutput']['additionalContext'])
+
+        independent = {**follow_up, 'turn_id': 'independent-turn',
+                       'prompt': 'Make that explanation one sentence, then design an async scheduler.'}
+        self.hook.handle(independent)
+        self.assertEqual(self.classifier.call_count, 2)
+        self.assertEqual(self.classifier.call_args.args[0], independent['prompt'])
+
+    def test_presentation_only_follow_up_without_a_completed_turn_classifies_normally(self):
+        self.hook.handle(self.data)
+        self.hook.handle({**self.data, 'turn_id': 'continued-turn',
+                          'prompt': 'Make that explanation one sentence while keeping the same argument.'})
+        self.assertEqual(self.classifier.call_count, 2)
+
+    def test_presentation_only_follow_up_after_settings_change_classifies_normally(self):
+        import routing_config
+        self.classifier.return_value.update(model='future-small', effort='low')
+        data = {**self.data, 'model': 'future-small', 'prompt': 'Explain why binary search terminates.'}
+        self.hook.handle(data)
+        self.hook.handle({**data, 'hook_event_name': 'Stop'})
+        self.assertEqual(self.state()['status'], 'COMPLETE')
+
+        changed = configuration()
+        changed['timeout_seconds'] = 12
+        routing_config.save_config(self.home / 'autorouter/config.json', changed)
+        self.hook.handle({**data, 'turn_id': 'continued-turn',
+                          'prompt': 'Make that explanation one sentence while keeping the same argument.'})
+        self.assertEqual(self.classifier.call_count, 2)
 
     def test_native_model_rejection_retains_parent_and_never_completes_or_retries(self):
         self.hook.handle(self.data)

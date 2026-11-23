@@ -23,6 +23,18 @@ publication commit. Missing evidence leaves the gate open.
 | Removal and rollback | Uninstall by full selector, confirm hook cache is absent and unrelated settings are intact. Reinstall the previous pinned plugin with its saved router config, compare payload identity and re-review changed hooks. | Removal in the fresh profile passed. Router config was retained. Cross-version rollback remains open. |
 | Security, compatibility, packaging | Python standard library only for the configured classifier. Fail closed on unsafe config, disallowed models and unverifiable receipt claims. Check supported host versions, offline CI, source hygiene and required notices. Two clean archives from the exact tag must match the published digest. | No Python dependency resolver is required for the plugin. Published v0.3.0 archive was reproduced byte-for-byte and the local validator now supports archive inventories. Hosted CI passed for the published commit. Candidate CI and release review remain open. |
 
+Choose delegation cases where the task's constraints or verification needs
+justify a higher-capability executor. The closed-interval merge from the first
+trial is a direct-root case. Luna/Low produced a correct non-mutating solution
+and covered the requested edge cases. Keep genuinely demanding cases in the
+delegation set.
+
+For a follow-up that only asks for a completed explanation to be restated in a
+specified number of sentences in the same session, require zero new classifier
+calls and zero new children. The root handles the rewrite using the existing
+answer. A follow-up that adds a new task or changes the argument should receive
+a new routing decision.
+
 ## Pull request and publication
 
 1. After push approval, push `ap/stable-v1-readiness` and open a PR against
