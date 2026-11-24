@@ -656,10 +656,10 @@ class RouterCtlTests(unittest.TestCase):
             LK_UNLCK = 2
 
             def __init__(self) -> None:
-                self.calls: list[tuple[int, int]] = []
+                self.calls: list[tuple[int, int, int, int]] = []
 
             def locking(self, fileno: int, mode: int, size: int) -> None:
-                self.calls.append((mode, size))
+                self.calls.append((mode, size, os.lseek(fileno, 0, os.SEEK_CUR), os.fstat(fileno).st_size))
 
         original = (routerctl.ACTIVATION_ROOT, routerctl.LOCK_PATH, routerctl.fcntl, routerctl.msvcrt)
         fake = FakeMsvcrt()
@@ -672,7 +672,7 @@ class RouterCtlTests(unittest.TestCase):
                 self.assertTrue(routerctl.LOCK_PATH.exists())
         finally:
             routerctl.ACTIVATION_ROOT, routerctl.LOCK_PATH, routerctl.fcntl, routerctl.msvcrt = original
-        self.assertEqual([(fake.LK_LOCK, 1), (fake.LK_UNLCK, 1)], fake.calls)
+        self.assertEqual([(fake.LK_LOCK, 1, 0, 0), (fake.LK_UNLCK, 1, 0, 0)], fake.calls)
 
     def test_concurrent_activation_is_serialized_and_idempotent(self) -> None:
         def invoke(_: int) -> subprocess.CompletedProcess[str]:
@@ -680,7 +680,10 @@ class RouterCtlTests(unittest.TestCase):
 
         with ThreadPoolExecutor(max_workers=2) as pool:
             results = list(pool.map(invoke, range(2)))
-        self.assertEqual([0, 0], [result.returncode for result in results])
+        self.assertEqual(
+            [0, 0], [result.returncode for result in results],
+            [(result.stdout, result.stderr) for result in results if result.returncode != 0],
+        )
         status = self.payload(self.run_ctl("status"))
         self.assertEqual("ADVISORY", status["mode"])
         self.assertTrue(status["local_agent_ready"])

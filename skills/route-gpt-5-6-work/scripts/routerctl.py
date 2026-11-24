@@ -597,8 +597,7 @@ def _lock():
         if fcntl is not None:
             fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
         elif msvcrt is not None:
-            if os.fstat(stream.fileno()).st_size == 0:
-                stream.write(b"\0")
+            # Windows can lock past EOF. A write here could race another holder.
             stream.seek(0)
             msvcrt.locking(stream.fileno(), msvcrt.LK_LOCK, 1)
         try:
