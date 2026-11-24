@@ -185,9 +185,9 @@ codex plugin add gpt-5-6-router@codex-autorouter
 
 The second command prints an **Installed plugin root**. Copy that path for the health check. The immutable tag prevents an existing marketplace entry from silently changing underneath an installation.
 
-### 3. Review the five Autorouter checks
+### 3. Review the six Autorouter checks
 
-Restart Codex and start a new task. If Codex asks about hooks, review and trust the five Autorouter entries. They are small local checks that keep routing and final verification in sync.
+Restart Codex and start a new task. If Codex asks about hooks, review and trust the six Autorouter entries. The `PreToolUse` hook checks native spawn arguments against the current configured turn before child creation. An invalid call is denied and should not be retried. Child attestation still requires separate start and completion evidence.
 
 In Codex CLI, enter `/hooks` if you need to reopen the review screen.
 

@@ -6,7 +6,7 @@ Bind every result to the reviewed commit and shipped-payload identity. A planned
 ## Offline candidate gates
 
 - [ ] Release validation passes: version/ref consistency, original attribution,
-  relocatable five-hook definitions, source hygiene and distribution metadata.
+  relocatable six-hook definitions, source hygiene and distribution metadata.
 - [ ] All CI-defined router, AI-classifier, model-policy, adapter, lifecycle,
   catalogue, health, standalone, benchmark and release-contract tests pass.
 - [ ] Strict deterministic route audit passes 10/10; fuzz passes 5,000 cases.

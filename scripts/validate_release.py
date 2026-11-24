@@ -17,7 +17,7 @@ MANIFEST = ROOT / ".codex-plugin" / "plugin.json"
 MARKETPLACE = ROOT / ".agents" / "plugins" / "marketplace.json"
 HOOKS = ROOT / "hooks" / "hooks.json"
 SKILL = ROOT / "skills" / "route-gpt-5-6-work"
-EVENTS = {"UserPromptSubmit", "SubagentStart", "PostToolUse", "SubagentStop", "Stop"}
+EVENTS = {"UserPromptSubmit", "PreToolUse", "SubagentStart", "PostToolUse", "SubagentStop", "Stop"}
 AGENTS = {
     "gpt56_luna_worker.toml",
     "gpt56_terra_worker.toml",

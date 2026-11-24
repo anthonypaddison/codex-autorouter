@@ -10,7 +10,7 @@ custom-agent TOMLs are not required. Non-plugin surfaces use
 
 ## Configure v0.3.0 AI routing
 
-After installing and reviewing the exact candidate's five hooks as described
+After installing and reviewing the exact candidate's six hooks as described
 below, run from its installed root:
 
 ```sh
@@ -68,7 +68,7 @@ Do not substitute `main`: a moving branch does not identify the reviewed bytes. 
 
 ## Trust the bundled hooks and check health
 
-Open `/hooks`, inspect the five lifecycle entries, and trust the exact current definitions. Installation and enablement do not imply trust. Each command must execute only the router under its own `${PLUGIN_ROOT}` or `%PLUGIN_ROOT%`; it must not search sibling caches or contain a publisher source-machine path.
+Open `/hooks`, inspect the six lifecycle entries, and trust the exact current definitions. Installation and enablement do not imply trust. Each command must execute only the router under its own `${PLUGIN_ROOT}` or `%PLUGIN_ROOT%`; it must not search sibling caches or contain a publisher source-machine path.
 
 From the exact installed plugin root, run:
 

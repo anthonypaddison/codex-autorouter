@@ -83,7 +83,7 @@ class RouterCtlTests(unittest.TestCase):
     def test_plugin_hooks_are_native_and_relocatable(self) -> None:
         hooks = json.loads(HOOKS.read_text(encoding="utf-8"))["hooks"]
         self.assertEqual(
-            {"UserPromptSubmit", "SubagentStart", "PostToolUse", "SubagentStop", "Stop"},
+            {"UserPromptSubmit", "PreToolUse", "SubagentStart", "PostToolUse", "SubagentStop", "Stop"},
             set(hooks),
         )
         for groups in hooks.values():

@@ -2495,8 +2495,12 @@ def _migrate_state_identity(state: dict[str, Any]) -> bool:
     return True
 
 
+class _LedgerLockBusy(RuntimeError):
+    pass
+
+
 @contextmanager
-def _ledger_lock(*, initialize: bool = True):
+def _ledger_lock(*, initialize: bool = True, blocking: bool = True):
     _require_canonical_state_root()
     expected_marker = _read_state_marker()
     if not initialize and expected_marker is None:
@@ -2515,15 +2519,24 @@ def _ledger_lock(*, initialize: bool = True):
     fd = os.open(lock_path, flags, 0o600)
     with os.fdopen(fd, "a+", encoding="utf-8") as lock_file:
         os.chmod(lock_path, 0o600)
-        if fcntl is not None:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        elif msvcrt is not None:
-            lock_file.seek(0, os.SEEK_END)
-            if lock_file.tell() == 0:
-                lock_file.write("\0")
-                lock_file.flush()
-            lock_file.seek(0)
-            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+        try:
+            if fcntl is not None:
+                mode = fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
+                fcntl.flock(lock_file.fileno(), mode)
+            elif msvcrt is not None:
+                lock_file.seek(0, os.SEEK_END)
+                if lock_file.tell() == 0:
+                    lock_file.write("\0")
+                    lock_file.flush()
+                lock_file.seek(0)
+                mode = msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK
+                msvcrt.locking(lock_file.fileno(), mode, 1)
+            elif not blocking:
+                raise _LedgerLockBusy
+        except OSError as exc:
+            if blocking:
+                raise
+            raise _LedgerLockBusy from exc
         try:
             marker = _ensure_state_marker() if initialize else _read_state_marker()
             if marker is None or (expected_marker is not None and marker != expected_marker):
@@ -5604,6 +5617,82 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _is_spawn_guard_event(data: dict[str, Any]) -> bool:
+    return data.get("hook_event_name") == "PreToolUse" and data.get("tool_name") in (
+        "spawn_agent", "collaborationspawn_agent",
+    )
+
+
+def _deny_spawn(reason: str) -> dict[str, Any]:
+    return {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": f"Auto Router blocked child creation: {reason}. Do not retry this spawn.",
+    }}
+
+
+def _guard_spawn(data: dict[str, Any], state: dict[str, Any] | None) -> dict[str, Any] | None:
+    if state is None:
+        path = _state_path(data)
+        if path.exists() or path.is_symlink():
+            return _deny_spawn("the exact routing contract is unreadable")
+        previous = _latest_session_state(data.get("session_id"))
+        if (previous and "classification" in previous.get("decision", {})
+                and previous.get("status") in {"ROUTED", "RUNNING", "ROUTED_UP"}):
+            return _deny_spawn("no exact contract for this turn of an active routed session")
+        return None
+
+    decision = state["decision"]
+    if "classification" not in decision:
+        return None
+    call_id = _hook_tool_call_id(data)
+    if (not data.get("session_id") or not data.get("turn_id")
+            or state.get("session_id") != data["session_id"] or state.get("turn_id") != data["turn_id"]):
+        return _deny_spawn("session or turn does not match the routing contract")
+
+    def deny(reason: str) -> dict[str, Any]:
+        violations = state["violations"]
+        finding = f"pre_spawn_denied:{call_id or 'unbound'}:{reason}"
+        if finding not in violations and len(violations) < TRANSCRIPT_MAX_CALLS:
+            violations.append(finding)
+            _write_existing_state(data, state)
+        return _deny_spawn(reason)
+
+    if (_AI_CONFIG_ERROR or decision.get("configuration_id") != _AI_CONFIG_ID
+            or state.get("plugin_identity") != PLUGIN_IDENTITY
+            or state.get("status") not in {"ROUTED", "RUNNING"}
+            or state.get("parent_stop_observed")):
+        return deny("the routing contract is stale or unavailable")
+    if not call_id:
+        return deny("the pending tool call has no trustworthy identity")
+    if decision.get("actual_root_model") != data.get("model"):
+        return deny("the current root model conflicts with the routing contract")
+    if state.get("pre_spawn_authorization") or state.get("subagents_started"):
+        return deny("the turn already authorised or started a child")
+
+    selected = decision["classification"]
+    role = decision.get("route")
+    model, effort = decision.get("model"), decision.get("effort")
+    plan = decision["orchestration"]
+    if (decision.get("delegate") is not True or plan.get("mode") != "single_delegate"
+            or selected.get("execution_reused")
+            or (selected.get("model"), selected.get("effort")) != (model, effort)
+            or plan.get("required_agents") != {role: 1} or plan.get("allowed_agents") != [role]):
+        return deny("the current routing decision authorises no new child")
+
+    evidence = spawn_compat.validate_arguments(data.get("tool_input"))
+    if not evidence["spawn_contract_valid"]:
+        return deny(",".join(evidence["reasons"]))
+    if (evidence["role"], evidence["model"], evidence["effort"]) != (role, model, effort):
+        return deny("the call does not match the selected executor")
+
+    # Persist the one-shot admission under the same lock used for routing and
+    # lifecycle evidence. A failed or cancelled dispatch does not free it.
+    state["pre_spawn_authorization"] = call_id
+    _write_existing_state(data, state)
+    return None
+
+
 def handle(data: dict[str, Any]) -> dict[str, Any] | None:
     if os.environ.get(ai_classifier.GUARD):
         return None
@@ -5615,6 +5704,14 @@ def handle(data: dict[str, Any]) -> dict[str, Any] | None:
         config = None
         _AI_CONFIG_ERROR = True
     _configure_ai_runtime(config)
+    if _is_spawn_guard_event(data):
+        try:
+            # Classification can hold the ledger across an API call. Never wait
+            # for it long enough for the native hook to time out and fail open.
+            with _ledger_lock(blocking=False):
+                return _guard_spawn(data, _read_state(data))
+        except _LedgerLockBusy:
+            return _deny_spawn("another router operation already holds the ledger lock")
     with _ledger_lock():
         agent_id = str(data.get("agent_id") or "")
         existing = (_state_for_agent(data.get("session_id"), agent_id) if agent_id else None) or _read_state(data)
@@ -5658,19 +5755,24 @@ def main() -> int:
         except Exception as exc:
             _json_output({"status": "error", "error": f"{type(exc).__name__}: {exc}"})
             return 2
+    data: dict[str, Any] = {}
     try:
         raw = sys.stdin.read(16 * 1024 * 1024 + 1)
         if len(raw) > 16 * 1024 * 1024:
             raise ValueError("hook input exceeds 16 MiB")
-        data = json.loads(raw)
-        if not isinstance(data, dict):
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
             raise ValueError("hook input must be a JSON object")
+        data = payload
         output = handle(data)
         if output is not None:
             _json_output(output)
         return 0
     except Exception as exc:  # Fail open: routing must never brick Codex.
-        _json_output({"continue": True, "systemMessage": f"Codex Autorouter failed open: {type(exc).__name__}"})
+        if _is_spawn_guard_event(data):
+            _json_output(_deny_spawn("the routing contract could not be validated"))
+        else:
+            _json_output({"continue": True, "systemMessage": f"Codex Autorouter failed open: {type(exc).__name__}"})
         return 0
 
 
