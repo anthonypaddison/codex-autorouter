@@ -13,6 +13,37 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReleaseContractTests(unittest.TestCase):
+    def test_documented_installs_match_the_referenced_hook_manifests(self) -> None:
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        install = (ROOT / "docs/INSTALL.md").read_text(encoding="utf-8")
+        candidate = json.loads((ROOT / "hooks/hooks.json").read_text(encoding="utf-8"))["hooks"]
+        signature = validate_release.hook_signature(candidate)
+        published = validate_release.published_hook_signature(archive=True)
+        validate_release.validate_hook_docs(readme, install, published, signature)
+
+        for label, before, after in (
+            ("published count", "Published `v0.3.0` | 5", "Published `v0.3.0` | 6"),
+            ("published guard", "Published `v0.3.0` | 5 | No", "Published `v0.3.0` | 5 | Yes"),
+            ("candidate guard", "candidate | 6 | Yes", "candidate | 6 | No"),
+        ):
+            with self.subTest(label=label):
+                bad_install = install.replace(before, after)
+                self.assertNotEqual(install, bad_install)
+                with self.assertRaisesRegex(AssertionError, "hook documentation"):
+                    validate_release.validate_hook_docs(readme, bad_install, published, signature)
+        with self.assertRaisesRegex(AssertionError, "install ref"):
+            validate_release.validate_hook_docs(
+                readme.replace("--ref v0.3.0", "--ref v1.0.0"), install, published, signature,
+            )
+
+    def test_published_hook_snapshot_must_match_the_git_tag(self) -> None:
+        unexpected = json.dumps({"hooks": {
+            "PreToolUse": [{"matcher": "collaborationspawn_agent", "hooks": [{"type": "command"}]}],
+        }})
+        with patch.object(validate_release.subprocess, "check_output", return_value=unexpected):
+            with self.assertRaisesRegex(AssertionError, "published hook snapshot"):
+                validate_release.published_hook_signature(archive=False)
+
     def test_checkout_mode_rejects_an_enclosing_repository(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             subprocess.run(["git", "init", "--quiet", temp], check=True)

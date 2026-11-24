@@ -10,8 +10,8 @@ custom-agent TOMLs are not required. Non-plugin surfaces use
 
 ## Configure v0.3.0 AI routing
 
-After installing and reviewing the exact candidate's six hooks as described
-below, run from its installed root:
+After installing the pinned prerelease and reviewing its bundled hooks below,
+run from the installed plugin root:
 
 ```sh
 python3 scripts/autorouter.py models
@@ -66,9 +66,18 @@ codex plugin add gpt-5-6-router@codex-autorouter
 
 Do not substitute `main`: a moving branch does not identify the reviewed bytes. Start a new task after installation or update so Codex reloads plugin skills and hooks.
 
-## Trust the bundled hooks and check health
+## Hook review by version
 
-Open `/hooks`, inspect the six lifecycle entries, and trust the exact current definitions. Installation and enablement do not imply trust. Each command must execute only the router under its own `${PLUGIN_ROOT}` or `%PLUGIN_ROOT%`; it must not search sibling caches or contain a publisher source-machine path.
+Open `/hooks`, review the entries for the installed version, and trust the exact definitions. Each command should resolve to the installed plugin's own `${PLUGIN_ROOT}` or `%PLUGIN_ROOT%`.
+
+| Version | Bundled hooks | `PreToolUse` spawn guard |
+| --- | ---: | --- |
+| Published `v0.3.0` | 5 | No |
+| Unreleased `v1.0.0` candidate | 6 | Yes |
+
+Published `v0.3.0` uses Codex's native model and effort validation and checks child lifecycle evidence after spawning. When testing the unreleased source candidate, review the additional `PreToolUse` entry. It checks the pending native call against the authorised route before child creation. Report a guard denial and stop that spawn attempt. The [stable release gates](STABLE_READINESS.md) govern future publication.
+
+### Check health
 
 From the exact installed plugin root, run:
 
