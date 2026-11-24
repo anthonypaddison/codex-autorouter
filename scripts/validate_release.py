@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import struct
@@ -16,7 +17,7 @@ MANIFEST = ROOT / ".codex-plugin" / "plugin.json"
 MARKETPLACE = ROOT / ".agents" / "plugins" / "marketplace.json"
 HOOKS = ROOT / "hooks" / "hooks.json"
 SKILL = ROOT / "skills" / "route-gpt-5-6-work"
-EVENTS = {"UserPromptSubmit", "SubagentStart", "PostToolUse", "SubagentStop", "Stop"}
+EVENTS = {"UserPromptSubmit", "PreToolUse", "SubagentStart", "PostToolUse", "SubagentStop", "Stop"}
 AGENTS = {
     "gpt56_luna_worker.toml",
     "gpt56_terra_worker.toml",
@@ -28,11 +29,59 @@ AGENTS = {
 RELEASE_VERSION = "0.3.0"
 RELEASE_REF = f"v{RELEASE_VERSION}"
 REPOSITORY_URL = "https://github.com/anthonypaddison/Codex-Autorouter"
+# Extracted archives have no Git history. Checkout validation verifies this
+# snapshot against the published tag before using it in archive validation.
+PUBLISHED_HOOK_SIGNATURE = (5, False)
 
 
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise AssertionError(message)
+
+
+def hook_signature(hooks: dict) -> tuple[int, bool]:
+    count = sum(len(group["hooks"]) for groups in hooks.values() for group in groups)
+    matchers = [
+        group.get("matcher") or ".*"
+        for group in hooks.get("PreToolUse", [])
+        if group["hooks"]
+    ]
+    guarded = all(
+        any(re.search(matcher, name) for matcher in matchers)
+        for name in ("spawn_agent", "collaborationspawn_agent")
+    )
+    return count, guarded
+
+
+def published_hook_signature(*, archive: bool) -> tuple[int, bool]:
+    if archive:
+        return PUBLISHED_HOOK_SIGNATURE
+    try:
+        manifest = subprocess.check_output(
+            ["git", "-C", str(ROOT), "show", f"refs/tags/{RELEASE_REF}:hooks/hooks.json"],
+            text=True, stderr=subprocess.PIPE,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise AssertionError(f"fetch published tag {RELEASE_REF} to validate hook documentation") from exc
+    signature = hook_signature(json.loads(manifest)["hooks"])
+    require(signature == PUBLISHED_HOOK_SIGNATURE, "published hook snapshot differs from its tag")
+    return signature
+
+
+def validate_hook_docs(readme: str, install: str, published: tuple[int, bool], candidate: tuple[int, bool]) -> None:
+    require("(docs/INSTALL.md#hook-review-by-version)" in readme, "README must link to versioned hook documentation")
+    for doc, text in (("README.md", readme), ("docs/INSTALL.md", install)):
+        commands = re.findall(r"^codex plugin marketplace add .+$", text, re.MULTILINE)
+        require(len(commands) == 1 and commands[0].split()[-2:] == ["--ref", RELEASE_REF],
+                f"{doc} install ref must use the published tag")
+    for label, (count, guarded) in (
+        (f"Published `{RELEASE_REF}`", published),
+        ("Unreleased `v1.0.0` candidate", candidate),
+    ):
+        prefix = f"| {label} |"
+        rows = [line for line in install.splitlines() if line.startswith(prefix)]
+        expected = f"{prefix} {count} | {'Yes' if guarded else 'No'} |"
+        require(rows == [expected], f"hook documentation differs from the manifest for {label}")
 
 
 def png_dimensions(path: Path) -> tuple[int, int]:
@@ -71,14 +120,28 @@ def _git_paths(*args: str) -> set[str]:
     return {item.decode("utf-8") for item in result.stdout.split(b"\0") if item}
 
 
+def release_paths(archive: bool) -> list[Path]:
+    if archive:
+        entries = {path.relative_to(ROOT) for path in ROOT.rglob("*")}
+        for path in entries:
+            require(".git" not in path.parts, f"archive contains Git metadata: {path}")
+            require(not (ROOT / path).is_symlink(), f"release contains symlink: {path}")
+        return candidate_source_paths({path.as_posix() for path in entries}, set())
+    checkout = subprocess.run(
+        ["git", "-C", str(ROOT), "rev-parse", "--show-toplevel"],
+        capture_output=True, text=True,
+    )
+    require(checkout.returncode == 0 and Path(checkout.stdout.strip()).resolve() == ROOT,
+            "validate an extracted archive with --archive")
+    return candidate_source_paths(_git_paths("--cached"), _git_paths("--others", "--exclude-standard"))
+
+
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--archive", action="store_true", help="scan an extracted release without Git metadata")
+    args = parser.parse_args()
     manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
     require(manifest.get("name") == "gpt-5-6-router", "stable plugin package name changed")
-    folder_names = {ROOT.name.lower(), ROOT.parent.name.lower()}
-    require(
-        bool(folder_names & {"gpt-5-6-router", "codex-autorouter"}),
-        "source folder must use the package or public repository name",
-    )
     require(bool(re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", str(manifest.get("version")))), "invalid semver")
     require(manifest.get("version") == RELEASE_VERSION, "manifest version does not match the planned immutable release")
     require(manifest.get("author", {}).get("name") == "Alchemist", "original plugin attribution changed")
@@ -141,6 +204,12 @@ def main() -> int:
             for hook in group.get("hooks", []):
                 require("${PLUGIN_ROOT}" in hook.get("command", ""), "POSIX hook is not relocatable")
                 require("%PLUGIN_ROOT%" in hook.get("commandWindows", ""), "Windows hook is not relocatable")
+    validate_hook_docs(
+        (ROOT / "README.md").read_text(encoding="utf-8"),
+        (ROOT / "docs" / "INSTALL.md").read_text(encoding="utf-8"),
+        published_hook_signature(archive=args.archive),
+        hook_signature(hooks),
+    )
 
     actual_agents = {path.name for path in (SKILL / "assets" / "agents").glob("*.toml")}
     require(actual_agents <= AGENTS, "unknown legacy custom-agent template")
@@ -157,7 +226,7 @@ def main() -> int:
     )
 
     forbidden = (re.compile(r"/Users/[A-Za-z0-9._-]+/"), re.compile(r"[A-Za-z]:\\Users\\[^\\]+\\"))
-    paths = candidate_source_paths(_git_paths("--cached"), _git_paths("--others", "--exclude-standard"))
+    paths = release_paths(args.archive)
     for relative in paths:
         path = ROOT / relative
         require(not path.is_symlink(), f"release contains symlink: {relative}")

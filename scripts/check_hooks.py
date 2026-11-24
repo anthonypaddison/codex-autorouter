@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 
-EXPECTED_EVENTS = {"postToolUse", "userPromptSubmit", "subagentStart", "subagentStop", "stop"}
+EXPECTED_EVENTS = {"preToolUse", "postToolUse", "userPromptSubmit", "subagentStart", "subagentStop", "stop"}
 CHECKER_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(CHECKER_ROOT / "skills" / "route-gpt-5-6-work" / "scripts"))
 import model_policy

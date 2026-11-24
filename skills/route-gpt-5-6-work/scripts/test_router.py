@@ -1931,6 +1931,105 @@ class ObservedSpawnContractTests(unittest.TestCase):
         self.assertEqual(before, state["violations"])
 
 
+class PreSpawnGuardTests(unittest.TestCase):
+    def setUp(self) -> None:
+        RouterTests.setUp(self)
+        from test_ai_routing import configuration
+
+        config = configuration()
+        config["executors"] = [
+            {"model": "gpt-6-luna", "efforts": ["low"]},
+            {"model": "gpt-6.1-terra", "efforts": ["medium"]},
+            {"model": "gpt-6.1-sol", "efforts": ["medium", "high"]},
+        ]
+        config["fallback"] = {"model": "gpt-6.1-sol", "effort": "high"}
+        router_hook.routing_config.save_config(router_hook.CODEX_HOME / "autorouter/config.json", config)
+        self.parent = {"session_id": "recorded-root", "turn_id": "recorded-turn", "model": "gpt-6-luna"}
+        self.pending = {"fork_turns": "none", "task_name": "native_heredoc_verification",
+                        "message": "Read-only verification", "model": "gpt-6.1-sol",
+                        "reasoning_effort": "high"}
+
+    def tearDown(self) -> None:
+        RouterTests.tearDown(self)
+
+    def route(self, model="gpt-6.1-sol", effort="high") -> None:
+        router_hook.handle({**self.parent, "hook_event_name": "UserPromptSubmit",
+                            "prompt": f"Use model {model} at {effort} effort.\nVerify the fixture."})
+
+    def spawn(self, arguments, **overrides):
+        return router_hook.handle({**self.parent, "hook_event_name": "PreToolUse",
+                                   "tool_name": "collaborationspawn_agent",
+                                   "tool_use_id": "call_919238036d194ea2983682c73ec879e0",
+                                   "tool_input": arguments, **overrides})
+
+    def assertDenied(self, response, reason):
+        self.assertIsInstance(response, dict)
+        payload = response["hookSpecificOutput"]
+        self.assertEqual("deny", payload["permissionDecision"])
+        self.assertIn(reason, payload["permissionDecisionReason"])
+
+    def test_recorded_missing_and_wrong_arguments_are_denied(self):
+        self.route()
+        cases = [
+            ({k: v for k, v in self.pending.items() if k not in {"model", "reasoning_effort"}},
+             "missing_model,missing_reasoning_effort"),
+            ({k: v for k, v in self.pending.items() if k != "model"}, "missing_model"),
+            ({k: v for k, v in self.pending.items() if k != "reasoning_effort"}, "missing_reasoning_effort"),
+            ({**self.pending, "model": "gpt-6.1-terra", "reasoning_effort": "medium"}, "selected executor"),
+            ({**self.pending, "reasoning_effort": "medium"}, "selected executor"),
+            ({**self.pending, "model": "outside-allowlist"}, "invalid_model"),
+            ({**self.pending, "fork_turns": "all"}, "invalid_fork_turns"),
+        ]
+        for args, reason in cases:
+            with self.subTest(reason=reason):
+                self.assertDenied(self.spawn(args), reason)
+        state = router_hook._read_state(self.parent)
+        self.assertTrue(any("missing_model,missing_reasoning_effort" in v for v in state["violations"]))
+        self.assertEqual([], state["subagents_started"])
+
+    def test_recorded_sol_and_terra_arguments_are_permitted_once(self):
+        self.route()
+        self.assertIsNone(self.spawn(self.pending))
+        self.assertDenied(self.spawn(self.pending), "already")
+        self.parent["turn_id"] = "terra-turn"
+        self.route("gpt-6.1-terra", "medium")
+        args = {**self.pending, "task_name": "scheduler_design", "model": "gpt-6.1-terra",
+                "reasoning_effort": "medium"}
+        self.assertIsNone(self.spawn(args, tool_name="spawn_agent"))
+
+    def test_concurrent_calls_cannot_claim_the_same_delegation(self):
+        self.route()
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            results = list(workers.map(lambda i: self.spawn(self.pending, tool_use_id=f"call_attempt_{i}"), (1, 2)))
+        self.assertEqual(1, results.count(None))
+        self.assertDenied(next(r for r in results if r is not None), "already")
+
+    def test_busy_ledger_returns_deny_without_waiting_for_classification(self):
+        self.route()
+        with router_hook._ledger_lock():
+            self.assertDenied(self.spawn(self.pending), "holds the ledger lock")
+
+    def test_stale_conflicting_and_unrelated_turns(self):
+        self.route()
+        self.assertDenied(self.spawn(self.pending, turn_id="different-turn"), "turn")
+        self.assertDenied(self.spawn(self.pending, model="gpt-6.1-terra"), "root model")
+        router_hook._state_path(self.parent).write_text("{corrupt", encoding="utf-8")
+        self.assertDenied(self.spawn(self.pending), "unreadable")
+        self.assertIsNone(self.spawn(self.pending, session_id="independent-session"))
+        self.assertIsNone(self.spawn(self.pending, tool_name="mcp__unrelated__spawn_agent"))
+
+    def test_direct_routing_still_completes_without_a_child(self):
+        self.route("gpt-6-luna", "low")
+        router_hook.handle({**self.parent, "hook_event_name": "Stop"})
+        self.assertEqual("COMPLETE", router_hook._read_state(self.parent)["status"])
+
+    def test_independent_spawn_does_not_consume_slot(self):
+        self.assertIsNone(self.spawn(self.pending))
+        self.assertIsNone(router_hook._read_state(self.parent))
+        self.route()
+        self.assertIsNone(self.spawn(self.pending))
+
+
 class RouterTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -6042,6 +6141,49 @@ class RouterTests(unittest.TestCase):
         self.assertEqual("COMPLETE", state["status"])
         self.assertEqual(state["mutation_generation"], state["verified_generation"])
         self.assertEqual("transcript_exit_status", state["verification_observability"])
+
+    def test_literal_python_heredoc_operators_are_not_shell_redirection(self) -> None:
+        for opener, prefix in (("<<'PY'", ""), ('<<"PY"', ""), ("<<-\\PY", "\t")):
+            command = f"python3 - {opener}\n{prefix}assert (7 >> 1) > 2\n{prefix}PY"
+            nested = "tools.exec_command({cmd:" + json.dumps(command) + "})"
+            with self.subTest(opener=opener):
+                self.assertFalse(router_hook._is_mutation("Bash", command))
+                self.assertFalse(router_hook._is_mutation("exec", nested))
+
+    def test_heredoc_mutation_detection_preserves_shell_writes_and_ambiguity(self) -> None:
+        commands = (
+            "python3 - <<'PY' > output\nassert 7 >> 1\nPY",
+            "python3 - <<'PY'\nassert 7 >> 1\nPY\nprintf '%s' result >> output",
+            "touch output; python3 - <<'PY'\nassert 7 >> 1\nPY",
+            "sh <<'SH'\nprintf '%s' result > output\nSH",
+            "python3 - <<PY\nvalue = '$(printf x > output)'\nPY",
+            "python3 - <<'PY'\nassert 7 >> 1\nPY ",
+            "python3 - <<'PY'\nimport os\nos.system('printf x > output')\nPY",
+            "printf \"python3 - <<'PY'\" > output\nassert 7 >> 1\nPY",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertTrue(router_hook._is_mutation("Bash", command))
+        shell = "python3 - <<'PY'\nassert 7 >> 1\nPY"
+        dynamic = "tools.exec_command({cmd:" + json.dumps(shell) + " + tail})"
+        self.assertTrue(router_hook._is_mutation("exec", dynamic))
+
+    def test_read_only_python_heredoc_does_not_create_verification_debt(self) -> None:
+        task = {"session_id": "python-heredoc", "turn_id": "t1"}
+        router_hook.handle({
+            **task, "hook_event_name": "UserPromptSubmit", "model": "gpt-6-sol",
+            "model_reasoning_effort": "high", "prompt": "Explain the result of a bit shift.",
+        })
+        router_hook.handle({
+            **task, "hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_use_id": "python-check",
+            "tool_input": {"command": "python3 - <<'PY'\nassert (7 >> 1) == 3\nPY"},
+            "tool_response": {"exit_code": 0},
+        })
+        router_hook.handle({**task, "hook_event_name": "Stop"})
+        state = json.loads((Path(self.temp.name) / "python-heredoc--t1.json").read_text())
+        self.assertEqual("COMPLETE", state["status"])
+        self.assertEqual(0, state["mutation_generation"])
+        self.assertIsNone(state["observed_verification"])
 
     def test_read_only_route_silently_records_real_gate_if_it_later_mutates(self) -> None:
         router_hook.handle({

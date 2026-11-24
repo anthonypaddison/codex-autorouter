@@ -1,8 +1,8 @@
 # v0.3.0 release evidence
 
-Status: **unpublished release candidate for a limited normal-use trial**, not a
-cross-platform stable release. Planned `v0.3.0` URLs do not create a tag. No
-publication, merge or installed-plugin update is implied.
+Status: **public prerelease for a limited normal-use trial**. The recorded live
+test predates the published payload. See [v1.0.0 release gates](STABLE_READINESS.md)
+for the current publication decision.
 
 ## Source baseline and scope
 

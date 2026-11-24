@@ -31,7 +31,12 @@ A passing delegated route requires the expected model/effort intent, no unplanne
    ```
 
 2. Start a fresh task and prove that `UserPromptSubmit.model` observed `gpt-6-luna`. Config and App Server evidence may support the report but may not override the hook field.
-3. Trust the five exact plugin hooks.
+3. Review and trust the exact hooks for the [version under test](INSTALL.md#hook-review-by-version).
+   For the unreleased `v1.0.0` candidate, confirm the trusted `PreToolUse` guard
+   sees the native spawn name on this host and denies an invalid bound call
+   before a child starts. The matcher covers the standard `spawn_agent` and
+   `collaborationspawn_agent` hook names. A renamed native collaboration
+   namespace requires separate compatibility validation.
 4. From the exact installed cache root, run:
 
    ```bash

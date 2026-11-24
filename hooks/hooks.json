@@ -13,6 +13,19 @@
         ]
       }
     ],
+    "PreToolUse": [
+      {
+        "matcher": "^(spawn_agent|collaborationspawn_agent)$",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${PLUGIN_ROOT}/scripts/hook_launcher.py\" \"${PLUGIN_ROOT}\"",
+            "commandWindows": "py -3 \"%PLUGIN_ROOT%\\scripts\\hook_launcher.py\" \"%PLUGIN_ROOT%\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "SubagentStart": [
       {
         "hooks": [

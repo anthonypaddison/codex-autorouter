@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import heapq
 import html
+import io
 import itertools
 import json
 import os
@@ -15,6 +16,7 @@ import stat
 import sys
 import tempfile
 import time
+import tokenize
 import platform
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
@@ -491,6 +493,12 @@ CONTINUATION = re.compile(
     r"^\s*(?:yes(?:\s+please|,?\s+(?:do it|continue|proceed))?|do it|go ahead|proceed|continue(?:\s+please)?|keep going|"
     r"carry on|implement it|implement that|fix it|make the change|ship it|let'?s do it|"
     r"now do it|okay,?\s*(?:do it|continue|proceed))\s*[.!]*\s*$",
+    re.I,
+)
+PRESENTATION_CONTINUATION = re.compile(
+    r"^\s*make\s+(?:that|the\s+(?:previous|last))\s+(?:explanation|answer|summary)\s+"
+    r"(?:one\s+sentence|a\s+single\s+sentence|two\s+sentences)"
+    r"(?:\s+while\s+keeping\s+the\s+same\s+argument)?\s*[.!]?\s*$",
     re.I,
 )
 NATURAL_CONTINUATION = re.compile(
@@ -2487,8 +2495,12 @@ def _migrate_state_identity(state: dict[str, Any]) -> bool:
     return True
 
 
+class _LedgerLockBusy(RuntimeError):
+    pass
+
+
 @contextmanager
-def _ledger_lock(*, initialize: bool = True):
+def _ledger_lock(*, initialize: bool = True, blocking: bool = True):
     _require_canonical_state_root()
     expected_marker = _read_state_marker()
     if not initialize and expected_marker is None:
@@ -2507,15 +2519,24 @@ def _ledger_lock(*, initialize: bool = True):
     fd = os.open(lock_path, flags, 0o600)
     with os.fdopen(fd, "a+", encoding="utf-8") as lock_file:
         os.chmod(lock_path, 0o600)
-        if fcntl is not None:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        elif msvcrt is not None:
-            lock_file.seek(0, os.SEEK_END)
-            if lock_file.tell() == 0:
-                lock_file.write("\0")
-                lock_file.flush()
-            lock_file.seek(0)
-            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+        try:
+            if fcntl is not None:
+                mode = fcntl.LOCK_EX if blocking else fcntl.LOCK_EX | fcntl.LOCK_NB
+                fcntl.flock(lock_file.fileno(), mode)
+            elif msvcrt is not None:
+                lock_file.seek(0, os.SEEK_END)
+                if lock_file.tell() == 0:
+                    lock_file.write("\0")
+                    lock_file.flush()
+                lock_file.seek(0)
+                mode = msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK
+                msvcrt.locking(lock_file.fileno(), mode, 1)
+            elif not blocking:
+                raise _LedgerLockBusy
+        except OSError as exc:
+            if blocking:
+                raise
+            raise _LedgerLockBusy from exc
         try:
             marker = _ensure_state_marker() if initialize else _read_state_marker()
             if marker is None or (expected_marker is not None and marker != expected_marker):
@@ -3002,7 +3023,7 @@ def _command_from(data: dict[str, Any]) -> str:
     )
 
 
-def _embedded_command_values(source: str) -> list[str]:
+def _embedded_command_values(source: str, *, mask_python_operators: bool = False) -> list[str]:
     """Extract literal command/cmd fields from JavaScript tool orchestration."""
     values: list[str] = []
     field = re.compile(r"\b(?:command|cmd)\s*:\s*([`\"'])")
@@ -3021,7 +3042,17 @@ def _embedded_command_values(source: str) -> list[str]:
                 collected.append(character)
                 escaped = True
             elif character == quote:
-                values.append("".join(collected))
+                value = "".join(collected)
+                if mask_python_operators and quote == '"' and source[cursor:].lstrip().startswith((",", "}")):
+                    try:
+                        decoded = json.loads(f'"{value}"')
+                    except json.JSONDecodeError:
+                        pass
+                    else:
+                        masked = _mask_python_heredoc_operators(decoded)
+                        if masked != decoded:
+                            value = masked
+                values.append(value)
                 break
             else:
                 collected.append(character)
@@ -3130,6 +3161,46 @@ def _response_succeeded(response: Any) -> bool:
     return _response_status(response) is True
 
 
+_PYTHON_HEREDOC = re.compile(
+    r"""[ \t]*python(?:3(?:\.\d+)?)?[ \t]+-[ \t]*<<(?P<tabs>-?)[ \t]*"""
+    r"""(?P<word>'[A-Za-z_][A-Za-z_0-9]*'|"[A-Za-z_][A-Za-z_0-9]*"|\\[A-Za-z_][A-Za-z_0-9]*)[ \t]*"""
+)
+
+
+def _mask_python_heredoc_operators(command: str) -> str:
+    """Mask Python operators only in a bounded, literal stdin script."""
+    header, newline, rest = command.partition("\n")
+    opener = _PYTHON_HEREDOC.fullmatch(header)
+    if not newline or opener is None:
+        return command
+    if len(rest) > TRANSCRIPT_MAX_RETAINED_TEXT_BYTES:
+        return command
+    lines = rest.split("\n")
+    delimiter = opener["word"].strip("'\"\\")
+    strip_tabs = bool(opener["tabs"])
+    body = []
+    for line in lines:
+        line = line.lstrip("\t") if strip_tabs else line
+        if line == delimiter:
+            break
+        body.append(line)
+    else:
+        return command
+    masked = [list(line) for line in body]
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO("\n".join(body) + "\n").readline)
+        for token in tokens:
+            if token.type == tokenize.ERRORTOKEN:
+                return command
+            if token.type == tokenize.OP and token.string in {">", ">>"}:
+                row, start = token.start
+                end = token.end[1]
+                masked[row - 1][start:end] = " " * (end - start)
+    except (SyntaxError, tokenize.TokenError):
+        return command
+    return "\n".join([header, *map("".join, masked), *lines[len(body):]])
+
+
 def _is_mutation(tool: str, command: str) -> bool:
     if tool == "apply_patch" or tool in {"Edit", "Write"}:
         return True
@@ -3142,7 +3213,8 @@ def _is_mutation(tool: str, command: str) -> bool:
         r"\bgit\s+(?:commit|push|merge)\b|(?:^|\s)>{1,2}(?!=)\s*\S",
         re.I,
     )
-    return any(mutation.search(candidate) for candidate in _command_candidates(command))
+    candidates = _embedded_command_values(command, mask_python_operators=True)
+    return any(mutation.search(candidate) for candidate in candidates or [_mask_python_heredoc_operators(command)])
 
 
 def _mutation_evidence(data: dict[str, Any], tool: str, command: str) -> tuple[list[str], str]:
@@ -4862,11 +4934,22 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
                 return {"hookSpecificOutput": {"hookEventName": event, "additionalContext": _context(decision)}}
         routing_profile, routing_profile_source = _read_routing_profile()
         previous = _latest_session_state(data.get("session_id"), data.get("turn_id"))
+        previous_decision = previous["decision"] if previous else {}
+        previous_classification = previous_decision.get("classification")
         reused = None
-        if (_AI_CONFIG is not None and previous and previous.get("decision", {}).get("configuration_id") == _AI_CONFIG_ID
-                and CONTINUATION.match(prompt) and isinstance(previous["decision"].get("classification"), dict)):
-            reused = {**previous["decision"]["classification"], "calls": 0, "duration_ms": 0,
-                      "usage": {}, "reason_code": "continued_prior_decision", "execution_reused": True}
+        inherited_from_turn = None
+        if (_AI_CONFIG is not None and previous and previous_decision.get("configuration_id") == _AI_CONFIG_ID
+                and isinstance(previous_classification, dict)):
+            presentation_only = (
+                PRESENTATION_CONTINUATION.fullmatch(prompt)
+                and previous["status"] == "COMPLETE"
+                and previous_classification.get("status") == "selected"
+                and previous.get("session_id") == data.get("session_id")
+            )
+            if CONTINUATION.match(prompt) or presentation_only:
+                reused = {**previous_classification, "calls": 0, "duration_ms": 0,
+                          "usage": {}, "reason_code": "continued_prior_decision", "execution_reused": True}
+                inherited_from_turn = previous.get("turn_id")
         classify_after_reservation = _AI_CONFIG is not None and reused is None
         reservation = {"status": "unavailable", "model": None, "effort": None, "calls": None,
                        "duration_ms": None, "usage": {}, "reason_code": "interrupted_classification_unknown"}
@@ -4880,7 +4963,6 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
             enforce_active_root=True,
         )
         previous = _latest_session_state(data.get("session_id"), data.get("turn_id"))
-        inherited_from_turn = None
         if "classification" not in decision and _usable_continuation_context(previous, prompt) and (
             CONTINUATION.match(prompt) or NATURAL_CONTINUATION.match(prompt) or REFERENTIAL_CONTINUATION.match(prompt)
         ):
@@ -5535,6 +5617,82 @@ def _handle_unlocked(data: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _is_spawn_guard_event(data: dict[str, Any]) -> bool:
+    return data.get("hook_event_name") == "PreToolUse" and data.get("tool_name") in (
+        "spawn_agent", "collaborationspawn_agent",
+    )
+
+
+def _deny_spawn(reason: str) -> dict[str, Any]:
+    return {"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": f"Auto Router blocked child creation: {reason}. Do not retry this spawn.",
+    }}
+
+
+def _guard_spawn(data: dict[str, Any], state: dict[str, Any] | None) -> dict[str, Any] | None:
+    if state is None:
+        path = _state_path(data)
+        if path.exists() or path.is_symlink():
+            return _deny_spawn("the exact routing contract is unreadable")
+        previous = _latest_session_state(data.get("session_id"))
+        if (previous and "classification" in previous.get("decision", {})
+                and previous.get("status") in {"ROUTED", "RUNNING", "ROUTED_UP"}):
+            return _deny_spawn("no exact contract for this turn of an active routed session")
+        return None
+
+    decision = state["decision"]
+    if "classification" not in decision:
+        return None
+    call_id = _hook_tool_call_id(data)
+    if (not data.get("session_id") or not data.get("turn_id")
+            or state.get("session_id") != data["session_id"] or state.get("turn_id") != data["turn_id"]):
+        return _deny_spawn("session or turn does not match the routing contract")
+
+    def deny(reason: str) -> dict[str, Any]:
+        violations = state["violations"]
+        finding = f"pre_spawn_denied:{call_id or 'unbound'}:{reason}"
+        if finding not in violations and len(violations) < TRANSCRIPT_MAX_CALLS:
+            violations.append(finding)
+            _write_existing_state(data, state)
+        return _deny_spawn(reason)
+
+    if (_AI_CONFIG_ERROR or decision.get("configuration_id") != _AI_CONFIG_ID
+            or state.get("plugin_identity") != PLUGIN_IDENTITY
+            or state.get("status") not in {"ROUTED", "RUNNING"}
+            or state.get("parent_stop_observed")):
+        return deny("the routing contract is stale or unavailable")
+    if not call_id:
+        return deny("the pending tool call has no trustworthy identity")
+    if decision.get("actual_root_model") != data.get("model"):
+        return deny("the current root model conflicts with the routing contract")
+    if state.get("pre_spawn_authorization") or state.get("subagents_started"):
+        return deny("the turn already authorised or started a child")
+
+    selected = decision["classification"]
+    role = decision.get("route")
+    model, effort = decision.get("model"), decision.get("effort")
+    plan = decision["orchestration"]
+    if (decision.get("delegate") is not True or plan.get("mode") != "single_delegate"
+            or selected.get("execution_reused")
+            or (selected.get("model"), selected.get("effort")) != (model, effort)
+            or plan.get("required_agents") != {role: 1} or plan.get("allowed_agents") != [role]):
+        return deny("the current routing decision authorises no new child")
+
+    evidence = spawn_compat.validate_arguments(data.get("tool_input"))
+    if not evidence["spawn_contract_valid"]:
+        return deny(",".join(evidence["reasons"]))
+    if (evidence["role"], evidence["model"], evidence["effort"]) != (role, model, effort):
+        return deny("the call does not match the selected executor")
+
+    # Persist the one-shot admission under the same lock used for routing and
+    # lifecycle evidence. A failed or cancelled dispatch does not free it.
+    state["pre_spawn_authorization"] = call_id
+    _write_existing_state(data, state)
+    return None
+
+
 def handle(data: dict[str, Any]) -> dict[str, Any] | None:
     if os.environ.get(ai_classifier.GUARD):
         return None
@@ -5546,6 +5704,14 @@ def handle(data: dict[str, Any]) -> dict[str, Any] | None:
         config = None
         _AI_CONFIG_ERROR = True
     _configure_ai_runtime(config)
+    if _is_spawn_guard_event(data):
+        try:
+            # Classification can hold the ledger across an API call. Never wait
+            # for it long enough for the native hook to time out and fail open.
+            with _ledger_lock(blocking=False):
+                return _guard_spawn(data, _read_state(data))
+        except _LedgerLockBusy:
+            return _deny_spawn("another router operation already holds the ledger lock")
     with _ledger_lock():
         agent_id = str(data.get("agent_id") or "")
         existing = (_state_for_agent(data.get("session_id"), agent_id) if agent_id else None) or _read_state(data)
@@ -5589,19 +5755,24 @@ def main() -> int:
         except Exception as exc:
             _json_output({"status": "error", "error": f"{type(exc).__name__}: {exc}"})
             return 2
+    data: dict[str, Any] = {}
     try:
         raw = sys.stdin.read(16 * 1024 * 1024 + 1)
         if len(raw) > 16 * 1024 * 1024:
             raise ValueError("hook input exceeds 16 MiB")
-        data = json.loads(raw)
-        if not isinstance(data, dict):
+        payload = json.loads(raw)
+        if not isinstance(payload, dict):
             raise ValueError("hook input must be a JSON object")
+        data = payload
         output = handle(data)
         if output is not None:
             _json_output(output)
         return 0
     except Exception as exc:  # Fail open: routing must never brick Codex.
-        _json_output({"continue": True, "systemMessage": f"Codex Autorouter failed open: {type(exc).__name__}"})
+        if _is_spawn_guard_event(data):
+            _json_output(_deny_spawn("the routing contract could not be validated"))
+        else:
+            _json_output({"continue": True, "systemMessage": f"Codex Autorouter failed open: {type(exc).__name__}"})
         return 0
 
 
