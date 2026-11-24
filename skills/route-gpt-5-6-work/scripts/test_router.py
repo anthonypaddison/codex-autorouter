@@ -6043,6 +6043,49 @@ class RouterTests(unittest.TestCase):
         self.assertEqual(state["mutation_generation"], state["verified_generation"])
         self.assertEqual("transcript_exit_status", state["verification_observability"])
 
+    def test_literal_python_heredoc_operators_are_not_shell_redirection(self) -> None:
+        for opener, prefix in (("<<'PY'", ""), ('<<"PY"', ""), ("<<-\\PY", "\t")):
+            command = f"python3 - {opener}\n{prefix}assert (7 >> 1) > 2\n{prefix}PY"
+            nested = "tools.exec_command({cmd:" + json.dumps(command) + "})"
+            with self.subTest(opener=opener):
+                self.assertFalse(router_hook._is_mutation("Bash", command))
+                self.assertFalse(router_hook._is_mutation("exec", nested))
+
+    def test_heredoc_mutation_detection_preserves_shell_writes_and_ambiguity(self) -> None:
+        commands = (
+            "python3 - <<'PY' > output\nassert 7 >> 1\nPY",
+            "python3 - <<'PY'\nassert 7 >> 1\nPY\nprintf '%s' result >> output",
+            "touch output; python3 - <<'PY'\nassert 7 >> 1\nPY",
+            "sh <<'SH'\nprintf '%s' result > output\nSH",
+            "python3 - <<PY\nvalue = '$(printf x > output)'\nPY",
+            "python3 - <<'PY'\nassert 7 >> 1\nPY ",
+            "python3 - <<'PY'\nimport os\nos.system('printf x > output')\nPY",
+            "printf \"python3 - <<'PY'\" > output\nassert 7 >> 1\nPY",
+        )
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertTrue(router_hook._is_mutation("Bash", command))
+        shell = "python3 - <<'PY'\nassert 7 >> 1\nPY"
+        dynamic = "tools.exec_command({cmd:" + json.dumps(shell) + " + tail})"
+        self.assertTrue(router_hook._is_mutation("exec", dynamic))
+
+    def test_read_only_python_heredoc_does_not_create_verification_debt(self) -> None:
+        task = {"session_id": "python-heredoc", "turn_id": "t1"}
+        router_hook.handle({
+            **task, "hook_event_name": "UserPromptSubmit", "model": "gpt-6-sol",
+            "model_reasoning_effort": "high", "prompt": "Explain the result of a bit shift.",
+        })
+        router_hook.handle({
+            **task, "hook_event_name": "PostToolUse", "tool_name": "Bash", "tool_use_id": "python-check",
+            "tool_input": {"command": "python3 - <<'PY'\nassert (7 >> 1) == 3\nPY"},
+            "tool_response": {"exit_code": 0},
+        })
+        router_hook.handle({**task, "hook_event_name": "Stop"})
+        state = json.loads((Path(self.temp.name) / "python-heredoc--t1.json").read_text())
+        self.assertEqual("COMPLETE", state["status"])
+        self.assertEqual(0, state["mutation_generation"])
+        self.assertIsNone(state["observed_verification"])
+
     def test_read_only_route_silently_records_real_gate_if_it_later_mutates(self) -> None:
         router_hook.handle({
             "hook_event_name": "UserPromptSubmit", "session_id": "raised-gate", "turn_id": "t1",

@@ -6,6 +6,7 @@ from __future__ import annotations
 import hashlib
 import heapq
 import html
+import io
 import itertools
 import json
 import os
@@ -15,6 +16,7 @@ import stat
 import sys
 import tempfile
 import time
+import tokenize
 import platform
 from contextlib import ExitStack, contextmanager
 from pathlib import Path
@@ -3008,7 +3010,7 @@ def _command_from(data: dict[str, Any]) -> str:
     )
 
 
-def _embedded_command_values(source: str) -> list[str]:
+def _embedded_command_values(source: str, *, mask_python_operators: bool = False) -> list[str]:
     """Extract literal command/cmd fields from JavaScript tool orchestration."""
     values: list[str] = []
     field = re.compile(r"\b(?:command|cmd)\s*:\s*([`\"'])")
@@ -3027,7 +3029,17 @@ def _embedded_command_values(source: str) -> list[str]:
                 collected.append(character)
                 escaped = True
             elif character == quote:
-                values.append("".join(collected))
+                value = "".join(collected)
+                if mask_python_operators and quote == '"' and source[cursor:].lstrip().startswith((",", "}")):
+                    try:
+                        decoded = json.loads(f'"{value}"')
+                    except json.JSONDecodeError:
+                        pass
+                    else:
+                        masked = _mask_python_heredoc_operators(decoded)
+                        if masked != decoded:
+                            value = masked
+                values.append(value)
                 break
             else:
                 collected.append(character)
@@ -3136,6 +3148,46 @@ def _response_succeeded(response: Any) -> bool:
     return _response_status(response) is True
 
 
+_PYTHON_HEREDOC = re.compile(
+    r"""[ \t]*python(?:3(?:\.\d+)?)?[ \t]+-[ \t]*<<(?P<tabs>-?)[ \t]*"""
+    r"""(?P<word>'[A-Za-z_][A-Za-z_0-9]*'|"[A-Za-z_][A-Za-z_0-9]*"|\\[A-Za-z_][A-Za-z_0-9]*)[ \t]*"""
+)
+
+
+def _mask_python_heredoc_operators(command: str) -> str:
+    """Mask Python operators only in a bounded, literal stdin script."""
+    header, newline, rest = command.partition("\n")
+    opener = _PYTHON_HEREDOC.fullmatch(header)
+    if not newline or opener is None:
+        return command
+    if len(rest) > TRANSCRIPT_MAX_RETAINED_TEXT_BYTES:
+        return command
+    lines = rest.split("\n")
+    delimiter = opener["word"].strip("'\"\\")
+    strip_tabs = bool(opener["tabs"])
+    body = []
+    for line in lines:
+        line = line.lstrip("\t") if strip_tabs else line
+        if line == delimiter:
+            break
+        body.append(line)
+    else:
+        return command
+    masked = [list(line) for line in body]
+    try:
+        tokens = tokenize.generate_tokens(io.StringIO("\n".join(body) + "\n").readline)
+        for token in tokens:
+            if token.type == tokenize.ERRORTOKEN:
+                return command
+            if token.type == tokenize.OP and token.string in {">", ">>"}:
+                row, start = token.start
+                end = token.end[1]
+                masked[row - 1][start:end] = " " * (end - start)
+    except (SyntaxError, tokenize.TokenError):
+        return command
+    return "\n".join([header, *map("".join, masked), *lines[len(body):]])
+
+
 def _is_mutation(tool: str, command: str) -> bool:
     if tool == "apply_patch" or tool in {"Edit", "Write"}:
         return True
@@ -3148,7 +3200,8 @@ def _is_mutation(tool: str, command: str) -> bool:
         r"\bgit\s+(?:commit|push|merge)\b|(?:^|\s)>{1,2}(?!=)\s*\S",
         re.I,
     )
-    return any(mutation.search(candidate) for candidate in _command_candidates(command))
+    candidates = _embedded_command_values(command, mask_python_operators=True)
+    return any(mutation.search(candidate) for candidate in candidates or [_mask_python_heredoc_operators(command)])
 
 
 def _mutation_evidence(data: dict[str, Any], tool: str, command: str) -> tuple[list[str], str]:
