@@ -440,6 +440,7 @@ class ConfiguredHookTests(unittest.TestCase):
         self.addCleanup(lambda: router_hook._configure_ai_runtime(None))
         patch = mock.patch.object(router_hook, '_ai_catalogue', return_value=catalogue(), create=True)
         patch.start(); self.addCleanup(patch.stop)
+        self.real_classifier = ai_classifier.classify
         self.classifier = mock.Mock(return_value={'model': 'future-large', 'effort': 'high',
             'status': 'selected', 'reason_code': 'classifier_selected', 'duration_ms': 12, 'calls': 1, 'usage': {}})
         patch = mock.patch.object(ai_classifier, 'classify', self.classifier)
@@ -579,14 +580,40 @@ class ConfiguredHookTests(unittest.TestCase):
         self.hook.handle(self.data)
         self.assertFalse(self.state()['decision']['delegate'])
 
-    def test_configured_fallback_can_request_one_native_validated_child(self):
-        self.classifier.return_value['status'] = 'fallback'
-        self.hook.handle(self.data)
+    def test_incomplete_classifier_output_requires_fallback_spawn_before_answering(self):
+        runner = mock.Mock(return_value={'status': 'incomplete', 'usage': {'output_tokens': 256}})
+        self.classifier.side_effect = lambda *args: self.real_classifier(*args, runner=runner)
+        result = self.hook.handle({**self.data, 'model': 'future-small',
+                                   'prompt': 'Explain a crash-safe durable FIFO using a write-ahead log. Chat only.'})
+        context = result['hookSpecificOutput']['additionalContext']
         decision = self.state()['decision']
+        self.assertEqual(decision['classification']['reason_code'], 'classifier_incomplete_output')
         self.assertTrue(decision['delegate'])
         self.assertEqual(decision['executor_compatibility'], 'codex_native_validation')
         self.assertEqual(sum(decision['orchestration']['required_agents'].values()), 1)
-        self.assertEqual(decision['catalogue_availability'], 'available')
+        self.assertEqual(decision['catalogue_availability'], 'unverified')
+        self.assertIn('your first action must be the exact native spawn call above', context)
+        self.assertIn('including chat-only requests', context)
+        self.assertIn('"model":"future-large","reasoning_effort":"high"', context)
+        self.assertNotIn('selection is a recommendation', context)
+        self.assertNotIn('current/direct route', context)
+        self.assertNotIn('service_tier":', context.split('spawn_agent(', 1)[1].split(')', 1)[0])
+        self.assertEqual(runner.call_count, 1)
+
+        # A correct-looking root answer is still missing the required execution.
+        stopped = self.hook.handle({**self.data, 'hook_event_name': 'Stop', 'model': 'future-small',
+                                    'last_assistant_message': 'Flush the WAL before acknowledging.'})
+        self.assertTrue(stopped['continue'])
+        self.assertNotEqual(stopped.get('decision'), 'block')
+        self.assertEqual(self.state()['status'], 'FAILED_OPEN')
+        self.assertEqual(self.state()['agent_attestations'], {})
+        self.assertEqual(runner.call_count, 1)
+
+    def test_configured_fallback_matching_root_stays_direct(self):
+        self.classifier.return_value.update(status='fallback', reason_code='classifier_incomplete_output')
+        output = self.hook.handle({**self.data, 'model': 'future-large', 'model_reasoning_effort': 'high'})
+        self.assertFalse(self.state()['decision']['delegate'])
+        self.assertIn('no spawn is permitted', output['hookSpecificOutput']['additionalContext'])
 
     def test_short_continuation_reuses_decision_without_another_classifier_call(self):
         self.hook.handle(self.data)
