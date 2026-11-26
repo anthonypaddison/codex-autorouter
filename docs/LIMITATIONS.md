@@ -14,6 +14,18 @@ Codex stores and evaluates hook trust separately. `routerctl status` can validat
 
 Codex can retain the resolved, versioned hook command for an already-open task. Builds before the immutable launcher fix cannot rewrite that in-memory registration after the installed version changes. Open a fresh task once after upgrading from such a build. Tasks created by the fixed build launch only from the plugin root Codex supplied; they do not scan sibling cache directories.
 
+## Native plugin delegation is best-effort
+
+Autorouter selects an approved model and effort and requests native delegation
+from the parent when required. Covered spawn calls are checked against that
+selection. Execution becomes verified only when the child evidence satisfies the
+applicable identity, model, effort and lifecycle checks.
+
+The parent controls whether a child is spawned. If required delegation is missing,
+including when the classifier selected the configured fallback, the ledger records
+`FAILED_OPEN`. Mismatched child execution cannot satisfy the route. The parent
+remains responsible for the answer and its verification.
+
 ## The active root model is turn evidence
 
 `UserPromptSubmit.model` is authoritative for the active root model on each actual turn. Local config and App Server evidence can support health reporting, but neither overrides that hook observation. A non-Luna root is therefore credit-efficiency `DEGRADED` for that turn even if configuration says Luna.
@@ -108,7 +120,9 @@ errors without start evidence retain an unknown creation boundary. Missing
 PostToolUse/result evidence remains unobservable, never successful by default.
 
 Fallback is a classification-time choice only, using the same configured
-allowlist. After a spawn request there is no automatic retry, fallback child,
+allowlist. When the fallback differs from the observed root, the parent receives
+a delegation request subject to the same checks as any required child. After a
+spawn request there is no automatic retry, fallback child,
 cost-tier escalation or reclassification. The parent reports failures and retains
 responsibility for verification. A successful return/child ID is not proof of
 child start, completion or model/effort attestation.

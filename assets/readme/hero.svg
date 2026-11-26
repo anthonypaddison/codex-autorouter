@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1600" height="640" viewBox="0 0 1600 640" role="img" aria-labelledby="title desc">
   <title id="title">Autorouter</title>
-  <desc id="desc">A clean dark banner showing Luna and Sol as core Autorouter routes, with GPT-6 Astra separately marked as a gated frontier.</desc>
+  <desc id="desc">Autorouter selects a model and effort and requests best-effort Codex delegation. Astra is a gated route.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#090B11"/>
@@ -30,9 +30,9 @@
   </g>
 
   <g transform="translate(92 258)" font-family="Inter, ui-sans-serif, system-ui, sans-serif">
-    <text x="0" y="0" fill="#F8FAFC" font-size="70" font-weight="760" letter-spacing="-3">The right model.</text>
-    <text x="0" y="80" fill="#F8FAFC" font-size="70" font-weight="760" letter-spacing="-3">The right effort.</text>
-    <text x="0" y="140" fill="#93A0B5" font-size="26" font-weight="450">Automatically routed for precision, speed, and total token cost.</text>
+    <text x="0" y="0" fill="#F8FAFC" font-size="70" font-weight="760" letter-spacing="-3">Model and effort.</text>
+    <text x="0" y="80" fill="#F8FAFC" font-size="70" font-weight="760" letter-spacing="-3">Selected for Codex.</text>
+    <text x="0" y="140" fill="#93A0B5" font-size="26" font-weight="450">Native delegation is best-effort.</text>
   </g>
 
   <g font-family="Inter, ui-sans-serif, system-ui, sans-serif">

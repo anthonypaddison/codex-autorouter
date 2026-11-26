@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/readme/hero.svg" alt="Autorouter — the right model and effort, automatically" width="100%">
+  <img src="assets/readme/hero.svg" alt="Autorouter selects model and effort. Codex delegation is best-effort." width="100%">
 </p>
 
 ## v0.3.0 preview: user-configured AI routing
@@ -19,9 +19,10 @@ inheritance, routing quality across workloads, or savings. See the
 [limited-trial operator guide](docs/TRIAL.md) for activation, metrics and rollback.
 
 Configured mode uses the OpenAI Responses
-API, not a nested Codex CLI. It explicitly disables model tools, validates the
-selection against the configured allowlist and asks Codex to validate the child
-model/effort natively before spawning. Configuration is not execution proof.
+API with model tools disabled. Autorouter automatically selects an approved
+model and effort and asks the Codex parent to delegate when the route requires
+a child. Delegation is best-effort. The plugin enforces the selected pair on
+covered native spawn calls and checks the resulting execution evidence.
 Unconfigured legacy routing is unchanged. Do not promote this candidate on the
 strength of mocked tests alone.
 
@@ -227,7 +228,8 @@ files yet. Choose the best model and effort automatically, and tell me the
 route in one short line before you begin.
 ```
 
-You should see a simple label such as `Sol High Fast` or `Sol Medium Standard`. You can then stop thinking about model selection and focus on the work.
+A label such as `Sol High Fast` or `Sol Medium Standard` identifies the
+selected route. Child start and completion require separate evidence.
 
 ## Pick your optimization style
 
@@ -310,12 +312,11 @@ Small tasks stay in one agent. Larger tasks may split into a few independent pie
 6. **Ask when you are curious.** “Show me the route and why in one line” gives you the model, effort, speed, and plan without a technical dump.
 7. **Let verification finish.** The cheapest successful run is the one that does not need to be redone.
 
-## What Autorouter will—and will not—do
+## Plugin execution contract
 
-- It chooses a cost-effective GPT-6 Luna or Sol route for each task and exposes Astra only through its narrow frontier gate.
-- It can use a small number of specialized subagents when they materially help.
-- It keeps important work on appropriately capable routes, even in Token Saver.
-- It verifies file-changing work before reporting success.
+- Autorouter selects an approved model and effort, then requests native delegation from the parent when the route requires a child.
+- On covered spawn calls, it enforces the selected model and effort. It checks for missing or mismatched child execution and records missing required delegation as `FAILED_OPEN`.
+- The parent controls whether it spawns a child. Answer correctness remains the parent’s responsibility and requires task-specific verification. The plugin guarantees neither child creation nor answer correctness.
 - It treats bundled legacy custom-agent TOMLs as optional compatibility material. Their absence does not reduce health, and normal installation or activation does not install them.
 - It does not change your Fast/Standard preference.
 - It never changes or claims to have configured your root model.
@@ -346,10 +347,13 @@ Use the health check after an update. Removal must not change the user-selected 
 ### How routing works
 
 <p align="center">
-  <img src="assets/readme/architecture.svg" alt="Autorouter profiles a task, chooses model and effort, executes a bounded plan, and verifies the result" width="100%">
+  <img src="assets/readme/architecture.svg" alt="Autorouter profiles a task, selects model and effort, and checks execution evidence" width="100%">
 </p>
 
-Autorouter profiles the task, selects one route and bounded plan, executes it directly or through depth-1 agents, and verifies the final result. It permits at most three subagents and one evidence-backed route-up; only an attested Sol route-up may enter automatic Astra Medium.
+Autorouter profiles the task and selects one route and bounded plan. The parent
+owns execution and final verification. The routing policy allows at most three
+subagents and one evidence-backed route-up. Only an attested Sol route-up may
+enter automatic Astra Medium.
 
 ### Local verification
 

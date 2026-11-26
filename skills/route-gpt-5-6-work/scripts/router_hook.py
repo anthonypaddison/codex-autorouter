@@ -2915,7 +2915,14 @@ def _context(decision: dict[str, Any]) -> str:
             f"Before substantial work, spawn exactly one `{decision['model']}` child at `{decision['effort']}` effort with a unique descriptive `task_name`. "
             "Wait for its distilled result, then synthesize in the root."
         )
-        if "classification" in decision:
+        if decision.get("classification", {}).get("status") == "fallback":
+            execution = (
+                "The configured fallback requires delegation on this turn. Before answering or doing the task yourself, "
+                "your first action must be the exact native spawn call above, including chat-only requests. "
+                "Wait for the one matching child's result before synthesizing. "
+                "If native spawning is unavailable or rejected, disclose that the required fallback did not execute."
+            )
+        elif "classification" in decision:
             execution = (
                 "The configured selection is a recommendation; execution is pending until the matching child actually starts. "
                 + execution
@@ -2986,7 +2993,7 @@ def _context(decision: dict[str, Any]) -> str:
         f"Begin the first user-visible progress update with exactly `Route: {decision['visible_route']}`. "
         if announce_route
         else (
-            "ROUTE ANNOUNCEMENT: none for this current/direct route. "
+            f"ROUTE ANNOUNCEMENT: none for this {'current/direct route' if mode == 'direct' else 'turn'}. "
             "Do not print a route banner or surface unavailable effort/speed fields unless the user asks for routing diagnostics. "
         )
     )
