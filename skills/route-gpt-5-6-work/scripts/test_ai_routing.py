@@ -946,5 +946,260 @@ class RuntimeSafetyTests(unittest.TestCase):
         self.assertNotIn('execution_verified', result)
 
 
+class DirectExecutionTests(unittest.TestCase):
+    def setUp(self):
+        import io
+        from contextlib import redirect_stdout
+
+        with mock.patch.object(sys, "path", [str(Path(__file__).resolve().parents[3] / "scripts"), *sys.path]):
+            self.cli = importlib.import_module("autorouter")
+        self.io = io
+        self.redirect_stdout = redirect_stdout
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.cwd = Path(temp.name).resolve()
+        self.config = self.cwd / "routing.json"
+        self.cli.routing_config.save_config(self.config, configuration())
+        environment = {"AUTOROUTER_TEST_API_KEY": "classifier-secret", "ALIAS": "classifier-secret",
+                       "EMBEDDED_ALIAS": "a:classifier-secret:b", "OPENAI_API_KEY": "api-secret", "CODEX_API_KEY": "codex-api-secret",
+                       "CODEX_HOME": str(self.cwd / "retained-profile")}
+        self.env = mock.patch.dict(os.environ, environment)
+        self.env.start()
+        self.addCleanup(self.env.stop)
+
+    @staticmethod
+    def response(request_id, result):
+        return {"id": request_id, "result": result}
+
+    @staticmethod
+    def event(method, **params):
+        return {"method": method, "params": params}
+
+    def startup(self, model="future-small", effort="low", *, hooks=None, account="chatgpt"):
+        return [
+            self.response(1, {"userAgent": "fixture"}),
+            self.response(2, {"account": {"type": account}}),
+            self.response(3, {"config": {"plugins": {"gpt-5-6-router@local.dev": {"enabled": True},
+                                                      "unrelated@local": {"enabled": True}}}}),
+            self.response(4, {"marketplaces": [{"plugins": [{"id": "gpt-5-6-router@other"}]}]}),
+            self.response(5, {"thread": {"id": "thread-1"}, "modelProvider": "openai",
+                              "model": model, "reasoningEffort": effort}),
+            self.response(6, {"data": [{"hooks": [] if hooks is None else hooks, "errors": []}]}),
+        ]
+
+    def events(self, status="completed"):
+        return [
+            self.event("turn/started", threadId="thread-1", turn={"id": "turn-1", "status": "inProgress"}),
+            self.response(7, {"turn": {"id": "turn-1", "status": "inProgress"}}),
+            self.event("thread/tokenUsage/updated", threadId="different", turnId="turn-1",
+                       tokenUsage={"total": {"totalTokens": 999}}),
+            self.event("thread/tokenUsage/updated", threadId="thread-1", turnId="turn-1",
+                       tokenUsage={"total": {"inputTokens": 30, "outputTokens": 8, "totalTokens": 38}}),
+            self.event("item/completed", threadId="thread-1", turnId="turn-1",
+                       item={"type": "agentMessage", "phase": "final_answer", "text": "Fixture answer"}),
+            self.event("turn/completed", threadId="thread-1", turn={"id": "turn-1", "status": status}),
+        ]
+
+    def invoke(self, frames, task="Investigate this issue", *, api_failure=None, cli_args=None):
+        io = self.io
+
+        class Input(io.BytesIO):
+            wire = None
+
+            def close(self):
+                self.wire = self.getvalue()
+                super().close()
+
+        process = mock.Mock()
+        process.poll.return_value = None
+        process.stdin = Input()
+        process.stdout = io.BytesIO(b"".join(
+            frame if isinstance(frame, bytes) else json.dumps(frame).encode() + b"\n" for frame in frames))
+        captured = io.StringIO()
+        args = cli_args if cli_args is not None else [
+            "run", task, "--cwd", str(self.cwd), "--config", str(self.config),
+        ]
+        ai = self.cli.ai_classifier
+        with mock.patch.object(ai, "run_api", return_value=answer(), side_effect=api_failure) as api, \
+             mock.patch.object(ai, "classify", wraps=ai.classify) as classify, \
+             mock.patch.object(self.cli.direct_execution.subprocess, "Popen", return_value=process) as popen, \
+             self.redirect_stdout(captured):
+            code = self.cli.main(args)
+        wire = process.stdin.wire or b""
+        requests = [json.loads(line) for line in wire.splitlines()]
+        return code, json.loads(captured.getvalue()), requests, popen, api, classify, process
+
+    def test_invalid_workspace_never_classifies(self):
+        args = ["run", "--cwd", str(self.cwd / "missing"), "--config", str(self.config), "Investigate."]
+        code, result, _, popen, api, classify, _ = self.invoke([], cli_args=args)
+        self.assertEqual((code, result["failure"]), (2, "invalid_workspace_config_or_task"))
+        classify.assert_not_called()
+        api.assert_not_called()
+        popen.assert_not_called()
+
+    def test_interleaved_arguments_and_unrelated_hook_are_supported(self):
+        args = ["run", "--cwd", str(self.cwd), "--config", str(self.config), "Investigate."]
+        hook = {"enabled": True, "pluginId": "unrelated@local", "source": "plugin",
+                "sourcePath": "/fixture/codex-autorouter/example/hooks.json"}
+        code, result, *_ = self.invoke(self.startup(hooks=[hook]) + self.events(), cli_args=args)
+        self.assertEqual((code, result["turn_status"]), (3, "completed"))
+
+    def test_original_task_exact_pair_one_classifier_and_one_executor(self):
+        task = "Investigate this issue.\nKeep the original text, including π."
+        code, result, wire, popen, api, classify, process = self.invoke(self.startup() + self.events(), task)
+        self.assertEqual(code, 3)
+        self.assertEqual(result["turn_status"], "completed")
+        self.assertEqual(result["answer"], "Fixture answer")
+        self.assertEqual(result["exact_model_acceptance"], "unverified")
+        self.assertEqual(result["runtime"], {"model": None, "effort": None})
+        self.assertEqual(result["codex_usage"]["totalTokens"], 38)
+        self.assertEqual(result["classifier"]["usage"]["input_tokens"], 100)
+        api.assert_called_once()
+        classify.assert_called_once()
+        self.assertEqual(classify.call_args.args[0], task)
+        popen.assert_called_once()
+        self.assertEqual(popen.call_args.args[0], ["codex", "app-server", "--stdio"])
+        self.assertEqual(popen.call_args.kwargs["cwd"], self.cwd)
+        env = popen.call_args.kwargs["env"]
+        for key in ("AUTOROUTER_TEST_API_KEY", "ALIAS", "EMBEDDED_ALIAS", "OPENAI_API_KEY", "CODEX_API_KEY"):
+            self.assertNotIn(key, env)
+        self.assertEqual(env["CODEX_HOME"], str(self.cwd / "retained-profile"))
+        self.assertEqual(env[self.cli.ai_classifier.GUARD], "1")
+        methods = {msg["method"]: msg["params"] for msg in wire if "method" in msg}
+        self.assertEqual(methods["thread/start"], {
+            "cwd": str(self.cwd), "model": "future-small", "ephemeral": True,
+            "config": {"model_reasoning_effort": "low", "plugins": {
+                "gpt-5-6-router@local.dev": {"enabled": False}, "gpt-5-6-router@other": {"enabled": False}}},
+        })
+        self.assertEqual(methods["hooks/list"], {"threadId": "thread-1"})
+        self.assertEqual(methods["turn/start"], {
+            "threadId": "thread-1", "input": [{"type": "text", "text": task, "text_elements": []}],
+            "model": "future-small", "effort": "low",
+            "disabledPluginIds": ["gpt-5-6-router@local.dev", "gpt-5-6-router@other"],
+        })
+        process.terminate.assert_called_once()
+
+    def test_explicit_preference_bypasses_api_without_rewriting_prompt(self):
+        task = "Use model future-large at medium effort.\nInvestigate."
+        _, result, wire, _, api, classify, _ = self.invoke(self.startup("future-large", "medium") + self.events(), task)
+        self.assertEqual(result["requested"], {"model": "future-large", "effort": "medium"})
+        self.assertEqual(result["classifier"]["calls"], 0)
+        self.assertEqual(next(m for m in wire if m.get("method") == "turn/start")["params"]["input"][0]["text"], task)
+        api.assert_not_called()
+        classify.assert_called_once()
+
+    def test_unapproved_preference_never_starts_codex(self):
+        code, result, _, popen, api, _, _ = self.invoke([], "Use model other at ultra effort.\nInvestigate.")
+        self.assertEqual((code, result["failure"]), (2, "no_approved_route"))
+        popen.assert_not_called()
+        api.assert_not_called()
+
+    def test_native_api_fallback_is_the_approved_pair(self):
+        _, result, _, _, api, classify, _ = self.invoke(
+            self.startup("future-large", "high") + self.events(), api_failure=TimeoutError)
+        self.assertEqual(result["requested"], {"model": "future-large", "effort": "high"})
+        self.assertEqual(result["classifier"]["reason_code"], "classifier_timeout")
+        self.assertEqual(result["classifier"]["status"], "fallback")
+        self.assertIsNone(result["classifier"]["usage"])
+        api.assert_called_once()
+        classify.assert_called_once()
+
+    def test_active_router_hook_blocks_turn_before_submission(self):
+        hook = {"enabled": True, "pluginId": "gpt-5-6-router@local.dev",
+                "source": "plugin", "sourcePath": "/fixture/hooks.json"}
+        code, result, wire, _, _, _, _ = self.invoke(self.startup(hooks=[hook]))
+        self.assertEqual((code, result["failure"]), (1, "autorouter_hook_still_enabled"))
+        self.assertFalse(any(m.get("method") == "turn/start" for m in wire))
+
+    def test_unknown_plugin_hook_identity_blocks_turn_before_submission(self):
+        hook = {"enabled": True, "source": "plugin", "sourcePath": "/fixture/hooks.json"}
+        code, result, wire, *_ = self.invoke(self.startup(hooks=[hook]))
+        self.assertEqual((code, result["failure"]), (1, "plugin_disable_unverified"))
+        self.assertFalse(any(m.get("method") == "turn/start" for m in wire))
+
+    def test_api_key_account_cannot_run(self):
+        code, result, wire, *_ = self.invoke(self.startup(account="apiKey"))
+        self.assertEqual((code, result["failure"]), (1, "chatgpt_sign_in_required"))
+        self.assertFalse(any(m.get("method") == "thread/start" for m in wire))
+
+    def test_approval_is_cancelled_and_active_turn_interrupted(self):
+        frames = self.startup() + self.events()[:2] + [
+            {"id": "approval-1", "method": "item/commandExecution/requestApproval",
+             "params": {"command": "private fixture args"}},
+            self.response(8, {}),
+        ]
+        code, result, wire, *_ = self.invoke(frames)
+        self.assertEqual((code, result["failure"]), (1, "approval_required"))
+        self.assertTrue(result["interrupt_acknowledged"])
+        self.assertIn({"id": "approval-1", "result": {"decision": "cancel"}}, wire)
+        self.assertNotIn("private fixture args", json.dumps(result))
+        self.assertIn({"id": 8, "method": "turn/interrupt",
+                       "params": {"threadId": "thread-1", "turnId": "turn-1"}}, wire)
+
+    def test_permission_request_grants_nothing(self):
+        frames = self.startup() + self.events()[:2] + [
+            {"id": 91, "method": "item/permissions/requestApproval", "params": {}},
+            self.response(8, {}),
+        ]
+        code, result, wire, *_ = self.invoke(frames)
+        self.assertEqual((code, result["failure"]), (1, "approval_required"))
+        self.assertIn({"id": 91, "result": {"permissions": {}, "scope": "turn"}}, wire)
+
+    def test_ctrl_c_interrupts_the_bound_turn(self):
+        receiver = self.cli.direct_execution.Stdio.receive
+        count = 0
+
+        def cancel_once(server, deadline):
+            nonlocal count
+            if server.serial == 7:
+                count += 1
+                if count == 3:
+                    raise KeyboardInterrupt
+            return receiver(server, deadline)
+
+        with mock.patch.object(self.cli.direct_execution.Stdio, "receive", cancel_once):
+            code, result, wire, *_ = self.invoke(self.startup() + self.events()[:2] + [self.response(8, {})])
+        self.assertEqual((code, result["failure"]), (130, "cancelled"))
+        self.assertTrue(result["interrupt_acknowledged"])
+        self.assertEqual([m for m in wire if m.get("method") == "turn/interrupt"][0]["params"]["turnId"], "turn-1")
+
+    def test_native_reroute_reports_failure_without_retry(self):
+        event = self.event("model/rerouted", threadId="thread-1", turnId="turn-1",
+                           fromModel="future-small", toModel="future-large", reason="highRiskCyberActivity")
+        frames = self.startup() + self.events()[:2] + [event] + self.events()[2:]
+        code, result, wire, _, api, _, _ = self.invoke(frames)
+        self.assertEqual((code, result["exact_model_acceptance"]), (1, "failed"))
+        self.assertEqual(result["native_reroutes"][0]["to_model"], "future-large")
+        self.assertEqual(sum(m.get("method") == "turn/start" for m in wire), 1)
+        api.assert_called_once()
+
+    def test_matching_settings_are_not_runtime_attestation(self):
+        event = self.event("thread/settings/updated", threadId="thread-1",
+                           threadSettings={"model": "future-small", "effort": "low"})
+        code, result, *_ = self.invoke(self.startup() + [event] + self.events())
+        self.assertEqual(code, 3)
+        self.assertEqual(result["server_settings"], result["requested"])
+        self.assertEqual(result["exact_model_acceptance"], "unverified")
+
+    def test_different_settings_fail_acceptance(self):
+        event = self.event("thread/settings/updated", threadId="thread-1",
+                           threadSettings={"model": "future-small", "effort": "high"})
+        code, result, *_ = self.invoke(self.startup() + [event] + self.events())
+        self.assertEqual((code, result["exact_model_acceptance"]), (1, "failed"))
+
+    def test_turn_failure_and_rejection_have_safe_diagnostics(self):
+        code, result, *_ = self.invoke(self.startup() + self.events("failed"))
+        self.assertEqual((code, result["failure"]), (1, "turn_failed"))
+        code, result, *_ = self.invoke(self.startup() + [{"id": 7, "error": {"message": "private content"}}])
+        self.assertEqual((code, result["failure"]), (1, "turn/start_rejected"))
+        self.assertNotIn("private content", json.dumps(result))
+
+    def test_malformed_frame_and_early_eof_are_failures(self):
+        for frames, reason in (([b"unparseable\n"], "invalid_protocol_frame"), ([], "app_server_closed")):
+            with self.subTest(reason=reason):
+                code, result, _, _, _, _, process = self.invoke(self.startup() + frames)
+                self.assertEqual((code, result["failure"]), (1, reason))
+                process.terminate.assert_called_once()
+
 if __name__ == '__main__':
     unittest.main()

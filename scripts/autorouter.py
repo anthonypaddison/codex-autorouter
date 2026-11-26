@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Configure the existing plugin without installing it or changing Codex defaults."""
+"""Configure Auto Router or explicitly start an experimental routed Codex turn."""
 
 from __future__ import annotations
 
@@ -13,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "skills/route-gpt-5-6-work/scripts"))
 import routing_config
 import model_catalogue
+import ai_classifier
+import direct_execution
 
 
 def available_models() -> dict[str, list[str]]:
@@ -23,9 +25,49 @@ def available_models() -> dict[str, list[str]]:
             if model.visibility == "list" and model.efforts}
 
 
+def run_task(task: str, cwd: Path, path: Path) -> int:
+    try:
+        workspace = cwd.resolve(strict=True)
+        if not workspace.is_dir():
+            raise ValueError("workspace_not_directory")
+        config = routing_config.load_config(path)
+        if not config or config["schema_version"] != 2 or not config["enabled"]:
+            raise routing_config.ConfigError("enabled_classifier_configuration_required")
+        if not task.strip() or len(task.encode()) > ai_classifier.MAX_PROMPT_BYTES:
+            raise ValueError("invalid_task")
+        routing = ai_classifier.classify(task, config)
+    except KeyboardInterrupt:
+        print(json.dumps({"failure": "cancelled", "classifier_usage": None, "codex_usage": None}))
+        return 130
+    except (routing_config.ConfigError, ValueError, OSError, RuntimeError):
+        print(json.dumps({"failure": "invalid_workspace_config_or_task"}))
+        return 2
+
+    model, effort = routing["model"], routing["effort"]
+    classifier = {key: routing[key] for key in ("status", "reason_code", "calls", "classifier_model", "classifier_effort")}
+    classifier["usage"] = routing["usage"] or None
+    approved = {entry["model"]: entry["efforts"] for entry in config["executors"]}
+    if routing["status"] not in {"selected", "fallback"} or effort not in approved.get(model, []):
+        print(json.dumps({"classifier": classifier, "failure": "no_approved_route", "codex_usage": None}))
+        return 2
+
+    environment = direct_execution.executor_environment(config["classifier"]["credential_env"])
+    environment[ai_classifier.GUARD] = "1"
+    result = direct_execution.execute(workspace, task, model, effort, environment)
+    result["classifier"] = classifier
+    print(json.dumps(result))
+    if result["failure"] == "cancelled":
+        return 130
+    if result["failure"] or result["exact_model_acceptance"] == "failed":
+        return 1
+    return 3 if result["exact_model_acceptance"] == "unverified" else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("setup", "status", "models"))
+    parser.add_argument("command", choices=("setup", "status", "models", "run"))
+    parser.add_argument("task", nargs="?", help="Original task for the experimental run command")
+    parser.add_argument("--cwd", type=Path, help="Workspace for run (default: current directory)")
     parser.add_argument("--config", type=Path)
     parser.add_argument("--classifier")
     parser.add_argument("--classifier-effort")
@@ -41,8 +83,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout-seconds", type=float,
                         default=routing_config.DEFAULT_CLASSIFIER_TIMEOUT_SECONDS,
                         help="Total classifier deadline in seconds (1–30; default: 10; no retries)")
-    args = parser.parse_args(argv)
+    args = parser.parse_intermixed_args(argv)
     path = args.config or routing_config.config_path()
+    if args.command == "run":
+        if args.task is None:
+            parser.error("run requires a task")
+        return run_task(args.task, args.cwd or Path.cwd(), path)
+    if args.task is not None or args.cwd is not None:
+        parser.error("task and --cwd are only supported by run")
     try:
         if args.command == "status":
             config = routing_config.load_config(path)

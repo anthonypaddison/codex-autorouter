@@ -42,6 +42,45 @@ it using the uninstall steps below. Neither operation changes the root model.
 Status/health do not run inference. New setup deadlines default to ten seconds
 and support 1–30 seconds with no automatic retry.
 
+## Experimental direct execution
+
+Use a Codex CLI whose App Server supports thread-local config overrides and
+thread-scoped hook inspection. The checked protocol schema is Codex CLI 0.170.0.
+Use your existing Codex ChatGPT sign-in and an enabled schema-v2 Auto Router
+configuration. Set the classifier credential as for configured routing.
+
+    python3 scripts/autorouter.py run "Investigate this issue" --cwd /path/to/workspace
+
+The current directory is the default workspace. Use --config to select an
+existing routing configuration file. The task is classified once, and an
+approved explicit model directive can skip the classifier API call. A fallback
+may be selected only by the existing classifier before the turn is submitted.
+
+The CLI starts a short-lived App Server and an ephemeral thread. It disables
+discovered Auto Router plugin IDs in the thread's config and requires a
+successful check for inactive Auto Router hooks before sending the original
+task. The turn's disabledPluginIds field also records the selection. In Codex
+0.170.0 that field alone does not filter plugin capabilities. Other Codex
+settings, including the effective sandbox and approval policy, are inherited.
+The classifier credential is removed from the executor environment. Codex
+uses its existing ChatGPT authentication.
+
+The command grants no approvals or new permissions. Approval requests end the
+run. Use Ctrl+C to request interruption of the bound turn. The JSON receipt
+reports requested settings, native reroutes, completion, available usage and
+answer text. Keep the receipt private if the answer contains workspace data.
+
+- Exit 1 means execution failed or exact-model acceptance failed.
+- Exit 2 means the command input, configuration or route was rejected.
+- Exit 3 means Codex completed the turn with exact-model acceptance unverified.
+- Exit 130 means the user interrupted the command.
+
+The current protocol exposes submitted and effective settings and can report
+native reroutes. Those settings do not attest which model or effort served
+inference. Runtime identity and effort remain unverified without independent
+evidence. Automated tests use offline protocol fixtures. Real Codex execution
+remains a separate acceptance step.
+
 ## Legacy deterministic mode: select the cheap root once
 
 Select **GPT-6 Luna** in Codex Desktop before starting a new task. For a personal CLI default, use top-level Codex configuration:
