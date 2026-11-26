@@ -1042,12 +1042,12 @@ class DirectExecutionTests(unittest.TestCase):
         hook = {"enabled": True, "pluginId": "unrelated@local", "source": "plugin",
                 "sourcePath": "/fixture/codex-autorouter/example/hooks.json"}
         code, result, *_ = self.invoke(self.startup(hooks=[hook]) + self.events(), cli_args=args)
-        self.assertEqual((code, result["turn_status"]), (3, "completed"))
+        self.assertEqual((code, result["turn_status"]), (0, "completed"))
 
     def test_original_task_exact_pair_one_classifier_and_one_executor(self):
         task = "Investigate this issue.\nKeep the original text, including π."
         code, result, wire, popen, api, classify, process = self.invoke(self.startup() + self.events(), task)
-        self.assertEqual(code, 3)
+        self.assertEqual(code, 0)
         self.assertEqual(result["turn_status"], "completed")
         self.assertEqual(result["answer"], "Fixture answer")
         self.assertEqual(result["exact_model_acceptance"], "unverified")
@@ -1177,7 +1177,7 @@ class DirectExecutionTests(unittest.TestCase):
         event = self.event("thread/settings/updated", threadId="thread-1",
                            threadSettings={"model": "future-small", "effort": "low"})
         code, result, *_ = self.invoke(self.startup() + [event] + self.events())
-        self.assertEqual(code, 3)
+        self.assertEqual(code, 0)
         self.assertEqual(result["server_settings"], result["requested"])
         self.assertEqual(result["exact_model_acceptance"], "unverified")
 

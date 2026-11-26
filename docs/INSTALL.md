@@ -70,16 +70,18 @@ run. Use Ctrl+C to request interruption of the bound turn. The JSON receipt
 reports requested settings, native reroutes, completion, available usage and
 answer text. Keep the receipt private if the answer contains workspace data.
 
+- Exit 0 means Codex completed the turn with no observed reroute or settings
+  mismatch. Runtime attestation is reported separately.
 - Exit 1 means execution failed or exact-model acceptance failed.
 - Exit 2 means the command input, configuration or route was rejected.
-- Exit 3 means Codex completed the turn with exact-model acceptance unverified.
 - Exit 130 means the user interrupted the command.
 
 The current protocol exposes submitted and effective settings and can report
 native reroutes. Those settings do not attest which model or effort served
 inference. Runtime identity and effort remain unverified without independent
-evidence. Automated tests use offline protocol fixtures. Real Codex execution
-remains a separate acceptance step.
+evidence. Automated tests use offline protocol fixtures. Live acceptance on
+Codex CLI 0.170.0 covered a deterministic reply and an independently verified
+file edit. Other Codex versions and operating systems still need live testing.
 
 ## Legacy deterministic mode: select the cheap root once
 

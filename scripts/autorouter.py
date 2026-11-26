@@ -60,7 +60,7 @@ def run_task(task: str, cwd: Path, path: Path) -> int:
         return 130
     if result["failure"] or result["exact_model_acceptance"] == "failed":
         return 1
-    return 3 if result["exact_model_acceptance"] == "unverified" else 0
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:

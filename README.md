@@ -333,10 +333,11 @@ the router CLI.
 This uses the enabled routing configuration and existing ChatGPT sign-in.
 It submits the selected model and effort to Codex App Server and returns a JSON
 receipt with the answer, classifier usage, Codex usage and execution evidence.
-Native reroutes fail exact-model acceptance. A completed turn can have
-unverified runtime identity or effort. Use the [installation notes](docs/INSTALL.md#experimental-direct-execution)
-for requirements and exit codes. Direct execution remains experimental pending
-a separately approved real Codex test.
+Native reroutes fail exact-model acceptance. A completed turn can succeed
+with no observed reroute while runtime model and effort remain unverified.
+Direct execution is experimental. See the
+[installation notes](docs/INSTALL.md#experimental-direct-execution) for
+requirements and exit codes.
 
 ## Update or remove Autorouter
 
