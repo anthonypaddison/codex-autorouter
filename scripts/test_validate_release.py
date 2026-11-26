@@ -31,10 +31,11 @@ class ReleaseContractTests(unittest.TestCase):
                 self.assertNotEqual(install, bad_install)
                 with self.assertRaisesRegex(AssertionError, "hook documentation"):
                     validate_release.validate_hook_docs(readme, bad_install, published, signature)
-        with self.assertRaisesRegex(AssertionError, "install ref"):
-            validate_release.validate_hook_docs(
-                readme.replace("--ref v0.3.0", "--ref v1.0.0"), install, published, signature,
-            )
+        for ref in ("v0.3.0", "v0.4.0-experimental.1"):
+            with self.subTest(ref=ref), self.assertRaisesRegex(AssertionError, "install ref"):
+                validate_release.validate_hook_docs(
+                    readme.replace(f"--ref {ref}", "--ref main"), install, published, signature,
+                )
 
     def test_published_hook_snapshot_must_match_the_git_tag(self) -> None:
         unexpected = json.dumps({"hooks": {
@@ -89,13 +90,13 @@ class ReleaseContractTests(unittest.TestCase):
         source = marketplace["plugins"][0]["source"]
 
         self.assertEqual(source["url"], "https://github.com/anthonypaddison/Codex-Autorouter.git")
-        self.assertEqual(source["ref"], "v0.3.0")
+        self.assertEqual(source["ref"], "v0.4.0-experimental.1")
         self.assertNotIn(source["ref"].lower(), {"main", "master", "head"})
 
     def test_manifest_identifies_candidate_without_losing_original_author(self) -> None:
         manifest = json.loads((ROOT / ".codex-plugin/plugin.json").read_text(encoding="utf-8"))
 
-        self.assertEqual(manifest["version"], "0.3.0")
+        self.assertEqual(manifest["version"], "0.4.0-experimental.1")
         self.assertEqual(manifest["author"]["name"], "Alchemist")
         self.assertEqual(manifest["interface"]["websiteURL"], "https://github.com/anthonypaddison/Codex-Autorouter")
 

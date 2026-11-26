@@ -31,9 +31,10 @@ not establish hosted CI, live classifier quality or real-host compatibility.
 
 ## Runtime scope
 
-| Surface | v0.3.0 evidence | Publication statement |
+| Surface | Evidence | Publication statement |
 |---|---|---|
 | macOS CLI, earlier accepted payload | One automatic classification and correlated child | Limited trial; final security/docs candidate offline-tested only |
+| macOS CLI 0.170.0, experimental direct execution | One selected Luna / Low root turn completed. Submitted settings matched and runtime attestation was unavailable. | Opt-in experimental mode with limited live evidence |
 | macOS Desktop | Credential inheritance not established | Unverified; exports cannot retrofit a running app |
 | Linux CLI | Offline/CI target, no recorded live acceptance | Runtime unverified |
 | Windows Desktop/CLI | Offline/CI target, no recorded live acceptance | Runtime unverified; benchmark workspace/review unavailable |
@@ -54,8 +55,9 @@ renewed `/hooks` review where needed, and a fresh host boundary.
 - [ ] No guaranteed savings, universal model entitlement, unsupported platform
   claims or implicit root/service-tier changes are advertised.
 - [ ] Separate approval covers push, tag, release and visibility changes.
-- [ ] Annotated `v0.3.0` resolves to the reviewed commit; clean-room archive
-  validation and SHA256 checks pass before distribution.
+- [ ] The annotated experimental tag resolves to the reviewed commit. Clean-room
+  archive validation and SHA256 checks pass before distribution. The published
+  `v0.3.0` tag remains the rollback pin.
 - [ ] Marketplace and privacy URLs resolve to the immutable reviewed tag.
 
 No distribution action is performed by this checklist or the validator.

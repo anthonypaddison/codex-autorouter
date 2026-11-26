@@ -1,6 +1,6 @@
 {
   "name": "gpt-5-6-router",
-  "version": "0.3.0",
+  "version": "0.4.0-experimental.1",
   "description": "Opt-in API classification selects a user-allowlisted Codex model and effort. Legacy deterministic routing remains available.",
   "author": {
     "name": "Alchemist"
@@ -18,12 +18,12 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Autorouter",
-    "shortDescription": "Configurable AI routing with native Codex delegation",
-    "longDescription": "v0.3.0 offers opt-in OpenAI API classification with separately billed API credits, exact user-approved model/effort pairs, direct execution for an exact root match, and at most one native-validated child for a different selection. Codex permissions and model restrictions still apply. Legacy deterministic GPT-6 Luna or Sol routing, with a gated Astra tier, remains available when configured AI routing is not enabled. Limited macOS CLI execution is demonstrated; Desktop credential inheritance, other environments, workload quality and cost savings are not established.",
+    "shortDescription": "Best-effort Codex delegation and experimental direct execution",
+    "longDescription": "The plugin selects an allowlisted model and effort and requests best-effort native delegation. Experimental autorouter run submits one new Codex root turn with explicit model settings. Submitted settings are not runtime attestation. Optional classification uses the OpenAI API account, while native direct execution uses Codex through ChatGPT sign-in. Codex permissions and model restrictions still apply. Direct execution has limited macOS CLI acceptance. Legacy deterministic GPT-6 Luna or Sol routing with a gated Astra tier remains available.",
     "developerName": "Alchemist",
     "category": "Developer Tools",
     "websiteURL": "https://github.com/anthonypaddison/Codex-Autorouter",
-    "privacyPolicyURL": "https://github.com/anthonypaddison/Codex-Autorouter/blob/v0.3.0/docs/PRIVACY.md",
+    "privacyPolicyURL": "https://github.com/anthonypaddison/Codex-Autorouter/blob/v0.4.0-experimental.1/docs/PRIVACY.md",
     "capabilities": [
       "Interactive",
       "Write"

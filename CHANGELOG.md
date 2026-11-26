@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## v0.4.0-experimental.1 — release candidate
+
+- Clarified best-effort plugin delegation and required fallback spawn instructions. The ledger reports missing execution as `FAILED_OPEN`.
+- Added opt-in experimental `autorouter run` for a new native Codex root turn. Report submitted model settings, runtime evidence and separate classifier and Codex usage.
+- Retained the published `v0.3.0` install and rollback pin.
+
+## Earlier changes
 
 ### v0.3.0 release candidate
 

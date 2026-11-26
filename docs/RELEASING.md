@@ -1,6 +1,6 @@
 # Release procedure
 
-This fork preserves `vibeforge1111/Codex-Autorouter` as its upstream and publishes installable candidates from `anthonypaddison/Codex-Autorouter`. The commands below document the published v0.3.0 prerelease process. For v1.0.0, follow [the stable release gates](STABLE_READINESS.md).
+This fork preserves `vibeforge1111/Codex-Autorouter` as its upstream and publishes installable candidates from `anthonypaddison/Codex-Autorouter`. The commands below describe the planned v0.4.0-experimental.1 prerelease. For v1.0.0, follow [the stable release gates](STABLE_READINESS.md).
 
 Do not create or push a tag until the candidate commit, real-host acceptance, and release evidence have been reviewed. Installing from a branch such as `main` is unsupported because a moving branch cannot identify the bytes that were reviewed.
 
@@ -18,7 +18,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 scripts/fuzz_router.py
 ```
 
 Run the full CI-defined offline suite listed in README and review
-[the release checklist](RELEASE_CHECKLIST.md). Label v0.3.0 as a limited trial with its demonstrated
+[the release checklist](RELEASE_CHECKLIST.md). Label the candidate as an experimental release with its demonstrated
 macOS CLI scope; other surfaces remain unverified until separately approved
 acceptance. Configured-mode proof must use its exact allowlist, not a mandatory
 legacy Sol/Astra probe. Health checks must never run paid probes. Do not infer
@@ -31,9 +31,9 @@ Review all reachable refs for secrets and deliberate author-identity exposure.
 After review approval, bind an annotated local tag to the recorded commit. Substitute the reviewed commit ID explicitly; do not tag an unverified moving `HEAD` by accident.
 
 ```bash
-git tag -a v0.3.0 REVIEWED_COMMIT_ID -m "release v0.3.0"
-git rev-list -n 1 v0.3.0
-git show --no-patch --format=fuller v0.3.0
+git tag -a v0.4.0-experimental.1 REVIEWED_COMMIT_ID -m "release v0.4.0-experimental.1"
+git rev-list -n 1 v0.4.0-experimental.1
+git show --no-patch --format=fuller v0.4.0-experimental.1
 ```
 
 The resolved tag commit must exactly equal the reviewed candidate commit.
@@ -44,10 +44,10 @@ Create the release archive from the tag, not from the worktree. Keep the generat
 
 ```bash
 mkdir -p dist
-git archive --format=zip --prefix=Codex-Autorouter-v0.3.0/ -o dist/Codex-Autorouter-v0.3.0.zip v0.3.0
-shasum -a 256 dist/Codex-Autorouter-v0.3.0.zip > dist/Codex-Autorouter-v0.3.0.zip.SHA256
-shasum -a 256 -c dist/Codex-Autorouter-v0.3.0.zip.SHA256
-unzip -l dist/Codex-Autorouter-v0.3.0.zip
+git archive --format=zip --prefix=Codex-Autorouter-v0.4.0-experimental.1/ -o dist/Codex-Autorouter-v0.4.0-experimental.1.zip v0.4.0-experimental.1
+shasum -a 256 dist/Codex-Autorouter-v0.4.0-experimental.1.zip > dist/Codex-Autorouter-v0.4.0-experimental.1.zip.SHA256
+shasum -a 256 -c dist/Codex-Autorouter-v0.4.0-experimental.1.zip.SHA256
+unzip -l dist/Codex-Autorouter-v0.4.0-experimental.1.zip
 ```
 
 Extract the archive into a fresh temporary directory. Use
@@ -62,7 +62,7 @@ the released digest with a fresh archive produced from the same tag.
 Pushing the tag makes the marketplace ref resolvable and is a separate, explicit release action:
 
 ```bash
-git push origin refs/tags/v0.3.0
+git push origin refs/tags/v0.4.0-experimental.1
 ```
 
-Attach the exact archive and its `.SHA256` file to the reviewed GitHub release. Do not retag `v0.3.0`; any later code change requires a new version and a new review. Do not install, activate, publish, or merge as a side effect of validation.
+Attach the exact archive and its `.SHA256` file to the reviewed GitHub release. Keep the published `v0.3.0` pin intact. Any later code change requires a new version and a new review. Do not install, activate, publish, or merge as a side effect of validation.
