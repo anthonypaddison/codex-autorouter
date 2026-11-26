@@ -323,6 +323,22 @@ Small tasks stay in one agent. Larger tasks may split into a few independent pie
 - It never spends credits on an automatic readiness probe.
 - New routing records do not store your prompt text or a hash of it. Affected historical ledgers may retain legacy prompt-derived event keys until normal retention or an explicit purge removes them; see the [privacy guide](docs/PRIVACY.md).
 
+## Experimental direct execution
+
+From an approved workspace, explicitly start one new Codex root turn through
+the router CLI.
+
+    python3 scripts/autorouter.py run "Investigate this issue" --cwd /path/to/workspace
+
+This uses the enabled routing configuration and existing ChatGPT sign-in.
+It submits the selected model and effort to Codex App Server and returns a JSON
+receipt with the answer, classifier usage, Codex usage and execution evidence.
+Native reroutes fail exact-model acceptance. A completed turn can succeed
+with no observed reroute while runtime model and effort remain unverified.
+Direct execution is experimental. See the
+[installation notes](docs/INSTALL.md#experimental-direct-execution) for
+requirements and exit codes.
+
 ## Update or remove Autorouter
 
 For updates, reinstall the reviewed immutable marketplace version, then restart Codex and begin a new task. Your optimization profile and user-selected root remain separate from plugin lifecycle behaviour.
