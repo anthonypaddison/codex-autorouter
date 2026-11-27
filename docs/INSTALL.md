@@ -105,6 +105,15 @@ codex plugin marketplace add anthonypaddison/Codex-Autorouter --ref v0.3.0
 codex plugin add gpt-5-6-router@codex-autorouter
 ```
 
+After the experimental tag is published, use its immutable ref instead:
+
+```bash
+codex plugin marketplace add anthonypaddison/Codex-Autorouter --ref v0.4.0-experimental.1
+codex plugin add gpt-5-6-router@codex-autorouter
+```
+
+To roll back, remove the installed plugin and marketplace, then use the published `v0.3.0` commands above.
+
 Do not substitute `main`: a moving branch does not identify the reviewed bytes. Start a new task after installation or update so Codex reloads plugin skills and hooks.
 
 ## Hook review by version
@@ -114,9 +123,9 @@ Open `/hooks`, review the entries for the installed version, and trust the exact
 | Version | Bundled hooks | `PreToolUse` spawn guard |
 | --- | ---: | --- |
 | Published `v0.3.0` | 5 | No |
-| Unreleased `v1.0.0` candidate | 6 | Yes |
+| Experimental `v0.4.0-experimental.1` candidate | 6 | Yes |
 
-Published `v0.3.0` uses Codex's native model and effort validation and checks child lifecycle evidence after spawning. When testing the unreleased source candidate, review the additional `PreToolUse` entry. It checks the pending native call against the authorised route before child creation. Report a guard denial and stop that spawn attempt. The [stable release gates](STABLE_READINESS.md) govern future publication.
+Published `v0.3.0` uses Codex's native model and effort validation and checks child lifecycle evidence after spawning. When testing the experimental candidate, review the additional `PreToolUse` entry. It checks the pending native call against the authorised route before child creation. Report a guard denial and stop that spawn attempt. The [stable release gates](STABLE_READINESS.md) govern future publication.
 
 ### Check health
 

@@ -2,7 +2,7 @@
   <img src="assets/readme/hero.svg" alt="Autorouter selects model and effort. Codex delegation is best-effort." width="100%">
 </p>
 
-## v0.3.0 preview: user-configured AI routing
+## v0.4.0-experimental.1 release candidate
 
 The [v0.3.0 prerelease](https://github.com/anthonypaddison/codex-autorouter/releases/tag/v0.3.0)
 adds opt-in API classification. Legacy routing remains available before setup.
@@ -185,6 +185,15 @@ codex plugin add gpt-5-6-router@codex-autorouter
 ```
 
 The second command prints an **Installed plugin root**. Copy that path for the health check. The immutable tag prevents an existing marketplace entry from silently changing underneath an installation.
+
+After the experimental tag is published, install it in place of the previous marketplace pin:
+
+```bash
+codex plugin marketplace add anthonypaddison/Codex-Autorouter --ref v0.4.0-experimental.1
+codex plugin add gpt-5-6-router@codex-autorouter
+```
+
+Use the published `v0.3.0` commands above for rollback.
 
 ### 3. Review the bundled Autorouter hooks
 

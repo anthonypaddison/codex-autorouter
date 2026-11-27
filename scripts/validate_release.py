@@ -26,7 +26,8 @@ AGENTS = {
     "gpt56_sol_deep.toml",
     "gpt56_sol_xhigh.toml",
 }
-RELEASE_VERSION = "0.3.0"
+RELEASE_VERSION = "0.4.0-experimental.1"
+LEGACY_RELEASE_REF = "v0.3.0"
 RELEASE_REF = f"v{RELEASE_VERSION}"
 REPOSITORY_URL = "https://github.com/anthonypaddison/Codex-Autorouter"
 # Extracted archives have no Git history. Checkout validation verifies this
@@ -58,11 +59,11 @@ def published_hook_signature(*, archive: bool) -> tuple[int, bool]:
         return PUBLISHED_HOOK_SIGNATURE
     try:
         manifest = subprocess.check_output(
-            ["git", "-C", str(ROOT), "show", f"refs/tags/{RELEASE_REF}:hooks/hooks.json"],
+            ["git", "-C", str(ROOT), "show", f"refs/tags/{LEGACY_RELEASE_REF}:hooks/hooks.json"],
             text=True, stderr=subprocess.PIPE,
         )
     except subprocess.CalledProcessError as exc:
-        raise AssertionError(f"fetch published tag {RELEASE_REF} to validate hook documentation") from exc
+        raise AssertionError(f"fetch published tag {LEGACY_RELEASE_REF} to validate hook documentation") from exc
     signature = hook_signature(json.loads(manifest)["hooks"])
     require(signature == PUBLISHED_HOOK_SIGNATURE, "published hook snapshot differs from its tag")
     return signature
@@ -72,11 +73,12 @@ def validate_hook_docs(readme: str, install: str, published: tuple[int, bool], c
     require("(docs/INSTALL.md#hook-review-by-version)" in readme, "README must link to versioned hook documentation")
     for doc, text in (("README.md", readme), ("docs/INSTALL.md", install)):
         commands = re.findall(r"^codex plugin marketplace add .+$", text, re.MULTILINE)
-        require(len(commands) == 1 and commands[0].split()[-2:] == ["--ref", RELEASE_REF],
-                f"{doc} install ref must use the published tag")
+        refs = [command.split()[-2:] for command in commands]
+        require(refs == [["--ref", LEGACY_RELEASE_REF], ["--ref", RELEASE_REF]],
+                f"{doc} install refs must use the published rollback and experimental tags")
     for label, (count, guarded) in (
-        (f"Published `{RELEASE_REF}`", published),
-        ("Unreleased `v1.0.0` candidate", candidate),
+        (f"Published `{LEGACY_RELEASE_REF}`", published),
+        (f"Experimental `{RELEASE_REF}` candidate", candidate),
     ):
         prefix = f"| {label} |"
         rows = [line for line in install.splitlines() if line.startswith(prefix)]
